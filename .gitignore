@@ -1,0 +1,44 @@
+# Assessment data stays local.
+security-artifacts/
+targets/
+samples/
+
+# Host-specific configuration is created by setup-security-workspace.
+.mcp.json
+.codex/config.toml
+opencode.json
+.claude/settings.local.json
+.security-workspace
+
+# Credentials and local environment.
+.env
+.env.*
+!.env.example
+
+# Captures, binaries, and generated analysis.
+*.aab
+*.apk
+*.app
+*.bin
+*.dmg
+*.dll
+*.elf
+*.exe
+*.har
+*.ipa
+*.pcap
+*.pcapng
+*.so
+*.dylib
+*.class
+*.jar
+*.log
+
+# Common generated files.
+.DS_Store
+.idea/
+.vscode/
+build/
+dist/
+out/
+tmp/
