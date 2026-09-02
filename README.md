@@ -8,16 +8,19 @@ Use it only for assets you own or are explicitly authorized to test. Target file
 
 ## Start
 
-There is no installer to maintain.
+There is no cross-platform installation script to maintain. The setup skill performs installation from current official sources.
 
 1. Clone this repository and enter its root.
 2. Launch Codex, Claude Code, or OpenCode from that root.
 3. Trust the checkout when the host asks; Codex ignores project config until the project is trusted.
-4. Invoke **setup-security-workspace** and name the target type.
-5. Review its proposed package-manager or vendor steps.
-6. Let it create only the confirmed project-local MCP configuration.
+4. Invoke **setup-security-workspace**.
+5. Let the agent install and verify the full supported toolchain automatically.
+6. Complete an exact user action only when elevation, license acceptance, GUI approval, or device connection cannot be automated.
+7. Let it create and verify the project-local MCP configuration.
 
-The setup skill discovers the current OS and host, so the repository does not hard-code Homebrew, Winget, system paths, versions, or credentials. It writes host-specific files locally; they are ignored by Git:
+The full profile covers every tool lane below, including required runtimes, companion data, local services, and Burp and Ghidra MCP integrations. It can install GUI applications and use several gigabytes. The setup ledger records whether each component was pre-existing or setup-owned, the exact installed version and location, and the uninstall or cleanup command to use later.
+
+The setup skill discovers the current OS and host and resolves the current vendor-supported method at runtime, so the repository does not hard-code Homebrew, Winget, system paths, versions, or credentials. It writes host-specific files locally; they are ignored by Git:
 
 | Host | Local configuration |
 |---|---|
@@ -31,27 +34,31 @@ The canonical skills live under **.agents/skills/**. Claude Code loads the flat 
 
 ## Setup protocol
 
-Setup is an agent-executed, persisted protocol—not a code-driven workflow engine. Its ledger is **security-artifacts/setup.md**.
+Setup is an agent-executed, persisted installer protocol—not a checked-in platform script. Its resumable ownership and removal ledger is **security-artifacts/setup.md**.
 
 ~~~mermaid
 stateDiagram-v2
     [*] --> Inspect
-    Inspect --> Propose: smallest tool slice known
+    Inspect --> Install: full profile classified
     Inspect --> ManualGap: prerequisite cannot be inspected
-    Propose --> Propose: user edits the slice
-    Propose --> Configure: user confirms mutations
-    Configure --> Propose: write or parse fails / restore backup
+    Install --> Install: next missing component
+    Install --> AwaitUser: unavoidable user-only action
+    AwaitUser --> Inspect: action completed / reclassify
+    Install --> Configure: every component verifies
+    Install --> ManualGap: unchanged failure repeats
+    Configure --> Install: dependency is missing or broken
+    Configure --> Configure: restore backup / changed correction
     Configure --> Verify: configs parse
-    Verify --> Ready: skills + tools + MCP pass
-    Verify --> Configure: configuration caused failure
-    Verify --> Propose: requirement changed
-    Verify --> Verify: cause or environment changed
+    Verify --> Ready: full profile + skills + MCP pass
+    Verify --> Install: tool verification fails
+    Verify --> Configure: integration verification fails
+    Verify --> AwaitUser: host approval is required
     Verify --> ManualGap: unchanged failure repeats
     Ready --> [*]
     ManualGap --> Inspect: missing prerequisite supplied
 ~~~
 
-Every retry requires changed evidence. Existing config is backed up temporarily before mutation and restored on a configuration failure. **ready** and **manual-gap** are the only terminal setup states.
+Every retry requires changed evidence. Existing config is backed up temporarily before mutation and restored on a configuration failure. Setup-owned components remain installed after setup; their exact removal instructions stay in the ledger. **ready** means the complete profile works, while **manual-gap** names the unresolved boundary and one exact user action.
 
 ## Assessment protocol
 

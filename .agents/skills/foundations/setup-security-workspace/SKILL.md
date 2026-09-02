@@ -1,34 +1,34 @@
 ---
 name: setup-security-workspace
-description: "Set up this checkout for one security-testing goal when the user invokes setup-security-workspace."
+description: "Install and configure the full local security toolchain for this checkout when the user invokes setup-security-workspace."
 ---
 
 # Setup Security Workspace
 
-Run once per checkout before the first assessment. This is a durable agent protocol, not an installer or workflow engine. Record the current state and decisions in **security-artifacts/setup.md** so another session can resume without repeating completed work.
+Run once per checkout before the first assessment. Invocation authorizes routine tool, package, runtime, and local-service installation needed by this skill. Install the full profile by default; use a smaller profile only when the user explicitly asks. Record progress in **security-artifacts/setup.md** so setup is resumable and every installed component is removable later.
 
 ## 1. Inspect
 
-Read **README.md** and **AGENTS.md**. Identify the OS, architecture, agent host, target type, and the smallest applicable assessment and tool-skill slice. Check project-local configuration, executable discovery, versions, service health, and required manual or licensed components.
+Read **README.md** and **AGENTS.md**. Identify the OS, architecture, agent host, available package managers and privileges, then enumerate every tool under **.agents/skills/tools/** plus its required runtime, data, service, and MCP integration. Preserve compatible existing installations rather than upgrading them merely because a newer release exists.
 
-Classify each component as **ready**, **missing**, **manual**, or **failed**. Preserve the command and observed error for failures. Complete when every component in the smallest slice has a status and next probe.
+Classify each component as **ready**, **missing**, **manual**, or **failed**. For every component, record: component, ownership (**pre-existing**, **setup-owned**, or **manual**), official source, install method and command, discovered version, paths or service identity, status, evidence, and exact uninstall or cleanup command. Complete when every full-profile component is classified and has an official source.
 
-## 2. Propose
+## 2. Install
 
-Show **component | status | next step**. Prefer an official package-manager command; otherwise link official vendor instructions. The user performs privileged, GUI, license, and package-installation steps.
+For each missing component, read [official tool sources](references/tool-sources.md), then consult its current official installation instructions. Prefer the operating system's supported package manager; otherwise use the vendor's supported installer, release, or runtime manager. Install automatically, in dependency order, and verify each executable or service immediately. Write its ownership and removal instructions to the ledger before continuing.
 
-Propose only project-local integration changes. Host trust and first-use approval remain explicit user steps. Set state to **awaiting-confirmation**. Revise this step until the user accepts the slice; complete when every proposed mutation is explicit and confirmed.
+Do not pause for routine installation confirmation. Use already-available privilege safely. When elevation, license acceptance, GUI interaction, driver approval, or device connection cannot be automated, complete every safe precursor and request one exact user action.
+
+On failure, preserve the command, output, and exit status, then diagnose. Retry only when the source, method, environment, or hypothesis changes. An unchanged repeated failure becomes **manual-gap** with its impact and one exact next step. This step is complete when every component is verified or has an unavoidable, precisely documented user action; setup is not **ready** until all full-profile components verify.
 
 ## 3. Configure
 
-Before editing an existing host config, preserve its exact contents in an operation-owned temporary backup. Merge the confirmed MCP and skill settings while preserving unrelated fields and storing no credentials. Parse every changed file.
+Keep tool installations and services global, but MCP and agent-host configuration project-local. Before editing an existing host config, preserve its exact contents in an operation-owned temporary backup. Merge only the required MCP and skill settings, preserve unrelated fields, store no credentials, and parse every changed file.
 
-On a parse or write failure, restore the affected files, preserve the primary error, and return to Propose with a narrower correction. Complete when all confirmed files parse and temporary backups have been released.
+On a parse or write failure, restore the affected file, preserve the primary error, and retry only with a changed correction. Release temporary backups after verification. Complete when every applicable host configuration parses and points at the installed components.
 
 ## 4. Verify
 
-Verify skill discovery, relevant tool versions or service health, MCP initialization and **tools/list**, and one harmless read-only tool call where available. Verify that this workspace's MCP entries exist only in project-local config.
+Verify skill discovery; every tool's version, help probe, or service health; MCP initialization and **tools/list**; and one harmless read-only MCP call where available. Verify that this workspace's MCP entries exist only in project-local configuration. Do not scan a target during setup, and do not treat any model provider as a prerequisite.
 
-On failure, record the failing boundary and diagnose once. Retry only after the configuration, environment, or failure hypothesis changes. A repeated unchanged failure becomes **manual-gap** with one exact next step; a configuration-caused failure returns to Configure; a changed requirement returns to Propose.
-
-Complete at **ready** when the selected slice works end to end. Complete at **manual-gap** only when every unresolved component has its evidence, impact, and exact next step recorded.
+Route a missing or broken tool back to Install and an integration failure back to Configure. A user-only boundary becomes **manual-gap** with one exact action. Set **ready** only when the full profile works end to end. Leave installed components in place; the ledger supplies exact cleanup for a later user-requested removal.
