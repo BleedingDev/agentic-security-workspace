@@ -8,11 +8,37 @@ Use it only for assets you own or are explicitly authorized to test. Target file
 
 Read the [project overview](docs/project-overview.md) for the design, tested setup, limits, and meaning of local AI in this project.
 
-## Run it on a self-hosted abliterated model (optional)
+## Serving (optional): a self-hosted abliterated model
 
-You can drive this workspace with **Qwen3.8-27B abliterated served free on a Kaggle TPU**,
-plugged into OpenCode 2. The recipe lives in [`serving/`](serving) and the step-by-step guide
-is [docs/kaggle-tpu-serving.md](docs/kaggle-tpu-serving.md). Short version:
+You can drive this workspace with **Qwen3.8-27B abliterated served free on a Kaggle TPU
+v5e-8** — full bf16, up to the model's native 262k context — plugged into OpenCode 2 as an
+OpenAI- and Anthropic-compatible endpoint. The recipe lives in [`serving/`](serving) (a fork
+of [ARahim3/kaggle-tpu-lab](https://github.com/ARahim3/kaggle-tpu-lab), MIT) and the
+step-by-step guide is [docs/kaggle-tpu-serving.md](docs/kaggle-tpu-serving.md).
+
+~~~mermaid
+flowchart TD
+    K["./serving/ktl start"] --> L["launch.py → Kaggle kernel<br/>(TPU v5e-8, free tier)"]
+    L --> Q["queue for a TPU slot → load 55&nbsp;GB bf16<br/>→ compile graphs → cloudflared tunnel"]
+    Q --> F["ktl writes ~/.config/kaggle-tpu-lab/<br/>{base_url, api_key}"]
+    F --> P["OpenCode 2 provider <b>kaggle-tpu</b><br/>reads them via {file:…}"]
+    P --> R["opencode2 -m kaggle-tpu/qwen3.8-27b-abliterated<br/>(run from the workspace root)"]
+    R --> W["Agentic Security Workspace<br/>skills + evidence rules"]
+    W --> T["tool lanes: ghidra MCP :8089 (headless) ·<br/>burp · analyzeHeadless · semgrep · …"]
+
+    subgraph cloud["Kaggle free TPU"]
+        L
+        Q
+    end
+    subgraph host["Your machine"]
+        K
+        F
+        P
+        R
+        W
+        T
+    end
+~~~
 
 ```bash
 cd serving && ./ktl setup          # once: venv + Kaggle CLI (needs a TPU-verified Kaggle account)
