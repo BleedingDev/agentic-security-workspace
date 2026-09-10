@@ -42,3 +42,7 @@ build/
 dist/
 out/
 tmp/
+
+# Local serving venv.
+serving/.venv
+**/__pycache__/

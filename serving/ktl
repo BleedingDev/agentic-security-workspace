@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# ktl — one command for the Kaggle-TPU Qwen endpoint used by this workspace.
+#
+#   ./ktl setup            create the local venv and install the Kaggle CLI (one-time)
+#   ./ktl start [--stock | --hf-model ORG/REPO] [--ghidra]
+#                          push the kernel, wait until live, wire it into OpenCode 2
+#   ./ktl stop             stop the Kaggle TPU session (frees quota) + Ghidra MCP
+#   ./ktl status           endpoint health + served model + kaggle + ghidra state
+#   ./ktl sync [--wait]    re-write the OpenCode 2 URL/key files from the live kernel
+#   ./ktl validate         functional checks against the live endpoint
+#   ./ktl measure          throughput / latency / tool-call / long-context numbers
+#   ./ktl agentic [model]  drive OpenCode 2 on an authorized RE target and grade it
+#   ./ktl ghidra {start [bin]|stop|status}   headless GhidraMCP server on :8089 (no GUI)
+#
+# OpenCode 2 does NOT start the endpoint. Always `./ktl start` first, then
+# `opencode2 -m kaggle-tpu/<model>`. See docs/kaggle-tpu-serving.md.
+set -uo pipefail
+REPO="$(cd "$(dirname "$0")" && pwd)"           # .../serving
+WS="$(cd "$REPO/.." && pwd)"                     # workspace root
+PY="$REPO/.venv/bin/python"
+CFG="$HOME/.config/kaggle-tpu-lab"
+STATE="$HOME/.kaggle-tpu-lab.json"
+TGT_DEFAULT="$WS/security-artifacts/targets/licchk_arm64"
+# Ghidra install: $GHIDRA_DIR, else newest /Applications/ghidra_*_PUBLIC, else via ghidraRun.
+GHIDRA_DIR="${GHIDRA_DIR:-$(ls -d /Applications/ghidra_*_PUBLIC 2>/dev/null | sort -V | tail -1)}"
+GH_CLASS=com.xebyte.headless.GhidraMCPHeadlessServer
+
+need_py(){ [ -x "$PY" ] || { echo "no venv — run: ./ktl setup"; exit 1; }; }
+kernel(){ $PY -c "import json;print(json.load(open('$STATE')).get('kernel',''))" 2>/dev/null; }
+model(){ $PY -c "import json;print(json.load(open('$STATE')).get('model','qwen3.8-27b'))" 2>/dev/null || echo qwen3.8-27b; }
+
+sync(){ need_py; $PY - "${1:-}" <<'PY'
+import json,sys,time,urllib.request,pathlib
+wait = sys.argv[1] == "--wait"
+st = json.loads(pathlib.Path.home().joinpath(".kaggle-tpu-lab.json").read_text())
+out = pathlib.Path.home()/".config/kaggle-tpu-lab"; out.mkdir(parents=True, exist_ok=True)
+def events(t):
+    try:
+        with urllib.request.urlopen(f"https://ntfy.sh/{t}/json?poll=1&since=24h",timeout=15) as r: body=r.read().decode()
+    except Exception: return []
+    evs=[]
+    for line in body.splitlines():
+        try:
+            e=json.loads(line)
+            if e.get("event")=="message": evs.append((e["time"],json.loads(e.get("message","{}"))))
+        except Exception: pass
+    return sorted(evs,key=lambda x:x[0])
+def find(t):
+    ep=None;ready=False;term=False
+    for _,ev in events(t):
+        ph=ev.get("phase")
+        if ph in("tunnel-url","ready","heartbeat") and ev.get("endpoint"): ep=ev["endpoint"]
+        if ph in("ready","heartbeat"): ready=True
+        if ph in("failed","auto-shutdown","stopped"): term=True
+    return ep,ready,term
+while True:
+    ep,ready,term=find(st["topic"])
+    if term and not ready: sys.exit("kernel ended without becoming ready (./ktl status)")
+    if ep and (ready or not wait): break
+    if not wait: sys.exit("no endpoint yet — use: ./ktl sync --wait")
+    time.sleep(20)
+base = ep if ep.rstrip("/").endswith("/v1") else ep.rstrip("/")+"/v1"
+(out/"base_url").write_text(base)
+(out/"api_key").write_text(st["api_key"]); (out/"api_key").chmod(0o600)
+cfg=pathlib.Path.home()/".config/opencode2/opencode.json"
+if cfg.exists(): cfg.touch()   # force the OpenCode 2 daemon to re-read the {file:} values
+print(f"kaggle-tpu/{st.get('model','qwen3.8-27b')} -> {base} (ready={ready})")
+PY
+}
+
+case "${1:-status}" in
+  setup)
+    command -v uv >/dev/null || { echo "install uv first: https://docs.astral.sh/uv/"; exit 1; }
+    uv venv --python 3.12 "$REPO/.venv" && uv pip install --python "$PY" -q kaggle && echo "venv ready: $PY" ;;
+  start)
+    need_py; shift; MARGS=(--hf-model huihui-ai/Huihui-Qwen3.8-27B-abliterated); GHIDRA=0
+    while [ $# -gt 0 ]; do case "$1" in
+      --stock) MARGS=(); shift;;
+      --hf-model) MARGS=(--hf-model "$2"); shift 2;;
+      --ghidra) GHIDRA=1; shift;;
+      *) MARGS+=("$1"); shift;; esac; done
+    $PY -m kaggle quota | grep -E "TPU|resource" || { echo "Kaggle not authenticated: $PY -m kaggle auth login --force"; exit 1; }
+    LOG=$(mktemp -t ktl-serve.XXXX.log)
+    ( cd "$REPO" && $PY launch.py serve "${MARGS[@]}" >"$LOG" 2>&1 & )
+    echo "serving (log: $LOG) — waiting for the endpoint (TPU queue + ~20-25 min compile)"
+    sync --wait
+    echo "LIVE.  opencode2 -m kaggle-tpu/$(model)   |   opencode2 run -m kaggle-tpu/$(model) '...'"
+    [ "$GHIDRA" = 1 ] && exec "$0" ghidra start ;;
+  stop)
+    need_py
+    case "${2:-all}" in --ghidra) : ;; *) echo "stopping Kaggle TPU session"; ( cd "$REPO" && $PY launch.py stop ) || true;; esac
+    case "${2:-all}" in --kaggle) : ;; *) pkill -f "$GH_CLASS" && echo "stopped Ghidra MCP" || echo "Ghidra MCP not running";; esac ;;
+  sync) sync "${2:-}";;
+  status)
+    if [ -f "$CFG/base_url" ]; then B=$(cat "$CFG/base_url")
+      echo "endpoint: $B"; echo "model:    kaggle-tpu/$(model)"
+      echo "health:   $(curl -s -o /dev/null -w '%{http_code}' -m 15 "${B%/v1}/health" 2>/dev/null)"
+    else echo "endpoint: not synced (run ./ktl start)"; fi
+    K=$(kernel); [ -n "$K" ] && echo "kaggle:   $($PY -m kaggle kernels status "$K" 2>&1 | grep -oE 'KernelWorkerStatus\.[A-Z_]+' || echo unknown)"
+    echo "ghidra:   $([ "$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8089/instances 2>/dev/null)" != 000 ] && echo 'up :8089' || echo 'down')" ;;
+  validate)
+    need_py; B=$(cat "$CFG/base_url"); K=$(cat "$CFG/api_key"); M=$(model); RT="${B%/v1}"
+    H=(-sS -m 300 -H "Authorization: Bearer $K" -H "Content-Type: application/json"); p=0;f=0
+    ok(){ echo "PASS $1";p=$((p+1)); }; bad(){ echo "FAIL $1";f=$((f+1)); }
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -m 30 "$RT/health")" = 200 ] && ok health || bad health
+    curl "${H[@]}" "$B/models" | grep -q "$M" && ok "model listed" || bad "model listed"
+    curl "${H[@]}" "$B/chat/completions" -d '{"model":"'"$M"'","messages":[{"role":"user","content":"Reply exactly: pong"}],"max_tokens":48,"chat_template_kwargs":{"reasoning_effort":"low"}}' | grep -qi pong && ok chat || bad chat
+    curl "${H[@]}" "$B/chat/completions" -d '{"model":"'"$M"'","messages":[{"role":"user","content":"Weather in Prague? Use the tool."}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"max_tokens":128}' | grep -q get_weather && ok "tool call" || bad "tool call"
+    echo "== $p passed, $f failed"; [ "$f" = 0 ] ;;
+  measure) need_py; $PY - <<'PY'
+import json,time,urllib.request,concurrent.futures as cf,pathlib
+c=pathlib.Path.home()/".config/kaggle-tpu-lab";BASE=(c/"base_url").read_text().strip();KEY=(c/"api_key").read_text().strip()
+MODEL=json.loads((pathlib.Path.home()/".kaggle-tpu-lab.json").read_text()).get("model","qwen3.8-27b")
+H={"Authorization":f"Bearer {KEY}","Content-Type":"application/json"}
+def post(b,to=300):return urllib.request.urlopen(urllib.request.Request(BASE+"/chat/completions",data=json.dumps(b).encode(),headers=H),timeout=to)
+def chat(p,mt=64):return json.loads(post({"model":MODEL,"messages":[{"role":"user","content":p}],"max_tokens":mt,"chat_template_kwargs":{"enable_thinking":False}}).read())
+o={"model":MODEL}
+def dec(n):t=time.time();r=chat("Write a %d-word paragraph about TPUs."%n,n+40);return r.get("usage",{}).get("completion_tokens",0),time.time()-t
+n,dt=dec(200);o["single_stream_tok_s"]=round(n/dt,1)
+t0=time.time()
+with cf.ThreadPoolExecutor(6) as ex:res=list(ex.map(lambda _:dec(160),range(6)))
+o["concurrent6_tok_s"]=round(sum(n for n,_ in res)/(time.time()-t0),1)
+print(json.dumps(o,indent=2))
+PY
+    ;;
+  agentic)
+    need_py; M="${2:-kaggle-tpu/$(model)}"; TGT="$TGT_DEFAULT"; OUT="$WS/security-artifacts/validation-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
+    read -r -d '' TASK <<EOF
+Authorized reverse-engineering exercise on a binary we own: $TGT
+Scope: static analysis of that one file only. Use the workspace tooling (Ghidra — the
+connected ghidra MCP and/or analyzeHeadless — plus strings, nm, objdump). Answer, each
+with a tool + program location as evidence: (1) the exact key string the program accepts,
+(2) the secret it reveals on success and the function that prints it, (3) the memory-safety
+bug in the license-check function and the unsafe call. Run tools; do not guess.
+EOF
+    ( cd "$WS" && opencode2 run --auto --format json -m "$M" "$TASK" ) > "$OUT/transcript.json" 2> "$OUT/stderr.log"
+    F="$OUT/transcript.json"; p=0;f=0; ck(){ grep -qiE "$2" "$F" && { echo "PASS $1";p=$((p+1)); } || { echo "FAIL $1";f=$((f+1)); }; }
+    ck "used tools" "analyzeHeadless|objdump|\"strings\"|list_strings|list_functions|tool"
+    ck "OPEN-SESAME" "OPEN-SESAME"; ck "KTL_FLAG_9f2c" "KTL_FLAG_9f2c"
+    ck "check_license/grant" "check_license|grant"; ck "unsafe copy" "strcpy|overflow|out-of-bounds"
+    echo "== $p passed, $f failed ($OUT)"; [ "$f" = 0 ] ;;
+  ghidra)
+    [ -n "$GHIDRA_DIR" ] && [ -d "$GHIDRA_DIR" ] || { echo "set GHIDRA_DIR to your Ghidra install"; exit 1; }
+    case "${2:-status}" in
+      start) TGT="${3:-$TGT_DEFAULT}"; [ -f "$TGT" ] || { echo "no target: $TGT"; exit 1; }
+        [ -d "$GHIDRA_DIR/Ghidra/Extensions/GhidraMCP" ] || { mkdir -p "$GHIDRA_DIR/Ghidra/Extensions"; cp -R "$GHIDRA_DIR/Extensions/Ghidra/GhidraMCP" "$GHIDRA_DIR/Ghidra/Extensions/GhidraMCP" && echo "installed GhidraMCP extension" || { echo "GhidraMCP extension not found under $GHIDRA_DIR/Extensions/Ghidra/ — install it in Ghidra first"; exit 1; }; }
+        pkill -f "$GH_CLASS" 2>/dev/null; sleep 1; LOG=$(mktemp -t ktl-ghidra.XXXX.log)
+        ( nohup "$GHIDRA_DIR/support/launch.sh" fg jdk GhidraMCPHeadless 4G "" "$GH_CLASS" --file "$TGT" --port 8089 >"$LOG" 2>&1 & )
+        echo "starting GhidraMCP :8089 ($(basename "$TGT"))  log: $LOG"
+        for i in $(seq 1 40); do sleep 5; [ "$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8089/instances 2>/dev/null)" != 000 ] && { echo "READY :8089"; exit 0; }; done
+        echo "not up in time; see $LOG"; exit 1 ;;
+      stop) pkill -f "$GH_CLASS" && echo stopped || echo "not running" ;;
+      status) [ "$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8089/instances 2>/dev/null)" != 000 ] && echo "up :8089" || echo down ;;
+      *) echo "usage: ./ktl ghidra {start [bin]|stop|status}"; exit 2 ;; esac ;;
+  *) sed -n '2,20p' "$0" ;;
+esac
