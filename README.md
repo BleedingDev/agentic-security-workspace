@@ -8,6 +8,23 @@ Use it only for assets you own or are explicitly authorized to test. Target file
 
 Read the [project overview](docs/project-overview.md) for the design, tested setup, limits, and meaning of local AI in this project.
 
+## Run it on a self-hosted abliterated model (optional)
+
+You can drive this workspace with **Qwen3.8-27B abliterated served free on a Kaggle TPU**,
+plugged into OpenCode 2. The recipe lives in [`serving/`](serving) and the step-by-step guide
+is [docs/kaggle-tpu-serving.md](docs/kaggle-tpu-serving.md). Short version:
+
+```bash
+cd serving && ./ktl setup          # once: venv + Kaggle CLI (needs a TPU-verified Kaggle account)
+./ktl start                        # push the kernel, wait for live, wire it into OpenCode 2
+./ktl ghidra start                 # optional: headless Ghidra MCP server on :8089, no GUI
+cd .. && opencode2 -m kaggle-tpu/qwen3.8-27b-abliterated
+./serving/ktl stop                 # when done, to free your weekly TPU quota
+```
+
+OpenCode 2 does **not** start the endpoint; always `./ktl start` first. Full prerequisites
+(including Kaggle **identity** verification, not just phone) are in the guide.
+
 ## Start
 
 There is no cross-platform installation script to maintain. The setup skill performs installation from current official sources.
