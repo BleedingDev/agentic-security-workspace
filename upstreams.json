@@ -1,0 +1,505 @@
+{
+  "format_version": 1,
+  "strategy": "squashed source-complete git subtrees; pinned submodule trees included",
+  "sources": [
+    {
+      "name": "morluto/rea",
+      "url": "https://github.com/morluto/rea.git",
+      "branch": "main",
+      "path": "vendor/morluto/rea",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "NationalSecurityAgency/ghidra",
+      "url": "https://github.com/NationalSecurityAgency/ghidra.git",
+      "branch": "master",
+      "path": "vendor/NationalSecurityAgency/ghidra",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "PortSwigger/mcp-server",
+      "url": "https://github.com/PortSwigger/mcp-server.git",
+      "branch": "main",
+      "path": "vendor/PortSwigger/mcp-server",
+      "license_hint": "GPL-3.0"
+    },
+    {
+      "name": "bethington/ghidra-mcp",
+      "url": "https://github.com/bethington/ghidra-mcp.git",
+      "branch": "dev",
+      "path": "vendor/bethington/ghidra-mcp",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "projectdiscovery/nuclei",
+      "url": "https://github.com/projectdiscovery/nuclei.git",
+      "branch": "dev",
+      "path": "vendor/projectdiscovery/nuclei",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "projectdiscovery/nuclei-templates",
+      "url": "https://github.com/projectdiscovery/nuclei-templates.git",
+      "branch": "main",
+      "path": "vendor/projectdiscovery/nuclei-templates",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "projectdiscovery/katana",
+      "url": "https://github.com/projectdiscovery/katana.git",
+      "branch": "dev",
+      "path": "vendor/projectdiscovery/katana",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "MobSF/Mobile-Security-Framework-MobSF",
+      "url": "https://github.com/MobSF/Mobile-Security-Framework-MobSF.git",
+      "branch": "master",
+      "path": "vendor/MobSF/Mobile-Security-Framework-MobSF",
+      "license_hint": "GPL-3.0"
+    },
+    {
+      "name": "skylot/jadx",
+      "url": "https://github.com/skylot/jadx.git",
+      "branch": "master",
+      "path": "vendor/skylot/jadx",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "iBotPeaches/Apktool",
+      "url": "https://github.com/iBotPeaches/Apktool.git",
+      "branch": "main",
+      "path": "vendor/iBotPeaches/Apktool",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "frida/frida",
+      "url": "https://github.com/frida/frida.git",
+      "branch": "main",
+      "path": "vendor/frida/frida",
+      "license_hint": "NOASSERTION"
+    },
+    {
+      "name": "mandiant/capa",
+      "url": "https://github.com/mandiant/capa.git",
+      "branch": "master",
+      "path": "vendor/mandiant/capa",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "semgrep/semgrep",
+      "url": "https://github.com/semgrep/semgrep.git",
+      "branch": "develop",
+      "path": "vendor/semgrep/semgrep",
+      "license_hint": "LGPL-2.1"
+    },
+    {
+      "name": "google/osv-scanner",
+      "url": "https://github.com/google/osv-scanner.git",
+      "branch": "main",
+      "path": "vendor/google/osv-scanner",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "aquasecurity/trivy",
+      "url": "https://github.com/aquasecurity/trivy.git",
+      "branch": "main",
+      "path": "vendor/aquasecurity/trivy",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "mattpocock/skills",
+      "url": "https://github.com/mattpocock/skills.git",
+      "branch": "main",
+      "path": "vendor/mattpocock/skills",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "scriptingxss/owasp-fstm",
+      "url": "https://github.com/scriptingxss/owasp-fstm.git",
+      "branch": "master",
+      "path": "vendor/scriptingxss/owasp-fstm",
+      "license_hint": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "ARahim3/kaggle-tpu-lab",
+      "url": "https://github.com/ARahim3/kaggle-tpu-lab.git",
+      "branch": "main",
+      "path": "vendor/ARahim3/kaggle-tpu-lab",
+      "license_hint": "MIT"
+    },
+    {
+      "name": "vllm-project/tpu-inference",
+      "url": "https://github.com/vllm-project/tpu-inference.git",
+      "branch": "main",
+      "path": "vendor/vllm-project/tpu-inference",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "vllm-project/vllm",
+      "url": "https://github.com/vllm-project/vllm.git",
+      "branch": "main",
+      "path": "vendor/vllm-project/vllm",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "astral-sh/uv",
+      "url": "https://github.com/astral-sh/uv.git",
+      "branch": "main",
+      "path": "vendor/astral-sh/uv",
+      "license_hint": "Apache-2.0"
+    },
+    {
+      "name": "OWASP/wstg",
+      "url": "https://github.com/OWASP/wstg.git",
+      "branch": "master",
+      "path": "vendor/OWASP/wstg",
+      "license_hint": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "OWASP/API-Security",
+      "url": "https://github.com/OWASP/API-Security.git",
+      "branch": "master",
+      "path": "vendor/OWASP/API-Security",
+      "license_hint": "NOASSERTION"
+    },
+    {
+      "name": "OWASP/masvs",
+      "url": "https://github.com/OWASP/masvs.git",
+      "branch": "master",
+      "path": "vendor/OWASP/masvs",
+      "license_hint": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "OWASP/mastg",
+      "url": "https://github.com/OWASP/mastg.git",
+      "branch": "master",
+      "path": "vendor/OWASP/mastg",
+      "license_hint": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "android/adb",
+      "url": "https://android.googlesource.com/platform/packages/modules/adb",
+      "branch": "main",
+      "path": "vendor/android/adb",
+      "license_hint": "Apache-2.0"
+    }
+  ],
+  "models": [
+    {
+      "repository": "Qwen/Qwen3.8-27B",
+      "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+      "commit": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "license": "apache-2.0",
+      "bytes": 55586114863,
+      "archive_status": "pending-independent-storage",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "bytes": 1570
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 11544
+        },
+        {
+          "path": "README.md",
+          "bytes": 65012
+        },
+        {
+          "path": "chat_template.jinja",
+          "bytes": 8952
+        },
+        {
+          "path": "config.json",
+          "bytes": 4312
+        },
+        {
+          "path": "crc32.txt",
+          "bytes": 238
+        },
+        {
+          "path": "generation_config.json",
+          "bytes": 202
+        },
+        {
+          "path": "merges.txt",
+          "bytes": 3353259
+        },
+        {
+          "path": "model-00001-of-00018.safetensors",
+          "bytes": 3966730552,
+          "sha256": "ba0ce20aae489ad196733da5064bcdf159a1fe84f53336648196e1ebb7751b1c"
+        },
+        {
+          "path": "model-00002-of-00018.safetensors",
+          "bytes": 3043080328,
+          "sha256": "06a148c01bfbe3faa14a5f184a7ff29a706f7ae1c8b2705d2058e26d17a001fb"
+        },
+        {
+          "path": "model-00003-of-00018.safetensors",
+          "bytes": 2542796952,
+          "sha256": "2e1bf62cbcd406eaa64b60d10353e1f0ef4039d0976e56f05cabe953454f9968"
+        },
+        {
+          "path": "model-00004-of-00018.safetensors",
+          "bytes": 3988973152,
+          "sha256": "511e34063187882659753c4d93f3859f93c019fd438d8813071921c81d9a3f1a"
+        },
+        {
+          "path": "model-00005-of-00018.safetensors",
+          "bytes": 2099339864,
+          "sha256": "635cb53446dc74f219740fc59e18b774f877b803b9722e289ca62575a6efa701"
+        },
+        {
+          "path": "model-00006-of-00018.safetensors",
+          "bytes": 3979553696,
+          "sha256": "0bc5214fac607f0e6cc92eec3789d4b8559410ef9fce66621ba8158e8410dae0"
+        },
+        {
+          "path": "model-00007-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "80b0c49033e9a0d5762562aa12f4acdb7f54da586f3d0110f28c48d91cf07892"
+        },
+        {
+          "path": "model-00008-of-00018.safetensors",
+          "bytes": 3979553696,
+          "sha256": "7192c5b66185d3592927daabee1cc19e6f6e0ce75988ee20e824b624765fda79"
+        },
+        {
+          "path": "model-00009-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "af3c48cc37af44f3db6ae0579baf019180d48d9c527caa0a1f03ff85813a56d8"
+        },
+        {
+          "path": "model-00010-of-00018.safetensors",
+          "bytes": 3979553696,
+          "sha256": "163490a76f3bea3a40855b7efc04ce6d27afaf1a34f0bbde495b9491f76457c9"
+        },
+        {
+          "path": "model-00011-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "5f3ae1b948aeee39da77aec558e8236cd65fe4d7cb7686a76bb007acc563c6d8"
+        },
+        {
+          "path": "model-00012-of-00018.safetensors",
+          "bytes": 3979553696,
+          "sha256": "a3de1c7114677a8f5ac5c4892c90e8238ea5c1e2038c80e757dfc87c3902ca55"
+        },
+        {
+          "path": "model-00013-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "06ab79a41f74c9c5cb734816feb0c7fc364104b227165ee7391231e1155aa02a"
+        },
+        {
+          "path": "model-00014-of-00018.safetensors",
+          "bytes": 3979553696,
+          "sha256": "4138ed94603065ba884bbcadedb04d7718bb40117e85e6f5c6fc5b9c05b7a85b"
+        },
+        {
+          "path": "model-00015-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "69224e27b9de4e7dbf6fc936c6eaae08447bda3b80a6c31a871ab451173afd22"
+        },
+        {
+          "path": "model-00016-of-00018.safetensors",
+          "bytes": 3979564040,
+          "sha256": "73cb9a1089fb6155cb648609478d6633be8a5c7d9ca5a05bc8925ce8a553cefe"
+        },
+        {
+          "path": "model-00017-of-00018.safetensors",
+          "bytes": 2108759344,
+          "sha256": "beb51f01056142ac4984bd800507b0dd0fd18de57f8e9ef6ea41d1a3598983a8"
+        },
+        {
+          "path": "model-00018-of-00018.safetensors",
+          "bytes": 3392197344,
+          "sha256": "1d3479509e21494658f9b64d317f5ea8e55c4025d28c702d6c4d0b356ce8ea06"
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "bytes": 112216
+        },
+        {
+          "path": "preprocessor_config.json",
+          "bytes": 390
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 12809320,
+          "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 17928
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "bytes": 385
+        },
+        {
+          "path": "vocab.json",
+          "bytes": 6722759
+        }
+      ]
+    },
+    {
+      "repository": "huihui-ai/Huihui-Qwen3.8-27B-abliterated",
+      "url": "https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated",
+      "commit": "739e3c5b89849f6c238ce1e5b70008612ae42cdd",
+      "license": "apache-2.0",
+      "bytes": 55586059962,
+      "archive_status": "pending-independent-storage",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "bytes": 1570
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 11544
+        },
+        {
+          "path": "README.md",
+          "bytes": 10671
+        },
+        {
+          "path": "chat_template.jinja",
+          "bytes": 8952
+        },
+        {
+          "path": "config.json",
+          "bytes": 4312
+        },
+        {
+          "path": "crc32.txt",
+          "bytes": 238
+        },
+        {
+          "path": "generation_config.json",
+          "bytes": 202
+        },
+        {
+          "path": "merges.txt",
+          "bytes": 3353259
+        },
+        {
+          "path": "model-00001-of-00018.safetensors",
+          "bytes": 3966730520,
+          "sha256": "746142a26219375775e31233a25b9d06bb50cc36a45b833dfad58d45bbeb68ac"
+        },
+        {
+          "path": "model-00002-of-00018.safetensors",
+          "bytes": 3043080296,
+          "sha256": "32e1fcb17fea75306e94eb0adfacf7e4069226f938582920df5962dc11c3becb"
+        },
+        {
+          "path": "model-00003-of-00018.safetensors",
+          "bytes": 2542796928,
+          "sha256": "1e22bff91476ac31fd41fa6c5b6772286cacb458fcb0b13cd0d401d15504cf42"
+        },
+        {
+          "path": "model-00004-of-00018.safetensors",
+          "bytes": 3988973120,
+          "sha256": "955da8a0ee55a8864617fd26e845a340bdbb4467087a223af0ef36caeb772397"
+        },
+        {
+          "path": "model-00005-of-00018.safetensors",
+          "bytes": 2099339832,
+          "sha256": "b0d9ca5f273c2ac6bd858fea2ee64dee2a2c01abfd2ad7771ff7e496862f2d58"
+        },
+        {
+          "path": "model-00006-of-00018.safetensors",
+          "bytes": 3979553664,
+          "sha256": "9616289b391693ede4d169e18f10338b9e8318e0caaa3a925c22507bae6a998f"
+        },
+        {
+          "path": "model-00007-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "fa7adc386e8f88b5c68b26303bbe65c7a578797c66219f204699290427e91277"
+        },
+        {
+          "path": "model-00008-of-00018.safetensors",
+          "bytes": 3979553664,
+          "sha256": "4aafde533aa91b53df84b58bc6a7b61cd6b547878ae975f0250fde88203e288c"
+        },
+        {
+          "path": "model-00009-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "75eedafc64705770e1a88132095cb848616c73a38689f33ec3802f3fada44a03"
+        },
+        {
+          "path": "model-00010-of-00018.safetensors",
+          "bytes": 3979553664,
+          "sha256": "79e1151f7868618544645443228956ca3c47734ce7f5ff57e701399d593d37cf"
+        },
+        {
+          "path": "model-00011-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "545a750b0b0ef3e4a9fdec1f14177472c0d5c3c8028b52de3419098a1b90a0fa"
+        },
+        {
+          "path": "model-00012-of-00018.safetensors",
+          "bytes": 3979553664,
+          "sha256": "71fce00e3a7a171c0938685a63405d8266ea7697ec243553a38e94c6f69add60"
+        },
+        {
+          "path": "model-00013-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "74cb96b32e845358f1db196134fb51fa60b288bfbf050e40a33abbe14ebce5d6"
+        },
+        {
+          "path": "model-00014-of-00018.safetensors",
+          "bytes": 3979553664,
+          "sha256": "342fa658eae1e4f19cc9462638408c350ad29d72d8836e55193ebb4d788adc6f"
+        },
+        {
+          "path": "model-00015-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "9fe7a485d3b17a3bfa401c7f22295f67330e1158964e3c27d9d232f84031f541"
+        },
+        {
+          "path": "model-00016-of-00018.safetensors",
+          "bytes": 3979564008,
+          "sha256": "ad5ebb2a8a83abae7e67b67a53ff66eeb2f50dbc26c91afc7149a3929ba76a9c"
+        },
+        {
+          "path": "model-00017-of-00018.safetensors",
+          "bytes": 2108759312,
+          "sha256": "58bfe7dd26362d1837ad56e496a513669d9898a441df102e4687570d9b635d0d"
+        },
+        {
+          "path": "model-00018-of-00018.safetensors",
+          "bytes": 3392197320,
+          "sha256": "fe72369eebdd81b26cb9c22ea63aec33f003ddcbb5cf08e4e7165f7cbcc5628b"
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "bytes": 112216
+        },
+        {
+          "path": "preprocessor_config.json",
+          "bytes": 390
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 12809320,
+          "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 17928
+        },
+        {
+          "path": "video_preprocessor_config.json",
+          "bytes": 385
+        },
+        {
+          "path": "vocab.json",
+          "bytes": 6722759
+        }
+      ]
+    }
+  ],
+  "external_resources": []
+}
