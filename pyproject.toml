@@ -1,0 +1,244 @@
+# Copyright 2023 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flare-capa"
+authors = [
+    {name = "Willi Ballenthin", email = "william.ballenthin@mandiant.com"},
+    {name = "Moritz Raabe", email = "moritz.raabe@mandiant.com"},
+    {name = "Mike Hunhoff", email = "michael.hunhoff@mandiant.com"},
+]
+description = "The FLARE team's open-source tool to identify capabilities in executable files."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE.txt"}
+requires-python = ">=3.10"
+keywords = ["malware analysis", "reverse engineering", "capability detection", "software behaviors", "capa", "FLARE"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    # ---------------------------------------
+    # As a library, capa uses lower version bounds
+    # when specifying its dependencies. This lets
+    # other programs that use capa (and other libraries)
+    # to find a compatible set of dependency versions.
+    #
+    # We can optionally pin to specific versions or
+    # limit the upper bound when there's a good reason;
+    # but the default is to assume all greater versions
+    # probably work with capa until proven otherwise.
+    #
+    # The following link provides good background:
+    # https://iscinumpy.dev/post/bound-version-constraints/
+    #
+    # When we develop capa, and when we distribute it as
+    # a standalone binary, we'll use specific versions
+    # that are pinned in requirements.txt.
+    # But the requirements for a library are specified here
+    # and are looser.
+    #
+    # Related discussions:
+    # 
+    #   - https://github.com/mandiant/capa/issues/2053
+    #   - https://github.com/mandiant/capa/pull/2059
+    #   - https://github.com/mandiant/capa/pull/2079
+    #
+    # ---------------------------------------
+    # The following dependency versions were imported
+    # during June 2024 by truncating specific versions to
+    # their major-most version (major version when possible, 
+    # or minor otherwise).
+    # As specific constraints are identified, please provide
+    # comments and context.
+    "pyyaml>=6",
+    "colorama>=0.4",
+    "ida-netnode>=3.0",
+    "ida-settings>=3.1.0",
+    "ruamel.yaml>=0.18",
+    "pefile>=2023.2.7",
+    "pyelftools>=0.31",
+    "pydantic>=2",
+    "rich>=13",
+    "humanize>=4",
+    "protobuf>=5",
+    "msgspec>=0.18.6",
+    "xmltodict>=0.13.0",
+
+    # ---------------------------------------
+    # Dependencies that we develop
+    #
+    # These dependencies are often actively influenced by capa,
+    # so we provide a minimum patch version that includes the
+    # latest bug fixes we need here.
+    "viv-utils[flirt]>=0.7.9",
+    "vivisect>=1.1.1",
+    "dncil>=1.0.2",
+
+    # ---------------------------------------
+    # Dependencies with version caps
+    #
+    # These dependencies must not exceed the version cap,
+    # typically due to dropping support for python releases
+    # we still support.
+
+    "networkx>=3",
+
+    "dnfile>=0.17.0",
+]
+dynamic = ["version"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "capa.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["capa*"]
+namespaces = false
+
+[project.optional-dependencies]
+dev = [
+    # Dev and build dependencies are not relaxed because
+    # we want all developer environments to be consistent.
+    # These dependencies are not used in production environments
+    # and should not conflict with other libraries/tooling.
+    "pre-commit==4.6.0",
+    "pytest==9.1.0",
+    "pytest-sugar==1.1.1",
+    "pytest-instafail==0.5.0",
+    "ruff==0.16.0",
+    "mypy==2.3.0",
+    "mypy-protobuf==5.1.0",
+    "PyGithub==2.10.0",
+    "bump-my-version==1.5.0",
+    # type stubs for mypy
+    "types-colorama==0.4.15.11",
+    "types-PyYAML==6.0.8",
+    "types-psutil==7.2.0.20251228",
+    "types_requests==2.33.0.20260327",
+    "types-protobuf==7.35.1.20260821",
+    "deptry==0.25.1"
+]
+build = [
+    # Dev and build dependencies are not relaxed because
+    # we want all developer environments to be consistent.
+    # These dependencies are not used in production environments
+    # and should not conflict with other libraries/tooling.
+    "pyinstaller==6.22.0",
+    "setuptools==84.0.0",
+    "build==1.5.0"
+]
+scripts = [
+    # can (optionally) be more lenient on dependencies here
+    # see comment on dependencies for more context
+    "jschema_to_python==1.2.3",
+    "psutil==7.2.1",
+    "stix2==3.0.1",
+    "sarif_om==1.0.4",
+    "requests>=2.32.4",
+    "pyzipper>=0.3.6",
+]
+ghidra = [
+    "pyghidra>=3.0.0",
+]
+
+[tool.deptry]
+extend_exclude = [
+    "sigs",
+    "tests",
+    "web",
+]
+
+# dependencies marked as first party, to inform deptry that they are local
+known_first_party = [
+    "binaryninja",
+    "flirt",
+    "ghidra",
+    "idapro",
+    "ida_ida",
+    "ida_auto",
+    "ida_bytes",
+    "ida_entry",
+    "ida_funcs",
+    "ida_kernwin",
+    "ida_loader",
+    "ida_nalt",
+    "ida_segment",
+    "ida_ua",
+    "idaapi",
+    "idautils",
+    "idc",
+    "java",
+    "netnode",
+    "PyQt5",
+    "PySide6"
+]
+
+[tool.deptry.per_rule_ignores]
+# dependencies defined but not used in the codebase
+DEP002 = [
+    "build",
+    "bump-my-version",
+    "deptry",
+
+    "mypy",
+    "mypy-protobuf",
+    "pre-commit",
+    "PyGithub",
+    "pyinstaller",
+    "pytest",
+    "pytest-instafail",
+    "pytest-sugar",
+    "ruff",
+    "setuptools",
+    "types-colorama",
+    "types-protobuf",
+    "types-psutil",
+    "types-PyYAML",
+    "types_requests",
+]
+
+# dependencies imported but missing from definitions
+DEP003 = [
+    "typing_extensions" # TODO(s-ff): remove when Python 3.10 is deprecated, see #1699
+]
+
+[tool.deptry.package_module_name_map]
+PyGithub = "github"
+
+[project.urls]
+Homepage = "https://github.com/mandiant/capa"
+Repository = "https://github.com/mandiant/capa.git"
+Documentation = "https://github.com/mandiant/capa/tree/master/doc"
+Rules = "https://github.com/mandiant/capa-rules"
+"Rules Documentation" = "https://github.com/mandiant/capa-rules/tree/master/doc"
+
+[project.scripts]
+capa = "capa.main:main"

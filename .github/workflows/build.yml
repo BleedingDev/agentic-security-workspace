@@ -1,0 +1,177 @@
+name: build
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths-ignore:
+      - 'web/**'
+      - 'doc/**'
+      - '**.md'
+  release:
+    types: [edited, published]
+  workflow_dispatch: # manual trigger for testing
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    name: PyInstaller for ${{ matrix.os }} / Py ${{ matrix.python_version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # set to false for debugging
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            # use old linux so that the shared library versioning is more portable
+            artifact_name: capa
+            asset_name: linux
+            python_version: '3.10'
+            # for Ghidra
+            java-version: '21'
+            ghidra-version: '12.0'
+            public-version: 'PUBLIC_20251205'
+            ghidra-sha256: 'af43e8cfb2fa4490cf6020c3a2bde25c159d83f45236a0542688a024e8fc1941'
+          - os: ubuntu-22.04-arm
+            artifact_name: capa
+            asset_name: linux-arm64
+            python_version: '3.10'
+          - os: ubuntu-22.04
+            artifact_name: capa
+            asset_name: linux-py313
+            python_version: '3.13'
+          - os: windows-2022
+            artifact_name: capa.exe
+            asset_name: windows
+            python_version: '3.10'
+          # Windows 11 ARM64 complains of conflicting package version
+          # Additionally, there is no ARM64 build of Python for Python 3.10 on Windows 11 ARM: https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json
+          #- os: windows-11-arm
+          #  artifact_name: capa.exe
+          #  asset_name: windows-arm64
+          #  python_version: '3.12'
+          - os: macos-15-intel
+            # macos-15-intel is the lowest native intel build
+            artifact_name: capa
+            asset_name: macos
+            python_version: '3.10'
+          - os: macos-14
+            artifact_name: capa
+            asset_name: macos-arm64
+            python_version: '3.10'
+    steps:
+      - name: Checkout capa
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+      - name: Set up Python ${{ matrix.python_version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python_version }}
+      - if: matrix.os == 'ubuntu-22.04' || matrix.os == 'ubuntu-22.04-arm'
+        run: sudo apt-get install -y libyaml-dev
+      - name: Upgrade pip, setuptools
+        run: python -m pip install --upgrade pip setuptools
+      - name: Install capa with build requirements
+        run: |
+          pip install -r requirements.txt
+          pip install -e .[build]
+      - name: Build standalone executable
+        run: pyinstaller --log-level DEBUG .github/pyinstaller/pyinstaller.spec
+      - name: Does it run without warnings or errors?
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-2022" ]] || [[ "${{ matrix.os }}" == "windows-11-arm" ]]; then
+            EXECUTABLE=".\\dist\\capa"
+          else
+            EXECUTABLE="./dist/capa"
+          fi
+
+          output=$(${EXECUTABLE} --version 2>&1)
+          exit_code=$?
+
+          echo "${output}"
+          echo "${exit_code}"
+
+          if echo "${output}" | grep -iE 'error|warning'; then
+            exit 1
+          fi
+
+          if [[ "${exit_code}" -ne 0 ]]; then
+            exit 1
+          fi
+      - name: Does it run (PE)?
+        run: dist/capa -d "tests/data/Practical Malware Analysis Lab 01-01.dll_"
+      - name: Does it run (Shellcode)?
+        run: dist/capa -d "tests/data/499c2a85f6e8142c3f48d4251c9c7cd6.raw32"
+      - name: Does it run (ELF)?
+        run: dist/capa -d "tests/data/7351f8a40c5450557b24622417fc478d.elf_"
+      - name: Does it run (CAPE)?
+        run: |
+          7z e "tests/data/dynamic/cape/v2.2/d46900384c78863420fb3e297d0a2f743cd2b6b3f7f82bf64059a168e07aceb7.json.gz"
+          dist/capa -d "d46900384c78863420fb3e297d0a2f743cd2b6b3f7f82bf64059a168e07aceb7.json"
+      - name: Set up Java ${{ matrix.java-version }}
+        if: matrix.os == 'ubuntu-22.04' && matrix.python_version == '3.10'
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java-version }}
+      - name: Install Ghidra ${{ matrix.ghidra-version }}
+        if: matrix.os == 'ubuntu-22.04' && matrix.python_version == '3.10'
+        run: |
+          mkdir ./.github/ghidra
+          wget "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ matrix.ghidra-version }}_build/ghidra_${{ matrix.ghidra-version }}_${{ matrix.public-version }}.zip" -O ./.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip
+          echo "${{ matrix.ghidra-sha256 }} ./.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip" | sha256sum -c -
+          unzip .github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip -d .github/ghidra/
+      - name: Does it run (Ghidra)?
+        if: matrix.os == 'ubuntu-22.04' && matrix.python_version == '3.10'
+        env:
+          GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC
+        run: dist/capa -b ghidra -d "tests/data/Practical Malware Analysis Lab 01-01.dll_"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+  zip_and_upload:
+    # upload zipped binaries to Release page
+    if: github.event_name == 'release'
+    name: zip and upload ${{ matrix.asset_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs: [build]
+    strategy:
+      matrix:
+        include:
+          - asset_name: linux
+            artifact_name: capa
+          - asset_name: linux-arm64
+            artifact_name: capa
+          - asset_name: linux-py313
+            artifact_name: capa
+          - asset_name: windows
+            artifact_name: capa.exe
+          #- asset_name: windows-arm64
+          #  artifact_name: capa.exe
+          - asset_name: macos
+            artifact_name: capa
+          - asset_name: macos-arm64
+            artifact_name: capa
+    env:
+      ZIP_NAME: capa-${{ github.event.release.tag_name }}-${{ matrix.asset_name }}.zip
+    steps:
+      - name: Download ${{ matrix.asset_name }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.asset_name }}
+      - name: Set executable flag
+        run: chmod +x ${{ matrix.artifact_name }}
+      - name: Zip ${{ matrix.artifact_name }} into ${{ env.ZIP_NAME }}
+        run: zip ${ZIP_NAME} ${{ matrix.artifact_name }}
+      - name: Upload ${{ env.ZIP_NAME }} to GH Release
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # v2.11.5
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN}}
+          file: ${{ env.ZIP_NAME }}
+          tag: ${{ github.ref }}
