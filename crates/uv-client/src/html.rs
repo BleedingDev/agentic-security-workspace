@@ -1,0 +1,2171 @@
+use std::{str::FromStr, sync::Arc};
+
+use astral_html::{Attribute, Document, Element};
+use jiff::Timestamp;
+use rustc_hash::FxHashMap;
+use tracing::{debug, instrument, warn};
+
+use uv_normalize::PackageName;
+use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
+use uv_pypi_types::{BaseUrl, CoreMetadata, Hashes, ProjectStatus, PypiFile, Status, Yanked};
+use uv_pypi_types::{HashError, LenientVersionSpecifiers};
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+use uv_small_str::SmallString;
+
+type RequiresPythonResult = Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError>;
+
+#[derive(Default)]
+struct RequiresPythonInterner {
+    values: FxHashMap<SmallString, RequiresPythonResult>,
+}
+
+impl RequiresPythonInterner {
+    fn parse(&mut self, value: &str) -> RequiresPythonResult {
+        if let Some(requires_python) = self.values.get(value) {
+            return requires_python.clone();
+        }
+
+        let requires_python = LenientVersionSpecifiers::from_str(value)
+            .map(VersionSpecifiers::from)
+            .map(Arc::new);
+        self.values
+            .insert(SmallString::from(value), requires_python.clone());
+        requires_python
+    }
+}
+
+/// Return the value of the attribute with the given case-insensitive HTML attribute name.
+/// Boolean attributes have no value.
+fn attribute<'a>(tag: &'a Element<'_, '_>, name: &str) -> Option<&'a str> {
+    tag.attribute(name)
+        .filter(|attribute| attribute.raw_value().is_some())
+        .map(Attribute::value)
+}
+
+/// A parsed structure from PyPI "HTML" index format for a single package.
+#[derive(Debug, Clone)]
+pub(crate) struct SimpleDetailHTML {
+    /// The PEP 792 project status information.
+    #[allow(dead_code)]
+    pub(crate) project_status: ProjectStatus,
+    /// The [`BaseUrl`] to which all relative URLs should be resolved.
+    pub(crate) base: BaseUrl,
+    /// The list of [`PypiFile`]s available for download sorted by filename.
+    pub(crate) files: Vec<PypiFile>,
+}
+
+impl SimpleDetailHTML {
+    /// Parse the list of [`PypiFile`]s from the simple HTML page returned by the given URL.
+    #[instrument(skip_all, fields(url = % url))]
+    pub(crate) fn parse(text: &str, url: &DisplaySafeUrl) -> Result<Self, Error> {
+        let dom = Document::parse(text)?;
+
+        // Project status information appears in the `<meta>` tags in the `<head>`.
+        // Specifically, it appears as `name="pypi:project-status"`
+        // and `name="pypi:project-status-reason"` with corresponding
+        // `content` attributes.
+        let project_status = dom
+            .elements()
+            .find(|element| element.is("head"))
+            .and_then(Self::parse_project_status)
+            .unwrap_or_default();
+
+        // Parse the first `<base>` tag, if any, to determine the base URL to which all
+        // relative URLs should be resolved. The HTML spec requires that the `<base>` tag
+        // appear before other tags with attribute values of URLs.
+        let base = BaseUrl::from(
+            dom.elements()
+                .take_while(|tag| !tag.is("a") && !tag.is("link"))
+                .find(|tag| tag.is("base"))
+                .map(|base| Self::parse_base(&base))
+                .transpose()?
+                .flatten()
+                .unwrap_or_else(|| url.clone()),
+        );
+
+        // Parse each `<a>` tag, to extract the filename, hash, and URL.
+        let mut interner = RequiresPythonInterner::default();
+        let mut files: Vec<PypiFile> = dom
+            .elements()
+            .filter(|link| link.is("a"))
+            .map(|link| Self::parse_anchor(&link, &mut interner))
+            .filter_map(|result| match result {
+                Ok(None) => None,
+                Ok(Some(file)) => Some(Ok(file)),
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // While it has not been positively observed, we sort the files
+        // to ensure we have a defined ordering. Otherwise, if we rely on
+        // the API to provide a stable ordering and doesn't, it can lead
+        // non-deterministic behavior elsewhere. (This is somewhat hand-wavy
+        // and a bit of a band-aide, since arguably, the order of this API
+        // response probably shouldn't have an impact on things downstream from
+        // this. That is, if something depends on ordering, then it should
+        // probably be the thing that does the sorting.)
+        files.sort_unstable_by(|f1, f2| f1.filename.cmp(&f2.filename));
+
+        Ok(Self {
+            project_status,
+            base,
+            files,
+        })
+    }
+
+    /// Parse a [`ProjectStatus`] from the `<meta>` tags in the given `<head>`.
+    ///
+    /// Precondition: `head` is a `<head>` tag.
+    fn parse_project_status(head: Element<'_, '_>) -> Option<ProjectStatus> {
+        let mut status: Option<Status> = None;
+        let mut reason: Option<SmallString> = None;
+        for tag in head.descendants().filter(|tag| tag.is("meta")) {
+            let Some(name) = attribute(&tag, "name") else {
+                continue;
+            };
+
+            // Per PEP 792: both `pypi:project-status` and `pypi:project-status-reason`
+            // are optional, but if present should be well-formed.
+            match name {
+                "pypi:project-status" => {
+                    status = {
+                        let status = attribute(&tag, "content").and_then(Status::new)?;
+                        Some(status)
+                    };
+                }
+                "pypi:project-status-reason" => {
+                    reason = {
+                        let Some(content) = attribute(&tag, "content").map(SmallString::from)
+                        else {
+                            // TODO: Make this a hard error instead?
+                            warn!("Invalid project status reason (missing)");
+                            return None;
+                        };
+                        Some(content)
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(status) = status {
+            let status = ProjectStatus { status, reason };
+            Some(status)
+        } else {
+            None
+        }
+    }
+
+    /// Parse the `href` from a `<base>` tag.
+    fn parse_base(base: &Element<'_, '_>) -> Result<Option<DisplaySafeUrl>, Error> {
+        let Some(href) = attribute(base, "href") else {
+            return Ok(None);
+        };
+        let url =
+            DisplaySafeUrl::parse(href).map_err(|err| Error::UrlParse(href.to_string(), err))?;
+        Ok(Some(url))
+    }
+
+    /// Parse a [`PypiFile`] from an `<a>` tag.
+    ///
+    /// Returns `None` if the `<a>` doesn't have an `href` attribute.
+    fn parse_anchor(
+        link: &Element<'_, '_>,
+        interner: &mut RequiresPythonInterner,
+    ) -> Result<Option<PypiFile>, Error> {
+        // Extract the href.
+        let Some(href) = attribute(link, "href").filter(|href| !href.is_empty()) else {
+            return Ok(None);
+        };
+
+        // Extract the hash, which should be in the fragment.
+        let (path, hashes) = if let Some((path, fragment)) = href.split_once('#') {
+            let fragment = percent_encoding::percent_decode_str(fragment).decode_utf8()?;
+            (
+                path,
+                if fragment.trim().is_empty() {
+                    Hashes::default()
+                } else {
+                    match Hashes::parse_fragment(&fragment) {
+                        Ok(hashes) => hashes,
+                        Err(
+                            err
+                            @ (HashError::InvalidFragment(..) | HashError::InvalidStructure(..)),
+                        ) => {
+                            // If the URL includes an irrelevant hash (e.g., `#main`), ignore it.
+                            debug!("{err}");
+                            Hashes::default()
+                        }
+                        Err(HashError::UnsupportedHashAlgorithm(fragment)) => {
+                            if fragment == "egg" {
+                                // If the URL references an egg hash, ignore it.
+                                debug!("{}", HashError::UnsupportedHashAlgorithm(fragment));
+                                Hashes::default()
+                            } else {
+                                // If the URL references a hash, but it's unsupported, error.
+                                return Err(HashError::UnsupportedHashAlgorithm(fragment).into());
+                            }
+                        }
+                        Err(
+                            err @ (HashError::InvalidDigestLength { .. }
+                            | HashError::InvalidDigestCharacters(_)),
+                        ) => return Err(err.into()),
+                    }
+                },
+            )
+        } else {
+            (href, Hashes::default())
+        };
+
+        // Extract the filename from the body text, which MUST match that of
+        // the final path component of the URL.
+        let filename = path
+            .split('/')
+            .next_back()
+            .ok_or_else(|| Error::MissingFilename(href.to_string()))?;
+
+        // Strip any query string from the filename.
+        let filename = filename.split('?').next().unwrap_or(filename);
+
+        // Unquote the filename.
+        let filename = percent_encoding::percent_decode_str(filename)
+            .decode_utf8()
+            .map_err(|_| Error::UnsupportedFilename(filename.to_string()))?;
+
+        // Extract the `requires-python` value, which should be set on the
+        // `data-requires-python` attribute.
+        let requires_python = attribute(link, "data-requires-python")
+            .map(|requires_python| interner.parse(requires_python));
+
+        // Extract the `core-metadata` field, which is either set on:
+        // - `data-core-metadata`, per PEP 714.
+        // - `data-dist-info-metadata`, per PEP 658.
+        let core_metadata = if let Some(dist_info_metadata) = attribute(link, "data-core-metadata")
+            .or_else(|| attribute(link, "data-dist-info-metadata"))
+        {
+            match dist_info_metadata {
+                "true" => Some(CoreMetadata::Bool(true)),
+                "false" => Some(CoreMetadata::Bool(false)),
+                fragment => match Hashes::parse_fragment(fragment) {
+                    Ok(hash) => Some(CoreMetadata::Hashes(hash)),
+                    Err(err) => {
+                        warn!("Failed to parse core metadata value `{fragment}`: {err}");
+                        None
+                    }
+                },
+            }
+        } else {
+            None
+        };
+
+        // Extract the `yanked` field, which should be set on the `data-yanked`
+        // attribute.
+        let yanked = if link.has_attribute("data-yanked") {
+            if let Some(yanked) = attribute(link, "data-yanked") {
+                Some(Box::new(Yanked::Reason(yanked.into())))
+            } else {
+                Some(Box::new(Yanked::Bool(true)))
+            }
+        } else {
+            None
+        };
+
+        // Extract the `size` field, which should be set on the `data-size` attribute. This isn't
+        // included in PEP 700, which omits the HTML API, but we respect it anyway. Since this
+        // field isn't standardized, we discard errors.
+        let size = attribute(link, "data-size").and_then(|size| size.parse().ok());
+
+        // Extract the `upload-time` field, which should be set on the `data-upload-time` attribute. This isn't
+        // included in PEP 700, which omits the HTML API, but we respect it anyway. Since this
+        // field isn't standardized, we discard errors.
+        let upload_time = attribute(link, "data-upload-time")
+            .and_then(|upload_time| Timestamp::from_str(upload_time).ok());
+
+        Ok(Some(PypiFile {
+            core_metadata,
+            yanked,
+            requires_python,
+            hashes,
+            filename: filename.into(),
+            url: path.into(),
+            size,
+            upload_time,
+        }))
+    }
+}
+
+/// A parsed structure from PyPI "HTML" index format listing all available packages.
+#[derive(Debug, Clone)]
+pub(crate) struct SimpleIndexHtml {
+    /// The list of project names available in the index.
+    pub(crate) projects: Vec<PackageName>,
+}
+
+impl SimpleIndexHtml {
+    /// Parse the list of project names from the Simple API index HTML page.
+    pub(crate) fn parse(text: &str) -> Result<Self, Error> {
+        let dom = Document::parse(text)?;
+
+        // Parse each `<a>` tag to extract the project name.
+        let mut projects = dom
+            .elements()
+            .filter(|link| link.is("a"))
+            .filter_map(|link| Self::parse_anchor_project_name(&link))
+            .collect::<Vec<_>>();
+
+        // Sort for deterministic ordering.
+        projects.sort_unstable();
+
+        Ok(Self { projects })
+    }
+
+    /// Parse a project name from an `<a>` tag.
+    ///
+    /// Returns `None` if the `<a>` doesn't have an `href` attribute or text content.
+    fn parse_anchor_project_name(link: &Element<'_, '_>) -> Option<PackageName> {
+        // Extract the href.
+        attribute(link, "href").filter(|href| !href.is_empty())?;
+
+        // Extract the text content, which should be the project name.
+        let inner_text = link.text();
+        let project_name = inner_text.trim();
+
+        if project_name.is_empty() {
+            return None;
+        }
+
+        PackageName::from_str(project_name).ok()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error(transparent)]
+    FromUtf8(#[from] std::string::FromUtf8Error),
+
+    #[error("Failed to parse URL: {0}")]
+    UrlParse(String, #[source] DisplaySafeUrlError),
+
+    #[error(transparent)]
+    HtmlParse(#[from] astral_html::Error),
+
+    #[error("Missing href attribute on anchor link: `{0}`")]
+    MissingHref(String),
+
+    #[error("Expected distribution filename as last path component of URL: {0}")]
+    MissingFilename(String),
+
+    #[error("Expected distribution filename to be UTF-8: {0}")]
+    UnsupportedFilename(String),
+
+    #[error("Missing hash attribute on URL: {0}")]
+    MissingHash(String),
+
+    #[error(transparent)]
+    FragmentParse(#[from] HashError),
+
+    #[error("Invalid `requires-python` specifier: {0}")]
+    Pep440(#[source] uv_pep440::VersionSpecifiersParseError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sha256() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#sha256=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_md5() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#md5=6088930bfe239f0e6710546ab9c19c9e">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: Some(
+                            "6088930bfe239f0e6710546ab9c19c9e",
+                        ),
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn reject_invalid_hashes() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<a href="/whl/Jinja2-3.1.0-py3-none-any.whl#sha256=short">Jinja2-3.1.0-py3-none-any.whl</a>
+</body>
+</html>
+"#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/")
+            .expect("valid base URL");
+        let error = SimpleDetailHTML::parse(text, &base).expect_err("invalid digest length");
+        insta::assert_snapshot!(error, @"Invalid hash digest length (expected 64 hexadecimal characters, found 5)");
+    }
+
+    #[test]
+    fn parse_base() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<head>
+<base href="https://index.python.org/">
+</head>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#sha256=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "index.python.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_escaped_fragment() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2&#43;233fca715f49-py3-none-any.whl#sha256=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61">Jinja2-3.1.2+233fca715f49-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2+233fca715f49-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2+233fca715f49-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_encoded_fragment() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#sha256%3D4095ada29e51070f7d199a0a5bdf5c8d8e238e03f0bf4dcc02571e78c9ae800d">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "4095ada29e51070f7d199a0a5bdf5c8d8e238e03f0bf4dcc02571e78c9ae800d",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_quoted_filepath() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="cpu/torchtext-0.17.0%2Bcpu-cp39-cp39-win_amd64.whl">cpu/torchtext-0.17.0%2Bcpu-cp39-cp39-win_amd64.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "torchtext-0.17.0+cpu-cp39-cp39-win_amd64.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "cpu/torchtext-0.17.0%2Bcpu-cp39-cp39-win_amd64.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_missing_hash() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_missing_href() {
+        let text = r"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a>Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    ";
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_empty_href() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_empty_fragment() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_query_string() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl?project=legacy">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl?project=legacy",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_unknown_fragment() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#main">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base);
+        insta::assert_debug_snapshot!(result, @r#"
+        Ok(
+            SimpleDetailHTML {
+                project_status: ProjectStatus {
+                    status: Active,
+                    reason: None,
+                },
+                base: BaseUrl(
+                    DisplaySafeUrl {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "download.pytorch.org",
+                            ),
+                        ),
+                        port: None,
+                        path: "/whl/jinja2/",
+                        query: None,
+                        fragment: None,
+                    },
+                ),
+                files: [
+                    PypiFile {
+                        core_metadata: None,
+                        filename: "Jinja2-3.1.2-py3-none-any.whl",
+                        hashes: Hashes {
+                            md5: None,
+                            sha256: None,
+                            sha384: None,
+                            sha512: None,
+                            blake2b: None,
+                        },
+                        requires_python: None,
+                        size: None,
+                        upload_time: None,
+                        url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                        yanked: None,
+                    },
+                ],
+            },
+        )
+        "#);
+    }
+
+    #[test]
+    fn parse_egg_fragment() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#main">Jinja2-3.1.2-py3-none-any.whl#egg=public-hello-0.1</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base);
+        insta::assert_debug_snapshot!(result, @r#"
+        Ok(
+            SimpleDetailHTML {
+                project_status: ProjectStatus {
+                    status: Active,
+                    reason: None,
+                },
+                base: BaseUrl(
+                    DisplaySafeUrl {
+                        scheme: "https",
+                        cannot_be_a_base: false,
+                        username: "",
+                        password: None,
+                        host: Some(
+                            Domain(
+                                "download.pytorch.org",
+                            ),
+                        ),
+                        port: None,
+                        path: "/whl/jinja2/",
+                        query: None,
+                        fragment: None,
+                    },
+                ),
+                files: [
+                    PypiFile {
+                        core_metadata: None,
+                        filename: "Jinja2-3.1.2-py3-none-any.whl",
+                        hashes: Hashes {
+                            md5: None,
+                            sha256: None,
+                            sha384: None,
+                            sha512: None,
+                            blake2b: None,
+                        },
+                        requires_python: None,
+                        size: None,
+                        upload_time: None,
+                        url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                        yanked: None,
+                    },
+                ],
+            },
+        )
+        "#);
+    }
+
+    #[test]
+    fn parse_unknown_hash() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#blake2=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+<!--TIMESTAMP 1703347410-->
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap_err();
+        insta::assert_snapshot!(result, @"Unsupported hash algorithm (expected one of: `md5`, `sha256`, `sha384`, `sha512`, or `blake2b`) on: `blake2=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61`");
+    }
+
+    #[test]
+    fn parse_flat_index_html() {
+        let text = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+        <body>
+            <a href="https://storage.googleapis.com/jax-releases/cuda100/jaxlib-0.1.52+cuda100-cp36-none-manylinux2010_x86_64.whl">cuda100/jaxlib-0.1.52+cuda100-cp36-none-manylinux2010_x86_64.whl</a><br>
+            <a href="https://storage.googleapis.com/jax-releases/cuda100/jaxlib-0.1.52+cuda100-cp37-none-manylinux2010_x86_64.whl">cuda100/jaxlib-0.1.52+cuda100-cp37-none-manylinux2010_x86_64.whl</a><br>
+        </body>
+        </html>
+    "#;
+        let base = DisplaySafeUrl::parse(
+            "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html",
+        )
+        .unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "storage.googleapis.com",
+                        ),
+                    ),
+                    port: None,
+                    path: "/jax-releases/jax_cuda_releases.html",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "jaxlib-0.1.52+cuda100-cp36-none-manylinux2010_x86_64.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "https://storage.googleapis.com/jax-releases/cuda100/jaxlib-0.1.52+cuda100-cp36-none-manylinux2010_x86_64.whl",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: None,
+                    filename: "jaxlib-0.1.52+cuda100-cp37-none-manylinux2010_x86_64.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "https://storage.googleapis.com/jax-releases/cuda100/jaxlib-0.1.52+cuda100-cp37-none-manylinux2010_x86_64.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    /// Test for AWS Code Artifact
+    ///
+    /// See: <https://github.com/astral-sh/uv/issues/1388#issuecomment-1947659088>
+    #[test]
+    fn parse_code_artifact_index_html() {
+        let text = r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Links for flask</title>
+        </head>
+        <body>
+            <h1>Links for flask</h1>
+            <a href="0.1/Flask-0.1.tar.gz#sha256=9da884457e910bf0847d396cb4b778ad9f3c3d17db1c5997cb861937bd284237" data-gpg-sig="false" >Flask-0.1.tar.gz</a>
+            <br/>
+            <a href="0.10.1/Flask-0.10.1.tar.gz#sha256=4c83829ff83d408b5e1d4995472265411d2c414112298f2eb4b359d9e4563373" data-gpg-sig="false" >Flask-0.10.1.tar.gz</a>
+            <br/>
+            <a href="3.0.1/flask-3.0.1.tar.gz#sha256=6489f51bb3666def6f314e15f19d50a1869a19ae0e8c9a3641ffe66c77d42403" data-requires-python="&gt;=3.8" data-gpg-sig="false" >flask-3.0.1.tar.gz</a>
+            <br/>
+        </body>
+        </html>
+    "#;
+        let base = DisplaySafeUrl::parse("https://account.d.codeartifact.us-west-2.amazonaws.com/pypi/shared-packages-pypi/simple/flask/")
+            .unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "account.d.codeartifact.us-west-2.amazonaws.com",
+                        ),
+                    ),
+                    port: None,
+                    path: "/pypi/shared-packages-pypi/simple/flask/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Flask-0.1.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "9da884457e910bf0847d396cb4b778ad9f3c3d17db1c5997cb861937bd284237",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "0.1/Flask-0.1.tar.gz",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Flask-0.10.1.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "4c83829ff83d408b5e1d4995472265411d2c414112298f2eb4b359d9e4563373",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "0.10.1/Flask-0.10.1.tar.gz",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: None,
+                    filename: "flask-3.0.1.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "6489f51bb3666def6f314e15f19d50a1869a19ae0e8c9a3641ffe66c77d42403",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: Some(
+                        Ok(
+                            VersionSpecifiers(
+                                [
+                                    VersionSpecifier {
+                                        operator: GreaterThanEqual,
+                                        version: "3.8",
+                                    },
+                                ],
+                            ),
+                        ),
+                    ),
+                    size: None,
+                    upload_time: None,
+                    url: "3.0.1/flask-3.0.1.tar.gz",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    #[test]
+    fn parse_file_requires_python_trailing_comma() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl#sha256=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61" data-requires-python="&gt;=3.8,">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+</body>
+</html>
+    "#;
+        let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "download.pytorch.org",
+                        ),
+                    ),
+                    port: None,
+                    path: "/whl/jinja2/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: None,
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: Some(
+                            "6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61",
+                        ),
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: Some(
+                        Ok(
+                            VersionSpecifiers(
+                                [
+                                    VersionSpecifier {
+                                        operator: GreaterThanEqual,
+                                        version: "3.8",
+                                    },
+                                ],
+                            ),
+                        ),
+                    ),
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    /// Respect PEP 714 (see: <https://peps.python.org/pep-0714/>).
+    #[test]
+    fn parse_core_metadata() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Links for jinja2</h1>
+<a href="/whl/Jinja2-3.1.2-py3-none-any.whl" data-dist-info-metadata="true">Jinja2-3.1.2-py3-none-any.whl</a><br/>
+<a href="/whl/Jinja2-3.1.3-py3-none-any.whl" data-core-metadata="true">Jinja2-3.1.3-py3-none-any.whl</a><br/>
+<a href="/whl/Jinja2-3.1.4-py3-none-any.whl" data-dist-info-metadata="false">Jinja2-3.1.4-py3-none-any.whl</a><br/>
+<a href="/whl/Jinja2-3.1.5-py3-none-any.whl" data-core-metadata="false">Jinja2-3.1.5-py3-none-any.whl</a><br/>
+<a href="/whl/Jinja2-3.1.6-py3-none-any.whl" data-core-metadata="true" data-dist-info-metadata="false">Jinja2-3.1.6-py3-none-any.whl</a><br/>
+</body>
+</html>
+    "#;
+        let base = DisplaySafeUrl::parse("https://account.d.codeartifact.us-west-2.amazonaws.com/pypi/shared-packages-pypi/simple/flask/")
+            .unwrap();
+        let result = SimpleDetailHTML::parse(text, &base).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleDetailHTML {
+            project_status: ProjectStatus {
+                status: Active,
+                reason: None,
+            },
+            base: BaseUrl(
+                DisplaySafeUrl {
+                    scheme: "https",
+                    cannot_be_a_base: false,
+                    username: "",
+                    password: None,
+                    host: Some(
+                        Domain(
+                            "account.d.codeartifact.us-west-2.amazonaws.com",
+                        ),
+                    ),
+                    port: None,
+                    path: "/pypi/shared-packages-pypi/simple/flask/",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            files: [
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            true,
+                        ),
+                    ),
+                    filename: "Jinja2-3.1.2-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.2-py3-none-any.whl",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            true,
+                        ),
+                    ),
+                    filename: "Jinja2-3.1.3-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.3-py3-none-any.whl",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            false,
+                        ),
+                    ),
+                    filename: "Jinja2-3.1.4-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.4-py3-none-any.whl",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            false,
+                        ),
+                    ),
+                    filename: "Jinja2-3.1.5-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.5-py3-none-any.whl",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            true,
+                        ),
+                    ),
+                    filename: "Jinja2-3.1.6-py3-none-any.whl",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/whl/Jinja2-3.1.6-py3-none-any.whl",
+                    yanked: None,
+                },
+            ],
+        }
+        "#);
+    }
+
+    /// Test parsing with project status metadata (status, no reason).
+    #[test]
+    fn parse_simple_detail_with_project_status_no_reason() {
+        let text = r#"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="pypi:repository-version" content="1.4">
+    <meta name="pypi:project-status" content="archived">
+    <title>Links for pepy</title>
+</head>
+<body>
+    <h1>Links for pepy</h1>
+    <a href="https://files.pythonhosted.org/packages/48/99/fa422e3fb74e6c7a9d735222aa6fceb717c8cd528468aeae13cd22a1d40b/pepy-1.0.0rc2.tar.gz#sha256=67736757345c4dad74725c520986f82c55a7404ad1b35435474a16111d68b270">pepy-1.0.0rc2.tar.gz</a>
+    <br/>
+</body>
+</html>
+<!--SERIAL 15765070-->
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/pepy/").unwrap(),
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(result.project_status, @"
+        ProjectStatus {
+            status: Archived,
+            reason: None,
+        }
+        ");
+    }
+
+    /// Test parsing with project status metadata (status and reason).
+    #[test]
+    fn parse_simple_detail_with_project_status_and_reason() {
+        let text = r#"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="pypi:repository-version" content="1.4">
+    <meta name="pypi:project-status" content="archived">
+    <meta name="pypi:project-status-reason" content="This project is haunted.">
+    <title>Links for fakeproject</title>
+</head>
+<body>
+    <h1>Links for fakeproject</h1>
+    <a href="https://example.com/fakeproject">fakeproject-1.2.3.tar.gz</a>
+    <br/>
+</body>
+</html>
+<!--SERIAL 15765070-->
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/fakeproject/").unwrap(),
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(result.project_status, @r#"
+        ProjectStatus {
+            status: Archived,
+            reason: Some(
+                "This project is haunted.",
+            ),
+        }
+        "#);
+    }
+
+    /// Test that Simple API HTML element names and link `href` are ASCII case-insensitive.
+    #[test]
+    fn parse_simple_html_case_insensitively() {
+        let text = r#"
+<!DOCTYPE html>
+<HTML>
+<HEAD>
+    <META NAME="pypi:project-status" CONTENT="archived">
+    <META NAME="pypi:project-status-reason" CONTENT="no longer maintained">
+    <BASE HREF="https://index.python.org/">
+</HEAD>
+<BODY>
+    <A HREF="/files/fakeproject-1.2.3.tar.gz" DATA-REQUIRES-PYTHON="&gt;=3.12" DATA-CORE-METADATA="true" DATA-YANKED="broken release">fakeproject-1.2.3.tar.gz</A>
+    <A HREF="/files/fakeproject-1.2.4.tar.gz" DATA-DIST-INFO-METADATA="false">fakeproject-1.2.4.tar.gz</A>
+    <A HREF="/files/fakeproject-1.2.5.tar.gz" DATA-YANKED>fakeproject-1.2.5.tar.gz</A>
+</BODY>
+</HTML>
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/fakeproject/").unwrap(),
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(
+            (
+                &result.project_status,
+                result.base.as_str(),
+                &result.files,
+            ), @r#"
+        (
+            ProjectStatus {
+                status: Archived,
+                reason: Some(
+                    "no longer maintained",
+                ),
+            },
+            "https://index.python.org/",
+            [
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            true,
+                        ),
+                    ),
+                    filename: "fakeproject-1.2.3.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: Some(
+                        Ok(
+                            VersionSpecifiers(
+                                [
+                                    VersionSpecifier {
+                                        operator: GreaterThanEqual,
+                                        version: "3.12",
+                                    },
+                                ],
+                            ),
+                        ),
+                    ),
+                    size: None,
+                    upload_time: None,
+                    url: "/files/fakeproject-1.2.3.tar.gz",
+                    yanked: Some(
+                        Reason(
+                            "broken release",
+                        ),
+                    ),
+                },
+                PypiFile {
+                    core_metadata: Some(
+                        Bool(
+                            false,
+                        ),
+                    ),
+                    filename: "fakeproject-1.2.4.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/files/fakeproject-1.2.4.tar.gz",
+                    yanked: None,
+                },
+                PypiFile {
+                    core_metadata: None,
+                    filename: "fakeproject-1.2.5.tar.gz",
+                    hashes: Hashes {
+                        md5: None,
+                        sha256: None,
+                        sha384: None,
+                        sha512: None,
+                        blake2b: None,
+                    },
+                    requires_python: None,
+                    size: None,
+                    upload_time: None,
+                    url: "/files/fakeproject-1.2.5.tar.gz",
+                    yanked: Some(
+                        Bool(
+                            true,
+                        ),
+                    ),
+                },
+            ],
+        )
+        "#);
+
+        let text = r#"
+<!DOCTYPE html>
+<HTML>
+<BODY>
+    <A HREF="/simple/fakeproject/">fakeproject</A>
+</BODY>
+</HTML>
+        "#;
+
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "fakeproject",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test that optional Simple API HTML file attributes are ASCII case-insensitive.
+    #[test]
+    fn parse_optional_attributes_case_insensitively() {
+        let text = r#"
+<!DOCTYPE html>
+<HTML>
+<BODY>
+    <A HREF="/files/fakeproject-1.2.3.tar.gz" DATA-SIZE="15399" DATA-UPLOAD-TIME="2022-11-14T17:14:53.935145Z">fakeproject-1.2.3.tar.gz</A>
+</BODY>
+</HTML>
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/fakeproject/").unwrap(),
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(
+            (result.files[0].size, result.files[0].upload_time.as_ref()), @r#"
+        (
+            Some(
+                15399,
+            ),
+            Some(
+                2022-11-14T17:14:53.935145Z,
+            ),
+        )
+        "#
+        );
+    }
+
+    // Test parsing project status metadata with emojis in the reason.
+    #[test]
+    fn parse_simple_detail_with_project_status_and_emoji_reason() {
+        let text = r#"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="pypi:repository-version" content="1.4">
+    <meta name="pypi:project-status" content="deprecated">
+    <meta name="pypi:project-status-reason" content="This project is haunted 👻.">
+    <title>Links for spookyproject</title>
+</head>
+<body>
+    <h1>Links for spookyproject</h1>
+    <a href="https://example.com/spookyproject">spookyproject-0.9.9.tar.gz</a>
+    <br/>
+</body>
+</html>
+<!--SERIAL 15765070-->
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/spookyproject/").unwrap(),
+        );
+        insta::assert_debug_snapshot!(result.unwrap().project_status, @r#"
+        ProjectStatus {
+            status: Deprecated,
+            reason: Some(
+                "This project is haunted 👻.",
+            ),
+        }
+        "#);
+    }
+
+    /// Test parsing project status metadata with an unknown status marker.
+    #[test]
+    fn parse_simple_detail_with_unknown_project_status() {
+        let text = r#"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="pypi:repository-version" content="1.4">
+    <meta name="pypi:project-status" content="unknown-status">
+    <title>Links for unknownproject</title>
+</head>
+<body>
+    <h1>Links for unknownproject</h1>
+    <a href="https://example.com/unknownproject">unknownproject-0.1.0.tar.gz</a>
+    <br/>
+</body>
+</html>
+<!--SERIAL 15765070-->
+        "#;
+
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://pypi.org/simple/unknownproject/").unwrap(),
+        );
+        insta::assert_debug_snapshot!(result.unwrap().project_status, @"
+        ProjectStatus {
+            status: Active,
+            reason: None,
+        }
+        ");
+    }
+
+    /// Test parsing Simple API index (root) HTML.
+    #[test]
+    fn parse_simple_index() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Index</title>
+</head>
+<body>
+    <h1>Simple Index</h1>
+    <a href="/simple/flask/">flask</a><br/>
+    <a href="/simple/jinja2/">jinja2</a><br/>
+    <a href="/simple/requests/">requests</a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "flask",
+                ),
+                PackageName(
+                    "jinja2",
+                ),
+                PackageName(
+                    "requests",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test that project names are sorted.
+    #[test]
+    fn parse_simple_index_sorted() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+    <a href="/simple/zebra/">zebra</a><br/>
+    <a href="/simple/apple/">apple</a><br/>
+    <a href="/simple/monkey/">monkey</a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "apple",
+                ),
+                PackageName(
+                    "monkey",
+                ),
+                PackageName(
+                    "zebra",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test that links without `href` attributes are ignored.
+    #[test]
+    fn parse_simple_index_missing_href() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>Simple Index</h1>
+    <a href="/simple/flask/">flask</a><br/>
+    <a>no-href-project</a><br/>
+    <a href="/simple/requests/">requests</a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "flask",
+                ),
+                PackageName(
+                    "requests",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test that links with empty `href` attributes are ignored.
+    #[test]
+    fn parse_simple_index_empty_href() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+    <a href="">empty-href</a><br/>
+    <a href="/simple/flask/">flask</a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "flask",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test that links with empty text content are ignored.
+    #[test]
+    fn parse_simple_index_empty_text() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+    <a href="/simple/empty/"></a><br/>
+    <a href="/simple/flask/">flask</a><br/>
+    <a href="/simple/whitespace/">   </a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "flask",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Test parsing with case variations and normalization.
+    #[test]
+    fn parse_simple_index_case_variations() {
+        let text = r#"
+<!DOCTYPE html>
+<html>
+<body>
+    <a href="/simple/Flask/">Flask</a><br/>
+    <a href="/simple/django/">django</a><br/>
+    <a href="/simple/PyYAML/">PyYAML</a><br/>
+</body>
+</html>
+    "#;
+        let result = SimpleIndexHtml::parse(text).unwrap();
+        // Note: We preserve the case as returned by the server
+        insta::assert_debug_snapshot!(result, @r#"
+        SimpleIndexHtml {
+            projects: [
+                PackageName(
+                    "django",
+                ),
+                PackageName(
+                    "flask",
+                ),
+                PackageName(
+                    "pyyaml",
+                ),
+            ],
+        }
+        "#);
+    }
+
+    /// Attribute values are decoded once, including nested character references.
+    #[test]
+    fn parse_html_entities_once() {
+        let text = r#"
+<a href="/files/example.whl?key=&amp;amp;" data-yanked="&amp;lt;">example.whl</a>
+        "#;
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://example.com/simple/example/").unwrap(),
+        )
+        .unwrap();
+        let file = &result.files[0];
+        insta::assert_debug_snapshot!(
+            (&file.url, file.yanked.as_deref()), @r#"
+        (
+            "/files/example.whl?key=&amp;",
+            Some(
+                Reason(
+                    "&lt;",
+                ),
+            ),
+        )
+        "#);
+    }
+
+    /// A boolean yanked attribute differs from an explicitly empty reason.
+    #[test]
+    fn parse_boolean_and_empty_attributes() {
+        let text = r#"
+<a href="/files/absent.whl">absent.whl</a>
+<a href="/files/boolean.whl" data-yanked>boolean.whl</a>
+<a href="/files/empty.whl" data-yanked="">empty.whl</a>
+<a href data-yanked>no href value</a>
+<a href="" data-yanked>empty href value</a>
+        "#;
+        let result = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://example.com/simple/example/").unwrap(),
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(
+            result.files.iter().map(|file| (&file.filename, file.yanked.as_deref())).collect::<Vec<_>>(), @r#"
+        [
+            (
+                "absent.whl",
+                None,
+            ),
+            (
+                "boolean.whl",
+                Some(
+                    Bool(
+                        true,
+                    ),
+                ),
+            ),
+            (
+                "empty.whl",
+                Some(
+                    Reason(
+                        "",
+                    ),
+                ),
+            ),
+        ]
+        "#);
+    }
+
+    /// Markup inside HTML text elements cannot add package or file links.
+    #[test]
+    fn parse_ignores_links_in_text_elements() {
+        let text = r#"
+<script>const link = '<a href="/files/script.whl">script</a>';</script>
+<style><a href="/files/style.whl">style</a></style>
+<textarea><a href="/files/textarea.whl">textarea</a></textarea>
+<title><a href="/files/title.whl">title</a></title>
+<a href="/files/real.whl">real</a>
+        "#;
+        let detail = SimpleDetailHTML::parse(
+            text,
+            &DisplaySafeUrl::parse("https://example.com/simple/example/").unwrap(),
+        )
+        .unwrap();
+        let index = SimpleIndexHtml::parse(text).unwrap();
+        insta::assert_debug_snapshot!(
+            (detail.files.iter().map(|file| &file.filename).collect::<Vec<_>>(), index.projects), @r#"
+        (
+            [
+                "real.whl",
+            ],
+            [
+                PackageName(
+                    "real",
+                ),
+            ],
+        )
+        "#);
+    }
+
+    /// Project names combine descendant text and decoded character references.
+    #[test]
+    fn parse_simple_index_nested_text_and_entities() {
+        let result = SimpleIndexHtml::parse(
+            r#"<a href="/simple/pyyaml/"> Py<!--ignored--><span>Y&#65;</span>ML </a>"#,
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(result.projects, @r#"
+        [
+            PackageName(
+                "pyyaml",
+            ),
+        ]
+        "#);
+    }
+}

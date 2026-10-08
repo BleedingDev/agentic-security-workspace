@@ -1,0 +1,171 @@
+on:
+  workflow_call:
+    inputs:
+      trampoline-build:
+        description: "Whether to check the committed trampoline binaries"
+        required: false
+        type: string
+        default: "false"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
+
+jobs:
+  # Verify windows crate version matches between workspaces
+  windows-version-check:
+    timeout-minutes: 5
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    name: "check windows crate version"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+
+      - name: "Check windows crate versions match"
+        run: uv run --no-project scripts/check-trampoline-version-consistency.py
+
+  # Verify committed trampolines were built with the Docker image
+  windows-trampoline-check-binary:
+    # Only run when trampoline sources changed, the trampoline binaries changed
+    # or the `build:windows-trampoline` label is set. Dependency bumps would
+    # otherwise force a trampoline rebuild on every dependency update.
+    if: ${{ inputs.trampoline-build == 'true' }}
+    timeout-minutes: 30
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    name: "check binary"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: "Build trampolines in Docker"
+        run: scripts/build-trampolines.sh --cache-from type=gha --cache-to type=gha
+
+      - name: "Check committed trampolines match build"
+        run: git diff --exit-code crates/uv-trampoline-builder/trampolines/
+
+  # Separate jobs for the nightly crate
+  windows-trampoline-check:
+    timeout-minutes: 15
+    runs-on: windows-latest
+    name: "check on ${{ matrix.target-arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        target-arch: ["x86_64", "i686", "aarch64"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+
+      # actions/checkout does not let us clone into anywhere outside ${{ github.workspace }}, so we have to copy the clone...
+      - name: Copy Git Repo to Dev Drive
+        run: |
+          Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+
+      - name: "Install Rust toolchain"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          rustup target add ${{ matrix.target-arch }}-pc-windows-msvc
+          rustup component add rust-src --target ${{ matrix.target-arch }}-pc-windows-msvc
+
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "a86c9dc7bad9b03f388583b7187c05fe9951c2e0d392217e8fd43d97787f6ec2"
+
+      - name: "rustfmt"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: cargo fmt --check
+
+      - name: "Clippy"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        env:
+          CARGO_BUILD_WARNINGS: deny
+        run: cargo clippy --all-features --locked --target x86_64-pc-windows-msvc --tests
+
+      - name: "Bloat Check"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          $output = uv run --only-dev cargo bloat --release --target x86_64-pc-windows-msvc
+          $filteredOutput = $output | Select-String -Pattern 'core::fmt::write|core::fmt::getcount' -NotMatch
+          $containsPatterns = $filteredOutput | Select-String -Pattern 'core::fmt|std::panicking|std::backtrace_rs'
+
+          if ($containsPatterns) {
+              Exit 1
+          } else {
+              Exit 0
+          }
+
+  # Separate jobs for the nightly crate
+  windows-trampoline-test:
+    timeout-minutes: 10
+    runs-on: ${{ matrix.runner }}
+    name: "test on ${{ matrix.target-arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, target-arch: "x86_64" }
+          - { runner: windows-latest, target-arch: "i686" }
+          - { runner: windows-11-arm, target-arch: "aarch64" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      # actions/checkout does not let us clone into anywhere outside ${{ github.workspace }}, so we have to copy the clone...
+      - name: Copy Git Repo to Dev Drive
+        run: |
+          Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+      - name: "Install Rust toolchain"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          rustup target add ${{ matrix.target-arch }}-pc-windows-msvc
+          rustup component add rust-src --target ${{ matrix.target-arch }}-pc-windows-msvc
+      - name: "Test committed binaries"
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: |
+          rustup target add ${{ matrix.target-arch }}-pc-windows-msvc
+          cargo test -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc
+      # Build and copy the new binaries
+      - name: "Build"
+        working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        run: |
+          cargo build --target ${{ matrix.target-arch }}-pc-windows-msvc
+          cp target/${{ matrix.target-arch }}-pc-windows-msvc/debug/uv-trampoline-console.exe ../uv-trampoline-builder/trampolines/uv-trampoline-${{ matrix.target-arch }}-console.exe
+          cp target/${{ matrix.target-arch }}-pc-windows-msvc/debug/uv-trampoline-gui.exe ../uv-trampoline-builder/trampolines/uv-trampoline-${{ matrix.target-arch }}-gui.exe
+      - name: "Test new binaries"
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: |
+          # We turn off the default "production" test feature since these are debug binaries
+          cargo test -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc --no-default-features
