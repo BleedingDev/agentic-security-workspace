@@ -1,0 +1,177 @@
+# Contributing to the Testing Guide
+
+Thank you for considering contributing to the Web Security Testing Guide (WSTG)!
+
+Here are some ways you can make a helpful contribution. The [Open Source Guide for why and how to contribute](https://opensource.guide/how-to-contribute/) is also a good resource. You will need a [GitHub account](https://help.github.com/en/github/getting-started-with-github/signing-up-for-a-new-github-account) in order to help out.
+
+- [Become an Author](#become-an-author)
+- [Become a Reviewer or Editor](#become-a-reviewer-or-editor)
+    - [Technical Review](#technical-review)
+    - [Editorial Review](#editorial-review)
+- [How to Open an Issue](#how-to-open-an-issue)
+- [How to Submit a Pull Request](#how-to-submit-a-pull-request)
+- [How to Set Up Your Contributor Environment](#how-to-set-up-your-contributor-environment)
+    - [Optional CLI Checks Using npx](#optional-cli-checks-using-npx)
+- [Contributing with GitHub Dev Environments](#contributing-with-github-dev-environments)
+
+## Become an Author
+
+This project would not be possible without the contributions of writers in the security community! Our authors help to keep the WSTG relevant and useful for everyone.
+
+Whether you are submitting a new section or adding information to an existing one, please follow the [template example](template/999-Foo_Testing/1-Testing_for_a_Cat_in_a_Box.md). The [template sections are explained here](template/999-Foo_Testing/2-Template_Explanation.md).
+
+You can open a [pull request](#how-to-submit-a-pull-request) directly. An issue is not required when the change is ready to review. Issues help when you want to discuss scope first, claim planned work, or pick up existing ideas:
+
+1. Optionally open an [Add New Content issue](https://github.com/OWASP/wstg/issues/new?assignees=&labels=New&template=new-content.md&title=), or choose an [unassigned new content issue](https://github.com/OWASP/wstg/issues?q=is%3Aopen+is%3Aissue+label%3ANew+no%3Aassignee) and ask to be assigned to it.
+2. Create and switch to a new local branch with a short descriptive name. For example, `git checkout -b new-testing-for-foo`. If you are working from an issue, `new-<issue number>` (such as `new-164`) is also fine.
+
+## Become a Reviewer or Editor
+
+Keeping the project up to date and looking spiffy is a group effort! The WSTG is a constantly updated document and benefits from your technical or editorial review.
+
+You can open a [pull request](#how-to-submit-a-pull-request) directly for technical or editorial fixes. An issue is not required. Issues help when you want to discuss the change first or pick up labeled work:
+
+1. Optionally choose an [open issue with the `help wanted` label](https://github.com/OWASP/wstg/labels/help%20wanted) to work on, or [open an issue](https://github.com/OWASP/wstg/issues/new/choose) to discuss something larger. If you claim an issue, post a comment and request to be assigned to it.
+2. Create and switch to a new local branch with a short descriptive name. For example, `git checkout -b fix-weak-lockout-wording`. If you are working from an issue, `fix-<issue number>` (such as `fix-88`) is also fine.
+
+### Technical Review
+
+If you have expertise in any topic covered by the WSTG, your technical review is encouraged. Please ensure that articles:
+
+- Follow the [article template materials](template)
+- Follow the [style guide](style_guide.md)
+- Accurately describe vulnerabilities and tests
+- Have appropriate and up-to-date inline links to resources
+- Provide complete and relevant information suitable for an audience with basic technical expertise
+
+### Editorial Review
+
+Grammarians assemble! The WSTG welcomes your improvements in the areas of grammar, formatting, word choice, and brevity. All changes should adhere to the [style guide](style_guide.md).
+
+Please don't hesitate to make as many changes as you see fit, especially if you notice that existing content does not match the [article template materials](template).
+
+### Translation
+
+Due to challenges with syncing images and removed content, the WSTG is no longer tackling in-bound translation efforts directly.
+
+At this time we suggest that you start another repository in which to tackle translations of a specific language. Once you've produced a PDF for a given version of the guide we'll be happy to attach it to the appropriate release. Simply [open an issue](https://github.com/OWASP/wstg/issues/new) here asking us to do so.
+
+Also we're willing to list your translation repository, just [let us know](https://github.com/OWASP/wstg/issues/new) where it is.
+
+## How to Open an Issue
+
+Issues are optional when you already have a fix ready to submit as a pull request. Use an issue to report a problem, suggest a change for discussion, or track work before a PR exists.
+
+[Create an issue](https://github.com/OWASP/wstg/issues/new/choose) using the appropriate template.
+
+Choose a short, descriptive title. Briefly explain what you think needs changing. Among other things, your suggestions may include grammar or spelling errors, or address insufficient or outdated content.
+
+## How to Submit a Pull Request
+
+Here are the steps for creating and submitting a Pull Request (PR) that we can quickly review and merge. A linked issue is not required.
+
+1. [Set up your environment](#how-to-set-up-your-contributor-environment) to fork the project.
+2. Create a branch and make your modifications. For new content, read [Become an Author](#become-an-author). For changes to existing content, read [Become a Reviewer or Editor](#become-a-reviewer-or-editor). Be sure to follow our [style guide](style_guide.md). If your PR relates to an existing issue, mention it in the description.
+3. When you're ready to submit your work, push your changes to your fork. Ensure that your fork is [synced with `master`](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/syncing-a-fork).
+4. You can submit a [draft PR](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/about-pull-requests#draft-pull-requests) or a [regular PR](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork). If your work is not yet ready for review and merge, choose a draft PR. When your changes are ready to be reviewed, you can convert to a regular PR. See [how to change the stage of a PR](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/changing-the-stage-of-a-pull-request) for more.
+
+You may want to [allow edits from maintainers](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/allowing-changes-to-a-pull-request-branch-created-from-a-fork) so we can help with small changes like fixing typos.
+
+Once you've submitted your ready-for-review PR, we'll review it. We may comment to ask for clarification or changes, so please check back in the next few days.
+
+To increase the chances that your PR is merged, please make sure that:
+
+1. Your PR description explains the change clearly.
+2. Your work is Markdown linted.
+3. Your writing follows the [article template materials](template) and [style guide](style_guide.md).
+4. Your code snippets are correct, well-tested, and commented where necessary for understanding.
+
+Once the PR is complete, we'll merge it! At that point, you may like to add yourself to [the project's list of authors, reviewers, or editors](document/1-About/README.md).
+
+## How to Set Up Your Contributor Environment
+
+We've made it easy to get started! The repository includes configuration files for Visual Studio Code and other editors to help you maintain consistency with the project's style guide.
+
+1. [Create an account on GitHub](https://help.github.com/en/github/getting-started-with-github/signing-up-for-a-new-github-account).
+2. Fork and clone your own copy of the repository. Here are complete instructions for [forking and syncing with GitHub](https://help.github.com/en/github/getting-started-with-github/fork-a-repo).
+3. Choose your development environment:
+
+### Using Visual Studio Code
+
+Visual Studio Code is recommended for the best experience. The repository includes pre-configured settings in the `.vscode` directory.
+
+1. Install [Visual Studio Code](https://code.visualstudio.com/).
+2. Open the cloned repository in Visual Studio Code.
+3. When prompted, install the recommended extensions from `.vscode/extensions.json`. These include:
+    - **markdownlint**: Ensures Markdown files follow the project's style guide
+    - **Markdown All in One**: Provides helpful Markdown editing features
+    - **Code Spell Checker**: Catches spelling errors
+    - **Prettier**: Code formatter
+    - **GitHub Pull Request**: Manage PRs directly from Visual Studio Code
+
+4. The workspace settings in `.vscode/settings.json` will automatically configure markdownlint to use the project's configuration file at `.github/configs/.markdownlint.json`.
+
+### Using Other Editors
+
+If you're using a different editor, the `.editorconfig` file will help maintain consistent formatting across different editors. Most modern editors support EditorConfig either natively or via plugins:
+
+- **Vim/Neovim**: Install [editorconfig-vim](https://github.com/editorconfig/editorconfig-vim)
+- **Sublime Text**: Install [EditorConfig](https://packagecontrol.io/packages/EditorConfig)
+- **Atom**: Install [EditorConfig](https://atom.io/packages/editorconfig)
+- **IntelliJ/WebStorm**: Built-in support
+
+### Optional CLI Checks Using npx
+
+> [!CAUTION]
+> The tool versions and command details below can drift out of sync with the jobs defined under `.github/workflows/`. Re-check those workflow files from time to time so your local commands still match what CI runs.
+
+If you have [Node.js](https://nodejs.org/) installed (which includes `npm` and `npx`), you can run the same checks the GitHub Actions workflows use, without a `package.json` in the repository root. `npx --yes` downloads a temporary copy of the tool when needed.
+
+From the root of your clone:
+
+**Markdown style ([Markdown Lint Check](.github/workflows/md-lint-check.yml))** - uses [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) with the project config:
+
+```bash
+npx --yes markdownlint-cli2 "document/**/*.md" --config .github/configs/.markdownlint.json
+```
+
+Narrow the glob (for example to a single path) when you only want feedback on files you edited.
+
+**Broken links ([Markdown Link Check](.github/workflows/md-link-check.yml))** - uses [markdown-link-check](https://github.com/tcort/markdown-link-check) at the same major version as CI:
+
+```bash
+npx --yes markdown-link-check@3.11.0 -q -c .github/configs/markdown-link-check-config.json document/path/to/your_file.md
+```
+
+Relative links are easiest to validate when your branch includes the targets they point to (CI checks changed files in a layout similar to merging with `master`).
+
+**Terminology ([Markdown Terminology Lint Check](.github/workflows/md-textlint-check.yml))** - uses [textlint](https://textlint.github.io/) and the terminology rule:
+
+```bash
+npx --yes -p textlint -p textlint-rule-terminology textlint --config .github/configs/.textlintrc.json "document/**/*.md"
+```
+
+These commands are optional. If you skip them, rely on the recommended editor extensions and the results of the checks on your pull request.
+
+## Contributing with GitHub Dev Environments
+
+You can use GitHub's cloud-based development environments (Codespaces and github.dev) to contribute to this repository without setting up a local environment!
+
+### Using github.dev
+
+For quick edits, you can use the github.dev web-based editor:
+
+1. Navigate to the repository on GitHub.
+2. Press `.` (period) on your keyboard to open the github.dev editor.
+3. Make your changes and commit them directly from the browser.
+
+> Note: The github.dev editor has limited support for running commands, so it's best for simple text edits. For testing linting and other scripts, use Codespaces or a local environment.
+
+### Using GitHub Codespaces
+
+GitHub Codespaces provides a full Visual Studio Code environment in the cloud with all recommended extensions pre-installed.
+
+1. Learn more about [GitHub Codespaces](https://docs.github.com/en/codespaces/overview).
+2. Get started by [creating a codespace](https://docs.github.com/en/codespaces/developing-in-codespaces/creating-a-codespace) for this repository.
+
+Our `.vscode` configuration will automatically set up the workspace with the correct linting and formatting settings.

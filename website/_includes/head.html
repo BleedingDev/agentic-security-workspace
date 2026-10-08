@@ -1,0 +1,37 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ page.description | default: site.description | escape }}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{% if page.title %}{{ page.title }}{% else %}{{ site.title }}{% endif %}">
+<meta property="og:description" content="{{ page.description | default: site.description | escape }}">
+<meta property="og:image" content="{{ site.url }}{{ site.baseurl }}/assets/images/wstg-cover.png">
+<meta property="og:url" content="{{ site.url }}{{ site.baseurl }}{{ page.url }}">
+<meta property="og:site_name" content="{{ site.title }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{% if page.title %}{{ page.title }}{% else %}{{ site.title }}{% endif %}">
+<meta name="twitter:description" content="{{ page.description | default: site.description | escape }}">
+<meta name="twitter:image" content="{{ site.url }}{{ site.baseurl }}/assets/images/wstg-cover.png">
+<link rel="canonical" href="{{ site.url }}{{ site.baseurl }}{{ page.url }}">
+<link rel="icon" href="{{ site.baseurl }}/assets/images/wstg-shield.png" type="image/png">
+<link rel="apple-touch-icon" href="{{ site.baseurl }}/assets/images/wstg-shield.png">
+<meta name="theme-color" content="#1a1d23">
+<script>
+(function () {
+  var t;
+  try { t = localStorage.getItem('wstg-theme'); } catch (e) {}
+  var effective;
+  if (!t || t === 'system') {
+    effective = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  } else {
+    effective = t;
+  }
+  document.documentElement.setAttribute('data-theme', effective);
+})();
+</script>
+<link rel="preload" href="{{ site.baseurl }}/assets/fonts/poppins-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ site.baseurl }}/assets/fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ site.baseurl }}/assets/css/main.css">
+{% if page.layout == 'document' %}
+<link rel="stylesheet" href="{{ site.baseurl }}/assets/css/wstg-nav.css">
+{% endif %}
