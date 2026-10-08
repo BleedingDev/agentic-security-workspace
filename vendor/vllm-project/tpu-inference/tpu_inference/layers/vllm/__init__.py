@@ -1,0 +1,26 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from tpu_inference.layers.vllm import backends as backends
+from tpu_inference.layers.vllm import custom_ops as custom_ops
+from tpu_inference.layers.vllm import ops as ops
+from tpu_inference.layers.vllm import quantization as quantization
+
+
+# NOTE: this function is the entry_points target for the vllm general plugin.
+def register_layers():
+    # Override vLLM's built-in model classes with TPU-specific implementations
+    # (e.g. DeepseekV4ForCausalLM). Done here because this is the plugin hook
+    # that vLLM invokes at startup, before any model is loaded.
+    from tpu_inference.models.vllm.experimental import register_models
+    register_models()

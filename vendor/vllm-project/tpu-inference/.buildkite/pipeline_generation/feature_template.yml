@@ -1,0 +1,57 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+steps:
+  - label: "${{TPU_VERSION:-tpu6e}} Correctness tests for {FEATURE_NAME}"
+    key: "${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_CorrectnessTest"
+    soft_fail: true
+    agents:
+      queue: cpu  # TODO: replace with execution environment (e.g. "{QUEUE}")
+    commands:
+      - echo "placeholder"  # TODO : replace with your correctness test command
+  - label: "${{TPU_VERSION:-tpu6e}} Record correctness test result for {FEATURE_NAME}"
+    key: "${{TPU_VERSION:-tpu6e}}_record_{SANITIZED_FEATURE_NAME}_CorrectnessTest"
+    depends_on: "${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_CorrectnessTest"
+    env:
+      CI_TPU_VERSION: "${{TPU_VERSION:-tpu6e}}"
+      CI_TARGET: "{FEATURE_NAME}"
+      CI_STAGE: "CorrectnessTest"
+      CI_CATEGORY: "{CATEGORY}"
+    agents:
+      queue: cpu
+    commands:
+      - |
+        .buildkite/scripts/record_step_result.sh ${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_CorrectnessTest
+
+  - label: "${{TPU_VERSION:-tpu6e}} Performance tests for {FEATURE_NAME}"
+    key: "${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_PerformanceTest"
+    depends_on: "${{TPU_VERSION:-tpu6e}}_record_{SANITIZED_FEATURE_NAME}_CorrectnessTest"
+    soft_fail: true
+    agents:
+      queue: cpu  # TODO: replace with execution environment (e.g. "{QUEUE}")
+    commands:
+      - echo "placeholder"  # TODO : replace with your performance test command
+  - label: "${{TPU_VERSION:-tpu6e}} Record performance test result for {FEATURE_NAME}"
+    key: "${{TPU_VERSION:-tpu6e}}_record_{SANITIZED_FEATURE_NAME}_PerformanceTest"
+    depends_on: "${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_PerformanceTest"
+    env:
+      CI_TPU_VERSION: "${{TPU_VERSION:-tpu6e}}"
+      CI_TARGET: "{FEATURE_NAME}"
+      CI_STAGE: "PerformanceTest"
+      CI_CATEGORY: "{CATEGORY}"
+    agents:
+      queue: cpu
+    commands:
+      - |
+        .buildkite/scripts/record_step_result.sh ${{TPU_VERSION:-tpu6e}}_{SANITIZED_FEATURE_NAME}_PerformanceTest
