@@ -15,7 +15,7 @@ Classify each component as **ready**, **missing**, **manual**, or **failed**. Fo
 
 ## 2. Install
 
-For each missing component, read [official tool sources](references/tool-sources.md), then consult its current official installation instructions. Prefer the operating system's supported package manager; otherwise use the vendor's supported installer, release, or runtime manager. Install automatically, in dependency order, and verify each executable or service immediately. Write its ownership and removal instructions to the ledger before continuing.
+For each missing component, read [official tool sources](references/tool-sources.md), then consult its current official installation instructions. Prefer the operating system's supported package manager; otherwise use the vendor's supported installer, release, or runtime manager. Install automatically, in dependency order, and verify each executable or service immediately. For REA, follow [its setup lane](references/rea.md) to install the release-matched workflow, reuse existing engines, and register MCP locally. Write its ownership and removal instructions to the ledger before continuing.
 
 Do not pause for routine installation confirmation. Use already-available privilege safely. When elevation, license acceptance, GUI interaction, driver approval, or device connection cannot be automated, complete every safe precursor and request one exact user action.
 

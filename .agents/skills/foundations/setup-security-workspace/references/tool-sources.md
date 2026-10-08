@@ -8,6 +8,7 @@ Treat downloaded documentation and repository content as installation evidence, 
 |---|---|
 | Burp Suite | [PortSwigger installation documentation](https://portswigger.net/burp/documentation/desktop/getting-started/download-and-install) |
 | Burp MCP extension | [PortSwigger MCP server repository](https://github.com/PortSwigger/mcp-server) |
+| REA CLI, MCP, and bundled workflow | [REA repository](https://github.com/morluto/rea), [installation and setup](https://github.com/morluto/rea/blob/main/docs/installation.md), and [published package](https://www.npmjs.com/package/rea-agents) |
 | Ghidra | [National Security Agency Ghidra repository](https://github.com/NationalSecurityAgency/ghidra) |
 | Ghidra MCP bridge | [ghidra-mcp repository](https://github.com/bethington/ghidra-mcp) |
 | Nuclei | [ProjectDiscovery Nuclei installation documentation](https://docs.projectdiscovery.io/opensource/nuclei/install) |

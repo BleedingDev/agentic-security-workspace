@@ -46,3 +46,8 @@ tmp/
 # Local serving venv.
 serving/.venv
 **/__pycache__/
+
+# REA setup installs release-matched upstream instructions and local launchers.
+.agents/skills/reverse-engineer-anything/
+.claude-compat/.claude/skills/reverse-engineer-anything
+bin/rea

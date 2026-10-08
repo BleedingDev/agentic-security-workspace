@@ -63,7 +63,7 @@ There is no cross-platform installation script to maintain. The setup skill perf
 6. Complete an exact user action only when elevation, license acceptance, GUI approval, or device connection cannot be automated.
 7. Let it create and verify the project-local MCP configuration.
 
-The full profile covers every tool lane below, including required runtimes, companion data, local services, and Burp and Ghidra MCP integrations. It can install GUI applications and use several gigabytes. The setup ledger records whether each component was pre-existing or setup-owned, the exact installed version and location, and the uninstall or cleanup command to use later.
+The full profile covers every tool lane below, including required runtimes, companion data, local services, and Burp, Ghidra, and REA MCP integrations. It can install GUI applications and use several gigabytes. The setup ledger records whether each component was pre-existing or setup-owned, the exact installed version and location, and the uninstall or cleanup command to use later.
 
 The setup skill discovers the current OS and host and resolves the current vendor-supported method at runtime, so the repository does not hard-code Homebrew, Winget, system paths, versions, or credentials. It writes host-specific files locally; they are ignored by Git:
 
@@ -76,6 +76,22 @@ The setup skill discovers the current OS and host and resolves the current vendo
 See the official [Codex configuration precedence](https://developers.openai.com/codex/config-basic/) and [project-scoped MCP configuration](https://developers.openai.com/codex/mcp/) documentation for its trust boundary.
 
 The canonical skills live under **.agents/skills/**. Claude Code loads the flat compatibility links under **.claude-compat/.claude/skills/**; Codex and OpenCode discover the canonical tree directly.
+
+## REA alongside the existing toolkit
+
+[REA](https://github.com/morluto/rea) adds a common MCP and CLI interface for shipped-artifact analysis. Invoke **rea** for native, Android, JavaScript/Electron, managed assembly, archive, Apple resource, or retained network evidence. Setup installs the published package's matching upstream workflow locally, pins its MCP registration, and reuses compatible Ghidra and JADX installations. The [REA setup lane](.agents/skills/foundations/setup-security-workspace/references/rea.md) covers host configuration, engine checks, verification, and updates.
+
+| Existing lane | Relationship to REA |
+|---|---|
+| Ghidra | REA uses separate temporary headless projects. The existing MCP bridge remains useful for attached GUI programs. |
+| JADX and Apktool | REA uses JADX for focused Android code and graphs; direct JADX and Apktool retain their exploration, decoding, smali, and rebuilding workflows. |
+| Burp, Frida, and ADB | REA supplies specific evidence/capture workflows; interception, HTTP mutation, instrumentation, and device control remain specialist lanes. |
+| MobSF and capa | Independent mobile-security and native-capability checks complement REA evidence. |
+| Semgrep, OSV-Scanner, Trivy, Nuclei, and Katana | Source analysis, advisory matching, security scans, and scoped crawling remain separate lanes. |
+
+REA adds JavaScript/Electron application graphs, managed-code and Apple-resource inspection, artifact comparisons, and structured Evidence. Two interfaces to the same Ghidra or JADX engine do not count as independent verification. Available tools depend on the installed release, target, engine, and host; browser/device endpoints and Linux-only workflows retain their own prerequisites.
+
+REA's upstream setup defaults to global agent configuration. This workspace instead creates checkout-local registrations and keeps the release-matched upstream skill and generated launchers ignored. Restart the current host after registration to discover its tools; the pinned CLI can be used immediately. Preserve evidence and assessment authorization through the existing workflow.
 
 ## Setup protocol
 
@@ -182,6 +198,7 @@ Unknown or suspicious code belongs in a revertible isolated environment with con
 | adb | Control an authorized emulator or test device | Device, package, command, time, and state change |
 | frida | Instrument a process for one runtime hypothesis | Hook, process identity, and observed event |
 | capa | Triage native capabilities | Machine-readable leads with disposition |
+| rea | Analyze shipped artifacts and application graphs through a unified MCP/CLI | Evidence IDs, locations, graph relations, and explicit coverage limits |
 | ghidra | Trace binary behavior through MCP | Program location, xrefs, decompilation, and call path |
 | semgrep | Find source patterns and data-flow candidates | Structured matches traced through executable paths |
 | osv-scanner | Match resolved dependencies to advisories | Version, affected feature, and reachability |

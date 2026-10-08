@@ -18,6 +18,8 @@ flowchart LR
     S --> M["Project-local MCP config"]
     M --> B["Burp"]
     M --> G["Ghidra"]
+    M --> R["REA · headless engines and artifact graphs"]
+    R --> E
     C --> E["Per-target evidence"]
     B --> E
     G --> E
@@ -64,6 +66,8 @@ The first development test ran on 2 September 2026 with macOS 26.7 on arm64.
 
 This result belongs to the named versions and date. Later tool releases may behave differently.
 
+The REA integration was separately tested on 8 October 2026 on macOS arm64 with `rea-agents` 6.0.0, Ghidra 12.1.4, and a full JDK 26. REA advertised 139 MCP tools and completed a target-free session query. A generated JavaScript fixture produced an application graph; a generated Mach-O fixture returned the expected function pseudocode, assembly, and caller evidence through headless Ghidra. Burp's harmless tool call and the Ghidra bridge's instance query passed, existing CLI version probes passed, and MobSF's authenticated API responded. The GUI bridge had no attached program. These checks used the local development workspace, not a fresh cross-platform install; browser/device and Linux-only lanes were not exercised.
+
 ## Try it without scanning anything
 
 Start an agent in a fresh clone and use this request:
@@ -80,7 +84,7 @@ The result is a local ledger. It distinguishes tools that already existed from t
 ## What the repository contains
 
 - Small skills for web, API, Android, native binary, and source-code assessment.
-- Focused tool guidance for Burp, Ghidra, Nuclei, Katana, MobSF, JADX, Apktool, ADB, Frida, capa, Semgrep, OSV-Scanner, and Trivy.
+- Focused tool guidance for REA, Burp, Ghidra, Nuclei, Katana, MobSF, JADX, Apktool, ADB, Frida, capa, Semgrep, OSV-Scanner, and Trivy.
 - A setup and assessment state model with explicit retry and failure rules.
 - Pointers to upstream projects and established testing methods.
 
