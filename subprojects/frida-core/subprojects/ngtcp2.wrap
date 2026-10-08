@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/frida/ngtcp2.git
+revision = 5b21d4418ff668d9b5ddc4f744b7a28af4196abf
+depth = 1
+
+[provide]
+dependency_names = libngtcp2, libngtcp2_crypto_quictls
+
