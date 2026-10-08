@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <array name="test_array0" />
+    <string-array name="test_array1">
+        <item>TEST1</item>
+        <item>TEST2</item>
+        <item>TEST3</item>
+        <item>%2$s foo %1$d</item>
+        <item>http://google.com&amp;boo=1&amp;foo=2</item>
+        <item>&lt;b>Bolded Text&lt;/b></item>
+        <item>&lt;font size=16 align=middle>Small&lt;/font></item>
+    </string-array>
+    <integer-array name="test_array2">
+        <item>-1</item>
+        <item>0</item>
+        <item>1</item>
+    </integer-array>
+    <array name="test_array3">
+        <item></item>
+        <item>true</item>
+        <item>TEST</item>
+        <item>5</item>
+        <item>5.5</item>
+        <item>10.0sp</item>
+        <item>#ff123456</item>
+    </array>
+    <string-array name="issue_409">
+        <item>@string/test1</item>
+        <item>foo</item>
+        <item>foo2</item>
+    </string-array>
+    <string-array name="issue_329">
+        <item>res/</item>
+        <item>view/</item>
+    </string-array>
+    <string-array name="issue_2806">
+        <item>MIICXAIBAAKBgQCjcGqTkOq0CR3rTx0ZSQSIdTrDrFAYl29611xN8aVgMQIWtDB/lD0W5TpKPuU9iaiG/sSn/VYt6EzN7Sr332jj7cyl2WrrHI6ujRswNy4HojMuqtfab5FFDpRmCuvl35fge18OvoQTJELhhJ1EvJ5KUeZiuJ3u3YyMnxxXzLuKbQIDAQABAoGAPrNDz7TKtaLBvaIuMaMXgBopHyQd3jFKbT/tg2Fu5kYm3PrnmCoQfZYXFKCoZUFIS/G1FBVWWGpD/MQ9tbYZkKpwuH+t2rGndMnLXiTC296/s9uix7gsjnT4Naci5N6EN9pVUBwQmGrYUTHFc58ThtelSiPARX7LSU2ibtJSv8ECQQDWBRrrAYmbCUN7ra0DFT6SppaDtvvuKtb+mUeKbg0B8U4y4wCIK5GH8EyQSwUWcXnNBO05rlUPbifsDLv/u82lAkEAw39sTJ0KmJJyaChqvqAJ8guulKlgucQJ0Et9ppZyet9iVwNKX/aW9UlwGBMQdafQ36nd1QMEA8AbAw4D+hw/KQJBANJbHDUGQtk2hrSmZNoV5HXB9Uiq7v4N71k5ER8XwgM5yVGs2tX8dMM3RhnBEtQXXs9LW1uJZSOQcv7JGXNnhN0CQBZenzrJAWxh3XtznHtBfsHWelyCYRIAj4rpCHCmaGUM6IjCVKFUawOYKp5mmAyObkUZf8ue87emJLEdynC1CLkCQHduNjP1hemAGWrd6v8BHhE3kKtcK6KHsPvJR5dOfzbdHAqVePERhISfN6cwZt5p8B3/JUwSR8el66DF7Jm57BM=</item>
+    </string-array>
+</resources>
