@@ -1,0 +1,142 @@
+---
+title: "Enable Bitbucket Data Center pull request comments"
+sidebarTitle: "Bitbucket Data Center"
+---
+
+<Note>
+**YOUR DEPLOYMENT JOURNEY**
+
+- You have gained the necessary [resource access and permissions](/deployment/checklist) required for deployment.
+- You have [created a Semgrep account and organization](/deployment/create-account-and-orgs). 
+- You have [connected your source code manager](/deployment/connect-scm).
+- Optionally, you have [set up SSO](/deployment/sso).
+- You have successfully added a [Semgrep job](/deployment/add-semgrep-to-ci) to your CI workflow with [diff-aware scanning](/deployment/customize-ci-jobs/#set-up-diff-aware-scans).
+</Note>
+
+Semgrep can create **pull request (PR) comments** in your Bitbucket repository. These comments provide a description of the issue detected by Semgrep and may offer possible solutions. They are a means for security teams, or any team responsible for creating standards, to help their fellow developers write safe and standards-compliant code.
+
+## Conditions for PR comment creation
+
+PR comments appear for the following types of scans under these conditions:
+
+| Type of scan | Product name | Trigger condition | How to set up |
+| :--- | :--- | :--- | :--- |
+| Static application security testing (SAST) | Semgrep Code | A comment appears when Semgrep generates a finding for a rule included in a [remediation policy](/semgrep-appsec-platform/unified-policies/overview) configured to leave PR or MR comments. This lets you customize which findings generate comments for developers. | Complete the steps in the following sections:<br/> 1. [Confirm your Semgrep account's connection and access to your source code manager](#confirm-your-semgrep-accounts-connection).<br/><br/> 2. [Configure pull request comments](#configure-pr-comments). |
+| Software composition analysis (SCA) | Semgrep Supply Chain (SSC) | A comment appears based on the conditions you explicitly set in a [remediation policy](/semgrep-appsec-platform/unified-policies/overview) or when Semgrep detects a [license violation](/semgrep-supply-chain/license-compliance). | To receive Supply Chain comments, complete the steps in [Confirm account connection and access](#confirm-your-semgrep-accounts-connection) and [set up a policy](/semgrep-supply-chain/policies). <br/><br/> To receive license violation comments, [enable dependency search](/semgrep-supply-chain/dependency-search#enable-and-use-dependency-search). |
+| Secrets | Semgrep Secrets | A comment appears when Semgrep generates a finding for a rule included in a [remediation policy](/semgrep-appsec-platform/unified-policies/overview) configured to leave PR comments. | Complete the steps in the following sections:<br/> 1. [Confirm your Semgrep account's connection and access to your source code manager](#confirm-your-semgrep-accounts-connection).<br/><br/> 2. [Configure pull request comments](#configure-pr-comments). |
+
+## Enable PR comments in Bitbucket
+
+### Prerequisites
+
+- You must have a Bitbucket Data Center HTTP access token. Ensure that the [HTTP access token that you create](https://confluence.atlassian.com/bitbucketserver/http-access-tokens-939515499.html) has been granted **Project write** permissions. You'll provide this token to your CI provider during the setup process.
+- Semgrep has been tested with Bitbucket Data Center v8.19. If you are using a different version of BBDC and there are issues, please [reach out to support](/support).
+
+### Confirm your Semgrep account's connection
+
+Confirm that you have the correct connection and access:
+
+<Steps>
+<Step>
+In your Semgrep AppSec Platform account, click **Settings > Source code managers**.
+</Step>
+<Step>
+Check that an entry for your Bitbucket project exists and is correct.
+</Step>
+</Steps>
+
+#### Triage through PR comments
+
+Developers can triage Semgrep findings without leaving Bitbucket by responding to the PR comments authored by Semgrep. Semgrep requires Bitbucket Data Center source code manager (SCM) connections to use an HTTP access token with **Project admin** permissions, so your connection may already use an appropriate token.
+
+If you do not, to update your connection between Semgrep and Bitbucket Data Center:
+
+<Steps>
+<Step>
+Ensure that you're using Bitbucket Data Center version 8.8 or later.
+</Step>
+<Step>
+Log in to Bitbucket using an account assigned with the **Project Admin** role.
+</Step>
+<Step>
+See [Bitbucket Data Center HTTP access token requirements](/deployment/managed-scanning/bitbucket#bitbucket-data-center) to create or update your token.
+</Step>
+<Step>
+Return to Semgrep and [<Icon icon="external-link" iconType="solid"/> sign in](https://semgrep.dev/login).
+</Step>
+<Step>
+Go to **<Icon icon="gear" iconType="solid"/> Settings > Source code managers**, and find your Bitbucket connection.
+</Step>
+<Step>
+Click **Update access token**.
+</Step>
+<Step>
+In the **Update access token** dialog that appears, provide the new token you created. Click **Update** to save and proceed.
+</Step>
+<Step>
+Toggle the **Incoming webhooks** setting on.
+</Step>
+</Steps>
+
+Once you've enabled webhooks, turned on the **Allow developers to triage findings** toggle, and enabled triage through code review comments, developers can triage Semgrep findings from Bitbucket Data Center.
+
+## Configure PR comments
+
+Once you have set up the connection between Semgrep and Bitbucket, you can [create a remediation policy](/semgrep-appsec-platform/unified-policies/get-started#create-a-remediation-policy) that lets you define the conditions under which Semgrep leaves a pull request comment. This customization enables you to:
+
+- Manage the amount of PR comments your developers receive.
+- Ensure that only rules that meet your criteria, such as high severity or high confidence rules, produce comments visible to developers, reducing noise.
+
+## Optional features
+
+### Customize PR comments
+
+You can customize the comments Semgrep leaves on your PR. Custom comments allow you to direct your teams to the resources they need to handle the vulnerabilities Semgrep identifies in their code.
+
+To provide custom PR comments:
+
+<Steps>
+<Step>
+Sign in to [ Semgrep AppSec Platform](https://semgrep.dev/login?).
+</Step>
+<Step>
+Navigate to **Settings > General > Global**.
+</Step>
+<Step>
+Go to the **Custom PR/MR comments footers** section.
+</Step>
+<Step>
+Provide a custom comment for each Semgrep product whose findings you want to generate a PR comment. Semgrep supports Markdown and plaintext links in your message.
+</Step>
+<Step>
+Click **Save changes**.
+</Step>
+</Steps>
+
+### Enable Rule-defined fix in Bitbucket Data Center repositories
+
+[Autofix](/writing-rules/rule-defined-fix) is a Semgrep feature in which rules contain suggested fixes to resolve findings.
+
+To enable **Rule-defined fix** for all projects in your Semgrep AppSec Platform organization, follow these steps:
+
+<Steps>
+<Step>
+In Semgrep AppSec Platform, go to **Settings > General > Code**.
+</Step>
+<Step>
+Use the **Rule-defined fix <Icon icon="toggle-large-on" iconType="solid"/>** toggle to enable this feature.
+</Step>
+</Steps>
+
+## Next steps
+
+You've finished setting up a core deployment of Semgrep 🎉.
+
+- Explore recommended tasks after deployment in [<Icon icon="file-text" iconType="solid"/> Beyond core deployment](/deployment/beyond-core-deployment). 
+
+## Additional references
+
+<CardGroup>
+  <Card title="Why am I not receiving PR or MR comments?" icon="file-text" href="/kb/semgrep-appsec-platform/missing-pr-comments" horizontal />
+  <Card title="Why did the comments on a PR or MR not appear inline?" icon="file-text" href="/kb/semgrep-appsec-platform/inline-pr-comments" horizontal />
+</CardGroup>
