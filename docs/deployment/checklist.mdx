@@ -1,0 +1,136 @@
+---
+title: "Pre-deployment checklist"
+description: "Confirm your deployment scope, access, and setup requirements before deploying Semgrep."
+---
+
+Before you deploy Semgrep, use this checklist to confirm that your organization is ready to begin setup.
+
+You should know which repositories you want to scan, which users and teams need access, which Semgrep features you plan to enable, and who owns the systems required for deployment.
+
+<Note>
+  Ensure that your infrastructure meets all [Prerequisites](/prerequisites) before deploying Semgrep.
+</Note>
+
+## Confirm deployment scope
+
+Decide how broadly your organization will deploy Semgrep. The more users and repositories you onboard, the more important training becomes for security champions and other users who help [manage findings](/for-developers/resolve-findings-through-comments).
+
+Confirm the following:
+
+- Which users and departments will use Semgrep.
+- Which [repositories](/deployment/manage-projects) Semgrep will scan. For monorepos, also plan for [scan duration](/deployment/customize-ci-jobs#scan-monorepos).
+- How frequently scans will run, and at what time if you use [scheduled scans](/deployment/customize-ci-jobs#set-a-scan-schedule). Scan timing can affect other processes, such as PR approvals.
+- Whether scans will run on a [schedule](/deployment/customize-ci-jobs#set-a-scan-schedule), in [CI](/deployment/add-semgrep-to-ci), through [Managed Scans](/deployment/managed-scanning/overview), or a combination of these methods.
+- The expected timeframe for deployment. Whether the deployment will happen all at once or in [phases](/deployment/core-deployment#deploy-semgrep-in-phases).
+
+**Deployment timelines** vary based on organization size, how many repositories you onboard, and whether you roll out in phases.
+
+## Identify stakeholders
+
+For medium-to-large teams, typically with more than 10 developers, coordinating with other departments before starting the deployment is crucial to an efficient roll-out. A complete deployment helps ensure that your licenses are fully used.
+
+Identify the teams that need to participate in the deployment. Depending on your organization, this can include:
+
+| Team | Common responsibilities |
+| :--- | :--- |
+| Infrastructure | SSO, CI/CD, and source code manager (SCM) configuration. |
+| Engineering | Repository ownership, displaying findings to developers in PRs or MRs. |
+| IT | Firewall, virtual private network (VPN), and network access configuration. |
+
+## Assign Semgrep roles
+
+Decide which users need access to Semgrep AppSec Platform.
+
+Semgrep provides three primary roles: **Admin**, **Member**, and **Readonly**. Organizations using Teams can also assign the **Manager** role for project-level access control. See [Manage user roles](/deployment/teams/overview#roles-and-access) for more information.
+
+For single-user deployments, you are the sole **Admin** of your deployment.
+
+For multi-user deployments, identify:
+
+- Which users will administer the deployment.
+- Which users need member access.
+- Which sign-in method members will use, such as SSO, GitHub Cloud, or GitLab Cloud.
+
+
+## Review permissions and access
+
+Confirm that your organization has the access needed for the features you plan to enable.
+
+<table>
+<thead>
+<tr>
+  <th>Feature</th>
+  <th>Permission required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Run Semgrep continuously in your CI workflows</td>
+  <td><ul><li>Add or change CI jobs, including committing configuration files for each repository.</li><li>Define environment variables and store secrets.</li></ul></td>
+</tr>
+<tr>
+  <td>Run Semgrep continuously without changing your CI workflows</td>
+  <td>Grant read access to user-selected repositories.</td>
+</tr>
+<tr>
+  <td>Manage user authentication with SSO</td>
+  <td>View and edit SSO configurations.</td>
+</tr>
+<tr>
+  <td>Receive Slack notifications</td>
+  <td>Be a Slack workspace owner, or coordinate with the team responsible.</td>
+</tr>
+<tr>
+  <td>Send PRs or MRs to your SCM</td>
+  <td>Edit firewall or VPN allowlists for self-hosted repositories.</td>
+</tr>
+</tbody>
+</table>
+
+For SCM roles, token scopes, and setup steps by provider, see [SCM permissions](/deployment/prepare/scm-permissions).
+
+## Review network requirements
+
+If your organization uses a firewall, VPN, self-hosted SCM, or other network restrictions, confirm that Semgrep can connect to the systems it needs.
+
+You might need to configure:
+
+- Ingress allowlists.
+- Egress allowlists.
+- CloudFront egress IP addresses.
+- Semgrep Network Broker.
+- Access for PR or MR comments, Managed Scans, and Semgrep Multimodal.
+
+For more information, see [Network access and allowlists](/deployment/prepare/network-access).
+
+## Confirm version and session requirements
+
+Confirm that your Semgrep CLI version is supported before deployment.
+
+Many improvements to the Semgrep AppSec Platform experience only work with up-to-date Semgrep CLI versions. Semgrep AppSec Platform supports the 10 most recent minor versions of Semgrep CLI. For example, if the latest release is 1.60.0, all versions greater than 1.50.0 are supported, while earlier versions, such as 1.49.0, can result in failures.
+
+To update Semgrep, see [Update Semgrep](/update). Docker users should use the [latest tag](https://hub.docker.com/r/semgrep/semgrep/tags?page=1&name=latest) to stay up to date.
+
+### Review session requirements
+
+Semgrep AppSec Platform session details:
+
+- The time before you need to reauthenticate is 7 days.
+- Session tokens are valid for 7 days.
+- This session timeout is not configurable.
+- Semgrep AppSec Platform does not use cookies; it uses `localStorage` to store access tokens. Data in `localStorage` expires every 7 days.
+
+## Next steps
+
+After you complete this checklist, continue with the setup guide for your deployment method.
+
+Common next steps include:
+
+- [Connect your SCM](/deployment/connect-scm)
+- [Configure SSO](/deployment/sso)
+- [Set up Semgrep in CI](/deployment/add-semgrep-to-ci)
+- [Enable PR or MR comments](/category/pr-or-mr-comments)
+- [Configure notifications](/semgrep-appsec-platform/notifications)
+- [Add users and assign roles](/deployment/teams/overview)
+
+See [How to introduce Semgrep to your organization](https://blog.trailofbits.com/2024/01/12/how-to-introduce-semgrep-to-your-organization/) from Trail of Bits for tips on how to evaluate and deploy Semgrep for your org.

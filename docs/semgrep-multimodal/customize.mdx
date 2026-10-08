@@ -1,0 +1,343 @@
+---
+title: "Customize Semgrep Multimodal"
+description: "You can customize Semgrep Multimodal by enabling and using the features detailed on this page."
+---
+
+
+## Autofix
+
+To receive AI-generated code changes for Semgrep Code findings, enable [Autofix](/semgrep-code/triage-remediation/autofix). Autofix opens a pull request or merge request with proposed fixes.
+
+## Suggested fix
+
+Enable Multimodal's **[Suggested fix](/semgrep-multimodal/overview#suggested-fix)** to see an explanation on how to fix true positives. 
+
+To enable Suggested fix, follow these steps:
+
+<Steps>
+  <Step>
+  Sign in to Semgrep AppSec Platform, and navigate to **Settings > General > Code**.
+  </Step>
+  <Step>
+  Click the **Suggested fix** <Icon icon="toggle-large-on"/> toggle to enable this feature.
+  </Step>
+  <Step>
+  *Optional*: Select a **confidence level** in the drop-down box. This value determines the quality of Suggested fix. For example, if you select lower confidence, Semgrep Multimodal suggests a fix even when the suggestion quality is lower.
+  </Step>
+</Steps>
+
+<Tip>
+**TIP**
+
+Semgrep recommends setting a low confidence level since even imperfect suggestions may be useful starting points for triage and remediation.
+</Tip>
+
+## Weekly priority emails
+
+[Weekly priority emails](/semgrep-multimodal/overview/#weekly-priority-emails) allows organization admins to receive information on top backlog tasks according to Multimodal. If this feature is not enabled for your deployment, you can do so as follows:
+
+<Steps>
+  <Step>
+  Sign in to Semgrep AppSec Platform, and navigate to **Settings > General > Global**.
+  </Step>
+  <Step>
+  Click the **Weekly priority emails** <Icon icon="toggle-large-on"/> if it is not yet enabled.
+  </Step>
+</Steps>
+
+## Noise filtering
+
+Multimodal is [over 95% accurate in categorizing Semgrep Code findings as false positives](/semgrep-multimodal/metrics.md), so you can minimize the number of findings shown by enabling **Noise filter for Code PR/MR comments**. To do so:
+
+<Steps>
+  <Step>
+  Sign in to Semgrep AppSec Platform, and navigate to **Settings > General > Code**.
+  </Step>
+  <Step>
+  Click the **Noise filter for Code PR/MR comments** <Icon icon="toggle-large-on"/> if it is not yet enabled.
+  </Step>
+  <Step>
+  Select whether you want to enable PR or MR comments for false positive findings:
+   1. **Don't leave a PR/MR comment**: Hide Semgrep's comments on findings that are likely to be false positives. These findings are available for security review on the [**Code > Pre-production backlog** page](https://semgrep.dev/orgs/-/findings?tab=open&last_opened=All+time&backlog=preprod). Comments still appear for rules in [**Block** mode](/semgrep-code/policies#block-a-pr-or-mr-through-rule-modes).
+   2. **Include a notification in the PR/MR comment**: Show developers likely false positive findings in PR/MR comments, but include a note explaining why Multimodal thinks the finding may be safe to ignore.
+  </Step>
+</Steps>
+
+Findings filtered out by Multimodal can be reviewed at any time in Semgrep by going to the [**Code > Pre-production backlog** page](https://semgrep.dev/orgs/-/findings?tab=open&last_opened=All+time&backlog=preprod). Semgrep also allows you to agree with the filtering to close the finding or disagree to reopen.
+
+## Add Memories
+
+Memories allow admins to tailor Multimodal's remediation guidance to their organization's standards and defaults. You can provide feedback by adding custom instructions whenever Multimodal provides a Suggested fix.
+
+Memories are enabled by default for all organizations with Multimodal enabled.
+
+### Add a memory
+
+<Steps>
+  <Step>
+  Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+  </Step>
+  <Step>
+  Navigate to [<Icon icon="gear"/> **Rules & Policies > Memories**](https://semgrep.dev/orgs/-/memories).
+  </Step>
+  <Step>
+  Click **New Memory**.
+  </Step>
+  <Step>
+  In **Memory**, enter your preferred remediation approach and secure default.
+  </Step>
+  <Step>
+  Select the **Projects** and the **Rules** to which the memory should be applied.
+   1. Choose **All projects** or any specific project.
+   1. Choose **All rules**, or search for and select a specific rule or a general vulnerability class. Selecting a vulnerability class means the memory applies to *all* rules with that vulnerability class.
+  </Step>
+  <Step>
+  Click **Add memory** to save your changes and proceed.
+  </Step>
+</Steps>
+
+See [Best practices for writing Memories](/semgrep-multimodal/best-practices-for-memories) for information on writing effective memories.
+
+### Add a memory based on Multimodal's Suggested fix
+
+To add a memory based on a Suggested fix presented by Multimodal:
+
+<Steps>
+  <Step>
+  Identify the specific instance of **Multimodal's Suggested fix** that you want to modify. This can be found on the finding details page or in the PR or MR comment.
+   - If Multimodal used existing memories to generate the guidance, you can click on **Referenced <span className="placeholder">X</span> memories while writing this guidance** to see the memories used.
+  </Step>
+  <Step>
+  Click **Customize fix** to open an input box, and enter your preferred remediation approaches and secure defaults for the project. Your suggestion can be as general as "Use X library to sanitize SQL queries."
+  </Step>
+  <Step>
+  Click **Save and regenerate**.
+  </Step>
+  <Step>
+  Multimodal regenerates the Suggested fix to reflect the instructions you provided.
+  </Step>
+</Steps>
+
+Memories are scoped to remediation guidance on a per-project, per-vulnerability class, or per-rule basis. A saved memory only affects future guidance for findings triggered by the same rule in the same project.
+
+### Add memory during triage and receive memory suggestions from Multimodal
+
+When you identify findings that are safe to ignore and provide reasoning for your actions, Semgrep Multimodal can use this triage feedback to suggest memories. It can start suggesting memories from the very first triage feedback it receives, or it may suggest memories from multiple pieces of feedback, depending on the level of detail in the feedback and the finding's unique context. If Multimodal creates a new memory, it will use the memory to assess if similar findings are safe to ignore and hide from developers.
+
+To triage and create a memory (Semgrep automatically attempts to create a memory during triage if possible):
+
+<Steps>
+  <Step>
+  Identify the specific finding you want to modify, and open up its finding details page.
+  </Step>
+  <Step>
+  Click **Ignore**, select an **Ignore reason**, and provide **Comments** on why you're triaging the finding as **Ignore**.
+  </Step>
+  <Step>
+  Click **Ignore**. Multimodal attempts to create a memory using the information you provide. If Multimodal successfully creates a memory for you, you'll see a link to the list of memories for your organization in the dialog that appears.
+  </Step>
+</Steps>
+
+Permissions:
+
+- Automatic generation of memories: if you are an **admin** user, Multimodal tries to generate **active** memories from your triage feedback.
+- If you are a non-admin user, such as a manager, Multimodal creates a **suggested** memory that needs an admin to activate it. 
+
+### View and edit memories
+
+<Steps>
+  <Step>
+  Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+  </Step>
+  <Step>
+  Navigate to [<Icon icon="gear" iconType="solid"/> **Rules & Policies > Memories**](https://semgrep.dev/orgs/-/memories).
+  </Step>
+</Steps>
+
+There are two tabs on the **Memories** page for your review:
+
+- The **Active** tab displays a list of memories that Multimodal is actively using to generate triage advice
+- The **Suggested** tab displays a list of memories Multimodal has generated based on past triage actions and developer feedback. For each suggestion, you can:
+  - Activate the suggested memory to inform Multimodal's advice on current and future findings
+  - Edit the memory, then activate it
+  - Delete the suggested memory
+
+Only users assigned the `admin` role in Semgrep can activate suggested memories.
+
+### Remove memories
+
+<Steps>
+  <Step>
+  Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+  </Step>
+  <Step>
+  Navigate to [<Icon icon="gear" iconType="solid"/>**Rules & Policies > Memories**](https://semgrep.dev/orgs/-/memories).
+  </Step>
+  <Step>
+  Identify the memory you would like to delete, then click the <Icon icon="trash"/>**icon** to remove the memory.
+  </Step>
+</Steps>
+
+## Select your AI provider
+
+By default, Semgrep Multimodal uses OpenAI and Amazon Bedrock with Semgrep's API keys.
+
+Semgrep evaluates available models from multiple providers and selects the most performant option for each Multimodal feature, based on the providers enabled for your organization. Keep both OpenAI and Amazon Bedrock enabled. [Autofix](/semgrep-code/triage-remediation/autofix) requires Amazon Bedrock. If Bedrock is disabled, Autofix does not run. Enabling additional model providers can further improve performance for other Multimodal features.
+
+You can also use your own API keys or accounts for the following providers:
+
+<Tabs>
+
+<Tab title="OpenAI">
+
+### OpenAI API with your own key
+
+If you want complete control over how OpenAI handles your data, you can use your OpenAI API key instead of Semgrep's. To provide your OpenAI API key:
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login) and navigate to [<Icon icon="gear" iconType="solid"/> **Settings > Global**](https://semgrep.dev/orgs/-/settings/general).
+</Step>
+<Step>
+Click the <Icon icon="gear" iconType="solid"/> **icon** next to **AI provider**.
+</Step>
+<Step>
+Select **Your OpenAI API key**, and provide your API key.
+</Step>
+</Steps>
+
+Click **Save** to proceed.
+
+By switching from Semgrep's key to your key, note that you lose access to the following:
+
+- Semgrep's fine-tuned models that can increase the quality of results.
+- Semgrep's [Zero Data Retention agreement](/semgrep-multimodal/privacy) that prevents OpenAI from saving input or output data.
+- Semgrep paying for the cost of your AI usage.
+
+</Tab>
+<Tab title="Amazon Bedrock">
+
+### Your own Amazon Bedrock account
+
+If you want to keep all data within your AWS account, you can use your own Amazon Bedrock instance:
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login) and navigate to [ <Icon icon="gear"/> **Settings > Global**](https://semgrep.dev/orgs/-/settings/general).
+</Step>
+<Step>
+Click the <Icon icon="gear" iconType="solid"/> **icon** next to **AI provider**.
+</Step>
+<Step>
+Select **Amazon Bedrock** then **Your AWS account**.
+</Step>
+<Step>
+Provide your AWS IAM role details.
+</Step>
+</Steps>
+
+Note that the IAM role that is being used must have access to the **AmazonBedrockLimitedAccess** AWS IAM Permissions preset.
+
+Semgrep constantly evaluates new models for Multimodal features and frequently swaps out requested models, so it is recommended to always have the most recent models in Bedrock enabled. Currently, Multimodal is using the model ARNs `anthropic.claude-sonnet-4-6` and `anthropic.claude-haiku-4-5-20251001-v1:0`.
+
+#### Supported AWS regions
+
+When you use your own Amazon Bedrock account, you can select one of the following AWS regions:
+
+- US East (N. Virginia) - `us-east-1`
+- US East (Ohio) - `us-east-2`
+- US West (N. California) - `us-west-1`
+- US West (Oregon) - `us-west-2`
+
+All Bedrock calls are pinned to the region you select. Semgrep does not use AWS cross-region inference profiles for customer-managed Bedrock accounts, so requests stay within your configured region.
+
+<Note>
+Since Semgrep does not use AWS cross-region inference profiles, the models Multimodal requires must be available for on-demand inference in the selected region. Because of that requirement, regions outside the US (where the models are offered only through cross-region inference profiles) are not currently supported.
+</Note>
+
+</Tab>
+<Tab title="Azure OpenAI">
+
+### Azure OpenAI
+
+To use Azure OpenAI with Semgrep Multimodal, you must retrieve the endpoint URL and API key for your model from Azure, then provide it to Semgrep.
+
+1. To retrieve the endpoint URL and API key from Azure:
+   1. Log in to Azure OpenAI Studio.
+   2. Navigate to **Deployments**, and select the deployment you want to use.
+   3. In **Endpoint**, find and copy both the **Target URI** and the **API key**. You will provide both values to Semgrep.
+2. To configure Semgrep to use Azure OpenAI:
+   1. Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login) and navigate to [<Icon icon="gear" iconType="solid"/>**Settings > Global**](https://semgrep.dev/orgs/-/settings/general).
+   2. Click the <Icon icon="gear" iconType="solid"/> **icon** next to **AI provider**.
+   3. Select **Azure OpenAI**.
+   4. Paste the **Target URI** you copied from Azure into **Your Azure OpenAI Endpoint**. The endpoint must include the full path and API version query parameter. The expected format is:
+
+      `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/DEPLOYMENT_NAME/chat/completions?api-version=API_VERSION`
+
+   5. Paste the API key you copied from Azure into **Your Azure OpenAI API key**.
+   6. Click **Save** to proceed.
+
+<Warning>
+If Semgrep cannot save your endpoint and API key, confirm that the endpoint includes both `/openai/deployments/DEPLOYMENT_NAME/chat/completions` and the `?api-version=` query parameter. Pasting only the base resource URL (for example, `https://my-resource.openai.azure.com`) fails with a missing configuration error.
+</Warning>
+
+<Note>
+Semgrep supports one Azure OpenAI deployment at a time. Because each Azure deployment serves a single model, that model is used for all Semgrep Multimodal features, including noise filtering. If you want a different model, deploy it in Azure and then repeat the steps above with its Target URI and API key, which replaces your existing configuration.
+</Note>
+
+Azure OpenAI is not available for [AI-powered detection scans](/semgrep-code/ai-powered-detection-concepts) or [Agentic Workflows](/workflows/overview). Those features require a Semgrep-managed OpenAI or Amazon Bedrock provider.
+
+</Tab>
+<Tab title="Google Gemini">
+
+### Google Gemini
+
+To use Google Gemini with Semgrep Multimodal:
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login) and navigate to [<Icon icon="gear"/> **Settings > Global**](https://semgrep.dev/orgs/-/settings/general).
+</Step>
+<Step>
+Click the <Icon icon="gear" iconType="solid"/> **icon** next to **AI provider**.
+</Step>
+<Step>
+Select **Google Gemini**.
+</Step>
+<Step>
+Paste in your API key.
+</Step>
+<Step>
+Click **Save** to proceed.
+</Step>
+</Steps>
+
+> Semgrep Multimodal only supports Google Gemini with Google AI Studio, not Vertex AI.
+
+</Tab>
+<Tab title="xAI">
+
+### xAI
+
+To use xAI with Semgrep Multimodal, you must retrieve the endpoint URL and API key from xAI, then provide it to Semgrep.
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login) and navigate to [<Icon icon="gear" iconType="solid"/> **Settings > Global**](https://semgrep.dev/orgs/-/settings/general).
+</Step>
+<Step>
+Click the <Icon icon="gear" iconType="solid"/> **icon** next to **AI provider**.
+</Step>
+<Step>
+Select **xAI**.
+</Step>
+<Step>
+Paste in your API key and API endpoint.
+</Step>
+<Step>
+Click **Save** to proceed.
+</Step>
+</Steps>
+
+</Tab>
+</Tabs>

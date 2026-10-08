@@ -1,0 +1,8 @@
+{
+  "name": "semgrep-docs",
+  "private": true,
+  "scripts": {
+    "build": "bash run-build-scripts",
+    "dev": "cd docs && npx mintlify@latest dev"
+  }
+}

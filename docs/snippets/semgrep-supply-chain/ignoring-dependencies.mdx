@@ -1,0 +1,34 @@
+You can prevent specific code files, manifest files, or lockfiles from generating Supply Chain findings by excluding them in a `.semgrepignore` file.
+
+To do this, [create a `.semgrepignore` file in your repository's root directory](/ignoring-files-folders-code/#define-ignored-files-and-folders-in-semgrep-appsec-platform). Then, add the paths of the files you want to exclude. The specific paths that you add to this file depend on your goal:
+
+| Goal | Method |
+| :--- | :--- |
+| Prevent a code file from generating **reachable findings**. | Add the code file's path to `.semgrepignore`. |
+| Prevent findings from being generated using the dependencies in a manifest file or lockfile | Add the manifest file's or lockfile's path to `.semgrepignore`. |
+
+<Note>
+**Note:** Unreachable findings are only generated from manifest files or lockfiles, because Semgrep defines unreachable findings as the absence of a match in the code.
+</Note>
+
+## Sample `.semgrepignore` configuration
+
+Given a repository with the following files:
+
+* A file `codefile_with_vuln.js` that generates reachable and unreachable findings due to a vulnerable dependency.
+* A `package-lock.json` file that lists the vulnerable dependency.
+
+Add `codefile_with_vuln.js` to `.semgrepignore` to ignore reachable findings from that file. Semgrep still generates findings from `package-lock.json`:
+
+```
+# .semgrepignore
+codefile_with_vuln.js
+```
+
+Add `package-lock.json` to `.semgrepignore` so that Semgrep doesn't scan dependencies listed in this lockfile. This results in no Supply Chain findings generated from either `codefile_with_vuln.js` or `package-lock.json`:
+
+```
+# .semgrepignore
+codefile_with_vuln.js
+package-lock.json
+```
