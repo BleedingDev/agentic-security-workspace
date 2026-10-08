@@ -1,6 +1,6 @@
 # REA setup lane
 
-Consult [REA installation and setup](https://github.com/morluto/rea/blob/main/docs/installation.md) and the published `rea-agents` package. Repository main may describe capabilities absent from the release. Resolve the published version, check its supported Node/npm runtime, and record the exact package version and integrity in the setup ledger. Reuse compatible existing runtimes and engines.
+Consult [REA installation and setup](https://github.com/morluto/rea/blob/main/docs/installation.md) and the published `rea-agents` package. The independent source copy is at root `vendor/morluto/rea/`; its exact upstream commit is in `upstreams.json`. Repository main or a preserved source snapshot may describe capabilities absent from the installed release. Resolve the published version, check its supported Node/npm runtime, and record the exact package version and integrity in the setup ledger. Reuse compatible existing runtimes and engines.
 
 ## Install and configure locally
 

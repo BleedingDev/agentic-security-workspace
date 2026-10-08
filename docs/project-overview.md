@@ -8,7 +8,7 @@ Security tools often assume a person will sit in front of a GUI. Coding agents n
 
 Nuclei already has a good command line. Burp and Ghidra need protocol bridges. Agent configuration also needs a home that will not affect ordinary coding work. This repository handles those differences through small tool skills and project-local Model Context Protocol configuration.
 
-Burp, Ghidra, Nuclei, and the other tools still come from their maintainers. This project does not fork or bundle them. That choice is boring on purpose. A side project should not become a warehouse of stale installers and copied documentation.
+Burp, Ghidra, Nuclei, and the other tools still come from their maintainers. This project keeps their installations separate from its guidance and preserves pinned source snapshots with their licenses under `vendor/`. The snapshots protect against upstream deletion; they do not silently upgrade tools or replace current installation checks.
 
 ~~~mermaid
 flowchart LR
@@ -88,7 +88,7 @@ The result is a local ledger. It distinguishes tools that already existed from t
 - A setup and assessment state model with explicit retry and failure rules.
 - Pointers to upstream projects and established testing methods.
 
-It does not contain commercial binaries, upstream source copies, model weights, credentials, target files, captured traffic, or assessment evidence. The Git ignore rules exclude local host configuration and the **security-artifacts/** directory.
+It contains independently preserved upstream sources, including upstream fixtures and documentation, plus model metadata. Actual model weights are pending an independent storage destination. It does not contain operator credentials, assessment targets, captured traffic, or assessment evidence. Commercial software and unlicensed website material are not redistributed. The Git ignore rules exclude local host configuration and the **security-artifacts/** directory.
 
 ## Limits
 
@@ -100,4 +100,4 @@ Cross-platform setup is an agent procedure, not a matrix of checked-in shell scr
 
 ## Licensing
 
-The MIT license covers the original files in this repository. It does not relicense Burp, Ghidra, MCP bridges, command-line tools, templates, or other dependencies. Those projects keep their own licenses and terms. The setup agent installs them from upstream sources. Users should review those terms before distribution or commercial use.
+The MIT license covers the original files in this repository. It does not relicense Burp, Ghidra, MCP bridges, command-line tools, templates, or other dependencies. The source archives preserve those projects' licenses and notices; the root MIT license does not relicense `vendor/`. Those projects keep their own licenses and terms. The setup agent installs them from upstream sources. Users should review those terms before distribution or commercial use.
