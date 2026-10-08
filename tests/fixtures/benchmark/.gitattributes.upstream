@@ -8,5 +8,3 @@
 
 # The manifest is compared as an exact string too.
 build_manifest.json text eol=lf
-# Preserved snapshot: retain raw bytes and embedded LFS payloads.
-** -text -filter
