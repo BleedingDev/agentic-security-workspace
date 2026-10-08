@@ -1,0 +1,85 @@
+#
+# Copyright (c) 2020-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+import pytest
+from tests.conftest import skip_on_windows
+from tests.fixtures import RunSemgrep
+
+from semgrep.constants import OutputFormat
+
+
+@pytest.mark.kinda_slow
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"filename": "invalid_go.go", "rule": "eqeq-basic.yaml"},
+        {"filename": "invalid_python.py", "rule": "eqeq-python.yaml"},
+    ],
+)
+@pytest.mark.osemfail
+@skip_on_windows  # better backslash replacement logic
+def test_file_parser__failure__error_messages(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot, settings
+):
+    stdout, stderr = run_semgrep_in_tmp(
+        config=f"rules/{settings['rule']}",
+        target_name=f"bad/{settings['filename']}",
+        options=["--verbose", "--no-time"],
+        output_format=OutputFormat.JSON,
+        force_color=True,
+        assert_exit_code=3,
+    )
+    posix_snapshot.assert_match(stdout, "out.json")
+    posix_snapshot.assert_match(stderr, "error.txt")
+
+
+# check that we report a parse error only once per file, even if we
+# run the engine with two rules
+# TODO: merge with the parametrize above?
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail
+@skip_on_windows  # better backslash replacement logic
+def test_parse_errors(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    _results, errors = run_semgrep_in_tmp(
+        "rules/two_rules/",
+        options=["--verbose"],
+        target_name="bad/invalid_javascript.js",
+        output_format=OutputFormat.TEXT,
+        force_color=True,
+        strict=False,
+    )
+    posix_snapshot.assert_match(
+        errors,
+        "errors.txt",
+    )
+
+
+# Ensure that errors thrown during semgrep-core's analysis don't
+# disrupt it reporting progress for all targets. See SAF-2079.
+#
+# NOTE: This test won't fail if the code that issues the warning is
+# removed or the message is changed. Catching that case would require
+# some more extensive mocking and refactoring to support mocking,
+# which I judged is not warranted just to ensure the progress bar
+# always gets to 100%.
+@pytest.mark.kinda_slow
+@skip_on_windows  # better backslash replacement logic
+def test_progress_report_when_errors(run_semgrep_in_tmp: RunSemgrep):
+    _results, stderr = run_semgrep_in_tmp(
+        config="rules/eqeq-basic-c.yaml",
+        target_name="bad/invalid_c_long.c",
+        options=["--verbose", "--no-time"],
+        output_format=OutputFormat.JSON,
+        force_color=True,
+        assert_exit_code=3,
+    )
+    assert "Not all targets were reported by semgrep-core as completed" not in stderr

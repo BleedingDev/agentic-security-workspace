@@ -1,0 +1,116 @@
+(*
+   Copyright (c) 2021-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(*
+   Unit tests for Guess_lang
+*)
+open Lang
+open Fpath_.Operators
+
+type exec = Exec | Nonexec
+
+(* TODO: simplify and use Testo.create ~expected_outcome:Should_fail *)
+type success = OK | XFAIL
+
+let t = Testo.create ?skipped:Testutil.skip_on_windows
+
+(*
+   For these tests, the file doesn't need to exist.
+*)
+let name_tests : (string * Lang.t * Fpath.t * success) list =
+  [
+    (* name, language, file name, expected result *)
+    ("js", Js, "foo.js", OK);
+    ("js relative path", Js, "./a/b.c/foo.js", OK);
+    ("js absolute path", Js, "/a/b.c/foo.js", OK);
+    ("js double extension", Js, "foo.bar.js", OK);
+    ("min js", Js, "foo.min.js", XFAIL);
+    ("not js", Js, "foo.bar", XFAIL);
+    ("jsx", Js, "foo.jsx", OK);
+    ("typescript", Ts, "foo.ts", OK);
+    ("typescript .d.ts", Ts, "foo.d.ts", XFAIL);
+    ("terraform", Terraform, "main.tf", OK);
+    (* OpenTofu shares Terraform's HCL grammar and must be detected as such. *)
+    ("opentofu", Terraform, "main.tofu", OK);
+    ("spaces", Ruby, " a b  c.rb", OK);
+  ]
+  |> List.map (fun (name, (lang : Lang.t), path, expect) ->
+      (name, lang, Fpath.v path, expect))
+
+let contents_tests : (string * Lang.t * string * string * exec * success) list =
+  [
+    (* name, language, file name, file contents, executable?, expected result *)
+    ("correct extension nonexec", Js, "foo1.js", "", Exec, OK);
+    ("correct extension exec", Js, "foo2.js", "", Exec, OK);
+    ("wrong extension exec", Js, "foo3.bar", "", Exec, XFAIL);
+    ("bash non-executable", Bash, "hello1.bash", "", Nonexec, OK);
+    ("bash exec", Bash, "hello2", "#!/anything/bash\n", Exec, OK);
+    ("sh exec", Bash, "hello3", "#!/bin/sh\n# hello!", Exec, OK);
+    ("bash exec env", Bash, "hello4", "#! /usr/bin/env bash\n", Exec, OK);
+    ("other exec env", Bash, "hello5", "#!/usr/bin/env bashxxxx\n", Exec, XFAIL);
+    ("env -S", Bash, "hello6", "#!/usr/bin/env -Sbash -eu\n", Exec, OK);
+    ("hack with .hack extension", Hack, "foo.hack", "", Nonexec, OK);
+    ( "hack without extension",
+      Hack,
+      "foo",
+      "#!/usr/bin/env hhvm\nxxxx",
+      Exec,
+      OK );
+    ( "hack with .php extension and shebang",
+      Hack,
+      "foo.php",
+      "#!/usr/bin/env hhvm\nxxxx",
+      Nonexec,
+      OK );
+    ( "hack with .php extension no shebang",
+      Hack,
+      "foo.php",
+      "<?hh\n",
+      Nonexec,
+      OK );
+    ("php", Php, "foo.php", "", Nonexec, OK);
+  ]
+
+let test_name_only lang path expectation =
+  match (expectation, Guess_lang.inspect_file lang path) with
+  | OK, Ok _
+  | XFAIL, Error _ ->
+      ()
+  | OK, Error _ -> assert false
+  | XFAIL, Ok _ -> assert false
+
+let test_with_contents lang name contents exec expectation =
+  Testo.with_temp_file ~suffix:name ~contents (fun path ->
+      (match exec with
+      | Exec -> Unix.chmod !!path 0o755
+      | Nonexec -> ());
+      match (expectation, Guess_lang.inspect_file lang path) with
+      | OK, Ok _
+      | XFAIL, Error _ ->
+          ()
+      | OK, Error _ -> assert false
+      | XFAIL, Ok _ -> assert false)
+
+let test_inspect_file =
+  List.map
+    (fun (test_name, lang, path, expectation) ->
+      t test_name (fun () -> test_name_only lang path expectation))
+    name_tests
+  @ List.map
+      (fun (test_name, lang, file_name, contents, exec, expectation) ->
+        t test_name (fun () ->
+            test_with_contents lang file_name contents exec expectation))
+      contents_tests
+
+let tests =
+  Testo.categorize_suites "Guess_lang"
+    [ Testo.categorize "inspect_file" test_inspect_file ]

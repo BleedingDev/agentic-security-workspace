@@ -1,0 +1,41 @@
+{
+  "engine_requested": "OSS",
+  "errors": [
+    {
+      "code": 4,
+      "level": "error",
+      "long_msg": "{'pattern-not': '$Y'} is not valid under any of the given schemas",
+      "short_msg": "Invalid rule schema",
+      "spans": [
+        {
+          "end": {
+            "col": 1,
+            "line": 9,
+            "offset": -1
+          },
+          "file": "rules/syntax/bad12.yaml",
+          "source_hash": "69c490071ff3af369ac30c61b12bad8f0ee8092440ea9d5b4fcdf3ee924c78ae",
+          "start": {
+            "col": 5,
+            "line": 2,
+            "offset": -1
+          }
+        }
+      ],
+      "type": "InvalidRuleSchemaError"
+    },
+    {
+      "code": 7,
+      "level": "error",
+      "message": "invalid configuration file found (1 configs were invalid)",
+      "type": "SemgrepError"
+    }
+  ],
+  "paths": {
+    "scanned": []
+  },
+  "profiling_results": [],
+  "results": [],
+  "skipped_rules": [],
+  "version": "0.42"
+}

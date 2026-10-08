@@ -1,0 +1,89 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(* This module is essentially an adapter around Core_scan.scan()
+ * (and Deep_scan.scan()) so that it can be used from osemgrep. We try to
+ * imitate what is done in pysemgrep which calls semgrep-core
+ * (or semgrep-core-proprietary) and its underlying Core_scan (or Deep_scan).
+ *)
+
+(* input *)
+type conf = {
+  (* opti and limits *)
+  num_jobs : Core_scan_config.num_jobs;
+  optimizations : bool;
+  max_memory_mb : int;
+  timeout : float;
+  timeout_threshold : int; (* output flags *)
+  (* features *)
+  nosem : bool;
+  strict : bool;
+  (* useful for debugging rules *)
+  time_flag : bool;
+  matching_explanations : bool;
+  dataflow_traces : bool;
+  use_parmap : bool;
+  (* extra scan-adjacent information: symbol_analysis and fips_mode
+     are only set by the scan config received from the app
+  *)
+  symbol_analysis : bool;
+  fips_mode : bool;
+}
+[@@deriving show]
+
+(* output *)
+type result = Core_runner_result.t
+
+(* This type is similar to Core_scan.func, but taking a list of
+ * rules and targets and a simpler conf type instead of the very
+ * large Core_scan_config.t
+ *
+ * The list of targets below are final targets (not scanning roots).
+ * no further scanning of the filesystem shall be performed.
+ * The Find_targets.conf argument is for explicit target management.
+ *)
+type func = {
+  run :
+    ?file_match_hook:(Fpath.t -> Core_result.matches_single_file -> unit) ->
+    conf ->
+    Find_targets.conf ->
+    Rule_error.rules_and_invalid ->
+    Fppath.t list ->
+    Core_result.result_or_exn;
+}
+
+type pro_conf = { roots : Scanning_root.t list; engine_type : Engine_type.t }
+
+val default_conf : conf
+
+(* osemgrep-pro hooks *)
+val hook_mk_pro_core_run_for_osemgrep : (pro_conf -> func) option Hook.t
+val hook_pro_git_remote_scan_setup : (func -> func) option Hook.t
+
+(* builder *)
+val mk_result : Rule.rule list -> Core_result.t -> result
+
+(* Core_scan.func adapter to be used in osemgrep.
+
+   This will eventually call a core scan like pysemgrep but without
+   creating a subprocess.
+
+   The first argument is usually Core_scan.scan, but it can also be
+   Deep_scan.scan when running in Pro Interfile mode and when called from
+   Steps_scan.scan in Semgrep Pro.
+
+   LATER: This function should go away.
+*)
+val mk_core_run_for_osemgrep : Core_scan.func -> func
+
+(* Helper used also in Steps_scan.ml *)
+val core_scan_config_of_conf : conf -> Core_scan_config.t

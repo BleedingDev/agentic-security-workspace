@@ -1,0 +1,36 @@
+[
+  {
+    "package": "@babel/cli",
+    "version": "7.16.8",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/scoped-packages.v2/yarn.lock",
+    "line_number": 8,
+    "children": []
+  },
+  {
+    "package": "@babel/code-frame",
+    "version": "7.16.7",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/scoped-packages.v2/yarn.lock",
+    "line_number": 35,
+    "children": []
+  },
+  {
+    "package": "@babel/compat-data",
+    "version": "7.16.8",
+    "ecosystem": "npm",
+    "allowed_hashes": {
+      "sha512": [
+        "10da2dac5ea9589c251412b00920889910e476c1ab24cd7095577635bc3a27c785151c89db4e26285fd39f509510ec29ab9d7e721f4fc16e4aec221cacde784b"
+      ]
+    },
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/scoped-packages.v2/yarn.lock",
+    "line_number": 44,
+    "children": []
+  }
+]

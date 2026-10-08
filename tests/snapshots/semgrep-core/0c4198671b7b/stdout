@@ -1,0 +1,11 @@
+Test name: without git > scan symlink to semgrepignored target
+--- Files not added to git ---
+.semgrepignore
+semgrepignored.py
+symlink.py
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+--- Selected targets ---
+selected symlink.py
+--- Skipped targets ---

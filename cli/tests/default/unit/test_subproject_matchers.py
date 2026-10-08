@@ -1,0 +1,1352 @@
+#
+# Copyright (c) 2024-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+from pathlib import Path
+from typing import FrozenSet
+from typing import List
+from typing import Tuple
+
+import pytest
+
+import semgrep.semgrep_interfaces.semgrep_output_v1 as out
+from semdep.matchers.base import ExactLockfileManifestMatcher
+from semdep.matchers.base import ExactManifestOnlyMatcher
+from semdep.matchers.base import PatternManifestStaticLockfileMatcher
+from semdep.matchers.bazel import BazelMavenInstallMatcher
+from semdep.matchers.gradle import GradleMatcher
+from semdep.matchers.pip_requirements import PipRequirementsMatcher
+from semdep.matchers.sbt import SbtMatcher
+from semdep.subproject_matchers import filter_dependency_source_files
+from semdep.subproject_matchers import MATCHERS
+from semgrep.types import fake_targets_of_paths
+from semgrep.types import fpaths_of_targets
+
+
+class TestExactLockfileMatcher:
+    @pytest.mark.quick
+    def test_lockfile_match(self):
+        matcher = ExactLockfileManifestMatcher(
+            lockfile_name="Pipfile.lock",
+            manifest_name="Pipfile",
+            manifest_kind=out.ManifestKind(value=out.Pipfile()),
+            lockfile_kind=out.LockfileKind(value=out.PipfileLock()),
+            ecosystem=out.Ecosystem(value=out.Pypi()),
+            make_manifest_only_subprojects=False,
+        )
+
+        assert matcher.is_match(Path("Pipfile.lock")) is True
+        assert matcher.is_match(Path("a/b/c/Pipfile.lock")) is True
+        assert matcher.is_match(Path("requirements.txt")) is False
+
+    @pytest.mark.quick
+    def test_manifest_match(self):
+        matcher = ExactLockfileManifestMatcher(
+            lockfile_name="Pipfile.lock",
+            manifest_name="Pipfile",
+            manifest_kind=out.ManifestKind(value=out.Pipfile()),
+            lockfile_kind=out.LockfileKind(value=out.PipfileLock()),
+            ecosystem=out.Ecosystem(value=out.Pypi()),
+            make_manifest_only_subprojects=False,
+        )
+
+        assert matcher.is_match(Path("Pipfile")) is True
+        assert matcher.is_match(Path("a/b/c/Pipfile")) is True
+        assert matcher.is_match(Path("requirements.txt")) is False
+
+    @pytest.mark.quick
+    @pytest.mark.parametrize("create_manifest", [True, False])
+    def test_make_subprojects(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create_manifest: bool
+    ):
+        manifest_path = tmp_path / "Pipfile"
+        lockfile_path = tmp_path / "Pipfile.lock"
+
+        monkeypatch.chdir(tmp_path)
+
+        matcher = ExactLockfileManifestMatcher(
+            lockfile_name="Pipfile.lock",
+            manifest_name="Pipfile",
+            manifest_kind=out.ManifestKind(value=out.Pipfile()),
+            lockfile_kind=out.LockfileKind(value=out.PipfileLock()),
+            ecosystem=out.Ecosystem(value=out.Pypi()),
+            make_manifest_only_subprojects=False,
+        )
+
+        assert matcher.is_match(manifest_path)
+        assert matcher.is_match(lockfile_path)
+        files = frozenset(
+            [lockfile_path] + ([manifest_path] if create_manifest else [])
+        )
+        subprojects, used_files = matcher.make_subprojects(fake_targets_of_paths(files))
+        assert used_files == files
+        assert len(subprojects) == 1
+        subproject = subprojects[0]
+        assert Path(subproject.root_dir.value) == tmp_path
+        dep_src = subproject.dependency_source.value
+
+        if create_manifest:
+            assert isinstance(dep_src, out.ManifestLockfile)
+            subproject_manifest_path = dep_src.value[0].path
+            assert (
+                subproject_manifest_path is not None
+                and Path(subproject_manifest_path.value) == manifest_path
+            )
+            assert dep_src.value[1].path.value == str(lockfile_path)
+        else:
+            assert isinstance(dep_src, out.LockfileOnly)
+            assert dep_src.value.path.value == str(lockfile_path)
+
+
+class TestPatternManifestStaticLockfileMatcher:
+    @pytest.mark.quick
+    def test_is_match(self):
+        matcher = PatternManifestStaticLockfileMatcher(
+            lockfile_name="packages.lock.json",
+            manifest_pattern="*.csproj",
+            lockfile_kind=out.LockfileKind(out.NugetPackagesLockJson()),
+            manifest_kind=out.ManifestKind(value=out.NugetManifestJson()),
+            ecosystem=out.Ecosystem(value=out.Nuget()),
+            make_manifest_only_subprojects=False,
+        )
+
+        assert matcher.is_match(Path("packages.lock.json")) is True
+        assert matcher.is_match(Path("test_proj.csproj")) is True
+        assert matcher.is_match(Path("a/b/c/packages.lock.json")) is True
+        assert matcher.is_match(Path("a/b/c/test_proj.csproj")) is True
+        assert matcher.is_match(Path("unknown.lock")) is False
+        assert matcher.is_match(Path("a/b/c/requirements/hello/unknown.lock")) is False
+
+    @pytest.mark.quick
+    @pytest.mark.parametrize("with_manifest", [True, False])
+    def test_make_subprojects(
+        self,
+        with_manifest: bool,
+    ):
+        # with two lockfiles and two corresponding manifests
+        # map lockfile to root directory and manifest path
+        test_data = {
+            Path("packages.lock.json"): (Path(""), Path("test_proj.csproj")),
+            Path("a/b/c/packages.lock.json"): (
+                Path("a/b/c"),
+                Path("a/b/c/test_proj.csproj"),
+            ),
+        }
+
+        # and a pattern matcher
+        matcher = PatternManifestStaticLockfileMatcher(
+            lockfile_name="packages.lock.json",
+            manifest_pattern="*.csproj",
+            manifest_kind=out.ManifestKind(value=out.NugetManifestJson()),
+            lockfile_kind=out.LockfileKind(value=out.NugetPackagesLockJson()),
+            ecosystem=out.Ecosystem(value=out.Nuget()),
+            make_manifest_only_subprojects=False,
+        )
+
+        # expect the matcher to create four subprojects, with or without manifests
+        manifests = (
+            [manifest for _lockfile, (_root_dir, manifest) in test_data.items()]
+            if with_manifest
+            else []
+        )
+        lockfiles = [lockfile for lockfile in test_data]
+        files = frozenset(manifests + lockfiles)
+        subprojects, used_files = matcher.make_subprojects(fake_targets_of_paths(files))
+        assert used_files == files
+        assert len(subprojects) == 2
+        for subproject in subprojects:
+            dep_src = subproject.dependency_source.value
+            assert isinstance(
+                dep_src,
+                (
+                    out.ManifestLockfile,
+                    out.LockfileOnly,
+                ),
+            )
+            lockfile = (
+                dep_src.value
+                if isinstance(dep_src, out.LockfileOnly)
+                else dep_src.value[1]
+            )
+            expected_root, expected_manifest = test_data[Path(lockfile.path.value)]
+            assert Path(subproject.root_dir.value) == expected_root
+            if with_manifest:
+                assert isinstance(dep_src, out.ManifestLockfile)
+                manifest_path = dep_src.value[0].path
+                assert (
+                    manifest_path is not None
+                    and Path(manifest_path.value) == expected_manifest
+                )
+            else:
+                assert isinstance(dep_src, out.LockfileOnly)
+
+    @pytest.mark.quick
+    def test_make_manifest_only_subprojects(self):
+        matcher = PatternManifestStaticLockfileMatcher(
+            lockfile_name="packages.lock.json",
+            manifest_pattern="*.csproj",
+            manifest_kind=out.ManifestKind(value=out.NugetManifestJson()),
+            lockfile_kind=out.LockfileKind(value=out.NugetPackagesLockJson()),
+            ecosystem=out.Ecosystem(value=out.Nuget()),
+            make_manifest_only_subprojects=True,
+        )
+
+        files = frozenset([Path("test_proj.csproj")])
+        subprojects, used_files = matcher.make_subprojects(fake_targets_of_paths(files))
+        assert used_files == files
+        assert len(subprojects) == 1
+        subproject = subprojects[0]
+        assert isinstance(subproject.dependency_source.value, out.ManifestOnly)
+
+
+class TestSbtMatcher:
+    @pytest.mark.quick
+    def test_is_match(self):
+        matcher = SbtMatcher()
+
+        # Should match build.sbt files
+        assert matcher.is_match(Path("build.sbt")) is True
+        assert matcher.is_match(Path("a/b/c/build.sbt")) is True
+        assert matcher.is_match(Path("project/subproject/build.sbt")) is True
+
+        # Should not match other files
+        assert matcher.is_match(Path("build.gradle")) is False
+        assert matcher.is_match(Path("pom.xml")) is False
+        assert matcher.is_match(Path("package.json")) is False
+        assert matcher.is_match(Path("build.sb")) is False
+        assert matcher.is_match(Path("build.sbt.bak")) is False
+
+    @pytest.mark.quick
+    def test_make_subprojects_single(self):
+        """A single root build.sbt creates one subproject."""
+        matcher = SbtMatcher()
+        source_files = frozenset([Path("build.sbt"), Path("project/plugins.sbt")])
+        subprojects, used_files = matcher.make_subprojects(
+            fake_targets_of_paths(source_files)
+        )
+
+        assert len(subprojects) == 1
+        assert used_files == {Path("build.sbt")}
+        assert subprojects[0].root_dir == out.Fpath(".")
+        assert isinstance(subprojects[0].dependency_source.value, out.ManifestOnly)
+
+    @pytest.mark.quick
+    def test_make_subprojects_filters_nested(self):
+        """Nested build.sbt files under a root build.sbt are not separate subprojects."""
+        matcher = SbtMatcher()
+        source_files = frozenset(
+            [
+                Path("build.sbt"),
+                Path("module-a/build.sbt"),
+                Path("module-b/build.sbt"),
+            ]
+        )
+        subprojects, used_files = matcher.make_subprojects(
+            fake_targets_of_paths(source_files)
+        )
+
+        # Only root build.sbt should create a subproject
+        assert len(subprojects) == 1
+        assert subprojects[0].root_dir == out.Fpath(".")
+        # All build.sbt files should be consumed
+        assert used_files == source_files
+
+    @pytest.mark.quick
+    def test_make_subprojects_independent_roots(self):
+        """Two independent SBT projects (not nested) each get a subproject."""
+        matcher = SbtMatcher()
+        source_files = frozenset(
+            [
+                Path("project-a/build.sbt"),
+                Path("project-b/build.sbt"),
+            ]
+        )
+        subprojects, used_files = matcher.make_subprojects(
+            fake_targets_of_paths(source_files)
+        )
+
+        assert len(subprojects) == 2
+        assert used_files == source_files
+        root_dirs = {s.root_dir for s in subprojects}
+        assert out.Fpath("project-a") in root_dirs
+        assert out.Fpath("project-b") in root_dirs
+
+
+class TestExactManifestOnlyMatcher:
+    @pytest.mark.quick
+    def test_is_match_setup_py(self):
+        matcher = ExactManifestOnlyMatcher(
+            manifest_kind=out.ManifestKind(out.SetupPy()),
+            manifest_name="setup.py",
+            ecosystem=out.Ecosystem(out.Pypi()),
+        )
+
+        # Should match setup.py files
+        assert matcher.is_match(Path("setup.py")) is True
+        assert matcher.is_match(Path("a/b/c/setup.py")) is True
+
+        # Should not match other files
+        assert matcher.is_match(Path("setup.cfg")) is False
+        assert matcher.is_match(Path("requirements.txt")) is False
+
+
+class TestRequirementsLockfileMatcher:
+    @pytest.mark.quick
+    def test_is_match(self) -> None:
+        matcher = PipRequirementsMatcher(
+            base_file_pattern="*requirement*",
+            requirements_file_extensions=["txt", "pip"],
+            manifest_file_extension="in",
+            default_manifest_file_base="requirements",
+        )
+
+        # Basic cases
+        assert matcher.is_match(Path("requirements.txt")) is True
+        assert matcher.is_match(Path("requirements3.txt")) is True
+        assert matcher.is_match(Path("a/b/c/requirements.txt")) is True
+        assert matcher.is_match(Path("a/b/c/requirements3.txt")) is True
+        assert matcher.is_match(Path("requirements.pip")) is True
+        assert matcher.is_match(Path("requirement.pip")) is True
+        assert matcher.is_match(Path("a/b/c/requirements.pip")) is True
+
+        # Non-standard requirements cases
+        assert matcher.is_match(Path("requirements.dev.txt")) is True
+        assert matcher.is_match(Path("requirements.dev3.txt")) is True
+        assert matcher.is_match(Path("requirements-prod.txt")) is True
+        assert matcher.is_match(Path("requirements-dev.txt")) is True
+        assert matcher.is_match(Path("dev-requirements.txt")) is True
+        assert matcher.is_match(Path("dev-requirements3.txt")) is True
+        assert matcher.is_match(Path("prod-requirements.txt")) is True
+        assert matcher.is_match(Path("requirements_lock.txt")) is True
+
+        # Requirement folder cases
+        assert matcher.is_match(Path("requirements/prod.txt")) is True
+        assert matcher.is_match(Path("a/b/c/requirements/base.txt")) is True
+        assert matcher.is_match(Path("a/b/c/requirements/hello/dev.txt")) is True
+
+        # Manifest cases
+        assert matcher.is_match(Path("a/b/c/requirements.in")) is True
+        assert matcher.is_match(Path("a/b/c/requirements-prod.in")) is True
+        assert matcher.is_match(Path("a/b/requirements/prod.in")) is True
+
+        # Non-requirements cases
+        assert matcher.is_match(Path("unknown.lock")) is False
+        assert matcher.is_match(Path("a/b/c/requirements/hello/unknown.lock")) is False
+
+    @pytest.mark.quick
+    @pytest.mark.parametrize(
+        ["source_files", "expected_subprojects"],
+        [
+            (
+                [
+                    Path("requirements.txt"),
+                    Path("requirements.in"),
+                    Path("a/b/c/requirements.txt"),
+                    Path("a/b/c/requirements.in"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.RequirementsIn()),
+                                        out.Fpath("requirements.in"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.PipRequirementsTxt()),
+                                        out.Fpath("requirements.txt"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("a/b/c"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.RequirementsIn()),
+                                        out.Fpath("a/b/c/requirements.in"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.PipRequirementsTxt()),
+                                        out.Fpath("a/b/c/requirements.txt"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    ),
+                ],
+            ),
+            (
+                [
+                    Path("requirements3.txt"),
+                    Path("requirements3.in"),
+                    Path("a/b/c/requirements3.txt"),
+                    Path("a/b/c/requirements.in"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.RequirementsIn()),
+                                        out.Fpath("requirements3.in"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.PipRequirementsTxt()),
+                                        out.Fpath("requirements3.txt"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("a/b/c"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.RequirementsIn()),
+                                        out.Fpath("a/b/c/requirements.in"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.PipRequirementsTxt()),
+                                        out.Fpath("a/b/c/requirements3.txt"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    ),
+                ],
+            ),
+            (
+                [
+                    Path("requirements-dev.txt"),
+                    Path("requirements.in"),
+                    Path("requirements-prod.txt"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.MultiLockfile(
+                                [
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements-dev.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements-prod.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                ]
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("dev-requirements.txt"),
+                    Path("requirements.in"),
+                    Path("prod-requirements.txt"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.MultiLockfile(
+                                [
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("dev-requirements.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("prod-requirements.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                ]
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+            (
+                [Path("requirements_lock.txt"), Path("requirements.in")],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.RequirementsIn()),
+                                        out.Fpath("requirements.in"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.PipRequirementsTxt()),
+                                        out.Fpath("requirements_lock.txt"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("requirements/dev.txt"),
+                    Path("requirements.in"),
+                    Path("requirements/prod.txt"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.MultiLockfile(
+                                [
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements/dev.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements/prod.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                ]
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("requirements/dev.txt"),
+                    Path("requirements.in"),
+                    Path("requirements/prod.txt"),
+                    Path("requirements/prod.in"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.MultiLockfile(
+                                [
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements/dev.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                    out.DependencySource(
+                                        out.ManifestLockfile(
+                                            (
+                                                out.Manifest(
+                                                    out.ManifestKind(
+                                                        out.RequirementsIn()
+                                                    ),
+                                                    out.Fpath("requirements/prod.in"),
+                                                ),
+                                                out.Lockfile(
+                                                    out.LockfileKind(
+                                                        out.PipRequirementsTxt()
+                                                    ),
+                                                    out.Fpath("requirements/prod.txt"),
+                                                ),
+                                            )
+                                        ),
+                                    ),
+                                ]
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("requirements/dev.txt"),
+                    Path("requirements/prod.txt"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.MultiLockfile(
+                                [
+                                    out.DependencySource(
+                                        out.LockfileOnly(
+                                            out.Lockfile(
+                                                out.LockfileKind(
+                                                    out.PipRequirementsTxt()
+                                                ),
+                                                out.Fpath("requirements/dev.txt"),
+                                            )
+                                        )
+                                    ),
+                                    out.DependencySource(
+                                        out.LockfileOnly(
+                                            out.Lockfile(
+                                                out.LockfileKind(
+                                                    out.PipRequirementsTxt()
+                                                ),
+                                                out.Fpath("requirements/prod.txt"),
+                                            )
+                                        )
+                                    ),
+                                ]
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Pypi()),
+                    )
+                ],
+            ),
+        ],
+    )
+    @pytest.mark.quick
+    def test_make_subprojects(
+        self, source_files: List[Path], expected_subprojects: List[out.Subproject]
+    ):
+        # with a basic requirements matcher
+        matcher = PipRequirementsMatcher(
+            base_file_pattern="*requirements*",
+            requirements_file_extensions=["txt", "pip"],
+            manifest_file_extension="in",
+            default_manifest_file_base="requirements",
+        )
+
+        source_files_set = frozenset(source_files)
+
+        # when we make subprojects from the provided source files
+        subprojects, used_files = matcher.make_subprojects(
+            fake_targets_of_paths(source_files_set)
+        )
+
+        # expect all files to be used
+        assert used_files == source_files_set
+
+        assert len(subprojects) == len(expected_subprojects)
+        assert subprojects.sort() == expected_subprojects.sort()
+
+
+class TestGradleMatcher:
+    @pytest.mark.quick
+    @pytest.mark.parametrize(
+        ["path", "expected_match"],
+        [
+            (Path("gradle.lockfile"), True),
+            (Path("build.gradle"), True),
+            (Path("settings.gradle"), True),
+            (Path("java/settings.gradle"), True),
+            (Path("java/gradle.lockfile"), True),
+            (Path("java/build.gradle"), True),
+            (Path("java/subproject_a/build.gradle"), True),
+            (Path("requirements.txt"), False),
+            (Path("a/b/c/requirements.txt"), False),
+            (Path("unknown.lock"), False),
+            (Path("a/b/c/requirements/hello/unknown.lock"), False),
+            (Path("java/gradle.whatever.lockfile"), True),
+            (Path("java/gradle-whatever.lockfile"), True),
+            (Path("java/gradle.whatever-lockfile"), False),
+            (Path("java/gradlelockfile"), False),
+        ],
+    )
+    def test_is_match(self, path: Path, expected_match: bool) -> None:
+        assert GradleMatcher().is_match(path) == expected_match
+
+    @pytest.mark.quick
+    @pytest.mark.parametrize(
+        ["source_files", "expected_subprojects", "unused_files"],
+        [
+            (
+                # this test case mimics the structure of micronaut-core:
+                # one large multi-project
+                # one separate single-build project at the same level as the multi-project's subprojects
+                [
+                    Path("build.gradle"),
+                    Path("settings.gradle"),
+                    Path("buildSrc/build.gradle"),
+                    Path("buildSrc/settings.gradle"),
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    out.ManifestKind(out.BuildGradle()),
+                                    out.Fpath("build.gradle"),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("buildSrc"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    out.ManifestKind(out.BuildGradle()),
+                                    out.Fpath("buildSrc/build.gradle"),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+            ),
+            (
+                # a variant with a lockfile at the top level
+                [
+                    Path("gradle.lockfile"),
+                    Path("build.gradle"),
+                    Path("settings.gradle"),
+                    Path("buildSrc/build.gradle"),
+                    Path("buildSrc/settings.gradle"),
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        kind=out.ManifestKind(value=out.BuildGradle()),
+                                        path=out.Fpath("build.gradle"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.GradleLockfile()),
+                                        out.Fpath("gradle.lockfile"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("buildSrc"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.BuildGradle()),
+                                    path=out.Fpath("buildSrc/build.gradle"),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+            ),
+            (
+                # a variant with no lockfile at the top level, but lockfile for one of the children
+                [
+                    Path("build.gradle"),
+                    Path("settings.gradle"),
+                    Path("buildSrc/build.gradle"),
+                    Path("buildSrc/gradle.lockfile"),
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.BuildGradle()),
+                                    path=out.Fpath("build.gradle"),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("buildSrc"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        kind=out.ManifestKind(value=out.BuildGradle()),
+                                        path=out.Fpath("buildSrc/build.gradle"),
+                                    ),
+                                    out.Lockfile(
+                                        kind=out.LockfileKind(out.GradleLockfile()),
+                                        path=out.Fpath("buildSrc/gradle.lockfile"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+            ),
+            (
+                # a variant with no build.gradle in the standalone project
+                [
+                    Path("gradle.lockfile"),
+                    Path("build.gradle"),
+                    Path("settings.gradle"),
+                    Path("buildSrc/settings.gradle"),
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        kind=out.ManifestKind(value=out.BuildGradle()),
+                                        path=out.Fpath("build.gradle"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.GradleLockfile()),
+                                        out.Fpath("gradle.lockfile"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("buildSrc"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.SettingsGradle()),
+                                    path=out.Fpath("buildSrc/settings.gradle"),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [
+                    Path("subdir_a/build.gradle"),
+                    Path("subdir_b/build.gradle"),
+                ],
+            ),
+            (
+                # mixing .gradle and .gradle.kts
+                [
+                    Path("gradle.lockfile"),
+                    Path("build.gradle"),
+                    Path("settings.gradle"),
+                    Path("buildSrc/settings.gradle.kts"),
+                    Path("subdir_a/build.gradle.kts"),
+                    Path("subdir_b/build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        kind=out.ManifestKind(value=out.BuildGradle()),
+                                        path=out.Fpath("build.gradle"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.GradleLockfile()),
+                                        out.Fpath("gradle.lockfile"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                    out.Subproject(
+                        root_dir=out.Fpath("buildSrc"),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.SettingsGradle()),
+                                    path=out.Fpath("buildSrc/settings.gradle.kts"),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [
+                    Path("subdir_a/build.gradle.kts"),
+                    Path("subdir_b/build.gradle"),
+                ],
+            ),
+            (
+                # a very simple single-project build with only a build.gradle
+                [
+                    Path("build.gradle"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.BuildGradle()),
+                                    path=out.Fpath("build.gradle"),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [],
+            ),
+            (
+                # a very simple project with only a build.gradle.kts file
+                [
+                    Path("build.gradle.kts"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestOnly(
+                                out.Manifest(
+                                    kind=out.ManifestKind(value=out.BuildGradleKts()),
+                                    path=out.Fpath("build.gradle.kts"),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [],
+            ),
+            (
+                # using a custom-named gradle lockfile
+                [
+                    Path("build.gradle"),
+                    Path("gradle.custom.lockfile"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        kind=out.ManifestKind(value=out.BuildGradle()),
+                                        path=out.Fpath("build.gradle"),
+                                    ),
+                                    out.Lockfile(
+                                        kind=out.LockfileKind(
+                                            value=out.GradleLockfile()
+                                        ),
+                                        path=out.Fpath("gradle.custom.lockfile"),
+                                    ),
+                                )
+                            ),
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Maven()),
+                    ),
+                ],
+                [],
+            ),
+        ],
+    )
+    @pytest.mark.quick
+    def test_make_subprojects(
+        self,
+        source_files: List[Path],
+        expected_subprojects: List[out.Subproject],
+        unused_files: List[Path],
+    ):
+        matcher = GradleMatcher()
+
+        source_files_set = frozenset(source_files)
+
+        # when we make subprojects from the provided source files
+        subprojects, used_files = matcher.make_subprojects(
+            fake_targets_of_paths(source_files_set)
+        )
+
+        # expect all files to be used except those in unused_files
+        assert used_files == (source_files_set - set(unused_files))
+
+        # and expect the returned subprojects to match, ignoring order
+        expected = set(expected_subprojects)
+        assert len(subprojects) == len(expected_subprojects)
+        for subproject in subprojects:
+            assert subproject in expected
+
+
+class TestDefaultMatchers:
+    @pytest.mark.parametrize(
+        ["source_files", "expected_subprojects"],
+        [
+            (
+                [
+                    Path("bun.lock"),
+                    Path("package.json"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.PackageJson()),
+                                        out.Fpath("package.json"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.BunLock()),
+                                        out.Fpath("bun.lock"),
+                                    ),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Npm()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("bun.lockb"),
+                    Path("package.json"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.PackageJson()),
+                                        out.Fpath("package.json"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.BunLock()),
+                                        out.Fpath("bun.lock"),
+                                    ),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Npm()),
+                    )
+                ],
+            ),
+            (
+                [
+                    Path("foo/bun.lockb"),
+                    Path("foo/package.json"),
+                ],
+                [
+                    out.Subproject(
+                        root_dir=out.Fpath("."),
+                        dependency_source=out.DependencySource(
+                            out.ManifestLockfile(
+                                (
+                                    out.Manifest(
+                                        out.ManifestKind(out.PackageJson()),
+                                        out.Fpath("foo/package.json"),
+                                    ),
+                                    out.Lockfile(
+                                        out.LockfileKind(out.BunLock()),
+                                        out.Fpath("foo/bun.lock"),
+                                    ),
+                                )
+                            )
+                        ),
+                        ecosystem=out.Ecosystem(value=out.Npm()),
+                    )
+                ],
+            ),
+        ],
+    )
+    @pytest.mark.quick
+    def test_make_subprojects(
+        self, source_files: List[Path], expected_subprojects: List[out.Subproject]
+    ):
+        source_files_set = fake_targets_of_paths(source_files)
+
+        first_match: Tuple[List[out.Subproject], FrozenSet[Path]] = ([], frozenset())
+        for matcher in MATCHERS:
+            result = matcher.make_subprojects(source_files_set)
+            if result != ([], frozenset()):
+                first_match = result
+                break
+
+        subprojects, used_files = first_match
+
+        # expect all files to be used
+        assert used_files == fpaths_of_targets(source_files_set)
+
+        assert len(subprojects) == len(expected_subprojects)
+        assert subprojects.sort() == expected_subprojects.sort()
+
+
+class TestBazelMavenInstallMatcher:
+    @pytest.mark.quick
+    @pytest.mark.parametrize(
+        ["path", "expected_match"],
+        [
+            (Path("maven_install.json"), True),
+            (Path("MODULE.bazel"), True),
+            (Path("WORKSPACE"), True),
+            (Path("WORKSPACE.bazel"), True),
+            (Path("3rdparty/maven_install.json"), True),
+            (Path("some/nested/MODULE.bazel"), True),
+            (Path("pom.xml"), False),
+            (Path("maven_dep_tree.txt"), False),
+            (Path("build.gradle"), False),
+        ],
+    )
+    def test_is_match(self, path: Path, expected_match: bool) -> None:
+        assert BazelMavenInstallMatcher().is_match(path) == expected_match
+
+    @pytest.mark.quick
+    def test_maven_install_next_to_module_bazel(self) -> None:
+        """Lockfile and MODULE.bazel both at repo root — the canonical case."""
+        source_files = fake_targets_of_paths(
+            [Path("MODULE.bazel"), Path("maven_install.json")]
+        )
+        subprojects, used = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        sp = subprojects[0]
+        assert sp.root_dir == out.Fpath(".")
+        assert sp.ecosystem == out.Ecosystem(out.Maven())
+        ds = sp.dependency_source.value
+        assert isinstance(ds, out.ManifestLockfile)
+        manifest, lockfile = ds.value
+        assert manifest.kind == out.ManifestKind(out.ModuleBazel())
+        assert manifest.path == out.Fpath("MODULE.bazel")
+        assert lockfile.kind == out.LockfileKind(out.MavenInstallJson())
+        assert lockfile.path == out.Fpath("maven_install.json")
+        assert used == fpaths_of_targets(source_files)
+
+    @pytest.mark.quick
+    def test_lockfile_in_subdirectory_attributes_to_workspace_root(self) -> None:
+        """A maven_install.json under 3rdparty/ still resolves to the repo-root workspace.
+        The subproject root_dir is the workspace root, not the lockfile parent."""
+        source_files = fake_targets_of_paths(
+            [Path("MODULE.bazel"), Path("3rdparty/maven_install.json")]
+        )
+        subprojects, _ = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        assert subprojects[0].root_dir == out.Fpath(".")
+        ds = subprojects[0].dependency_source.value
+        assert isinstance(ds, out.ManifestLockfile)
+        _manifest, lockfile = ds.value
+        assert lockfile.path == out.Fpath("3rdparty/maven_install.json")
+
+    @pytest.mark.quick
+    def test_legacy_workspace_marker(self) -> None:
+        """A repo with only a legacy WORKSPACE (no MODULE.bazel) is still recognized."""
+        source_files = fake_targets_of_paths(
+            [Path("WORKSPACE"), Path("maven_install.json")]
+        )
+        subprojects, _ = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        ds = subprojects[0].dependency_source.value
+        assert isinstance(ds, out.ManifestLockfile)
+        manifest, _lockfile = ds.value
+        assert manifest.path == out.Fpath("WORKSPACE")
+
+    @pytest.mark.quick
+    def test_module_bazel_preferred_over_workspace(self) -> None:
+        """When both markers exist at the same root, prefer MODULE.bazel (bzlmod)."""
+        source_files = fake_targets_of_paths(
+            [Path("MODULE.bazel"), Path("WORKSPACE"), Path("maven_install.json")]
+        )
+        subprojects, _ = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        ds = subprojects[0].dependency_source.value
+        assert isinstance(ds, out.ManifestLockfile)
+        manifest, _ = ds.value
+        assert manifest.path == out.Fpath("MODULE.bazel")
+
+    @pytest.mark.quick
+    def test_multiple_lockfiles_under_one_workspace_collapse(self) -> None:
+        """Two maven_install.json files under one workspace produce one
+        subproject with a MultiLockfile dep source."""
+        source_files = fake_targets_of_paths(
+            [
+                Path("MODULE.bazel"),
+                Path("3rdparty/maven_install.json"),
+                Path("build/maven_install.json"),
+            ]
+        )
+        subprojects, _ = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        ds = subprojects[0].dependency_source.value
+        assert isinstance(ds, out.MultiLockfile)
+        assert len(ds.value) == 2
+
+    @pytest.mark.quick
+    def test_orphan_lockfile_without_workspace_marker(self) -> None:
+        """A maven_install.json with no ancestor workspace marker still yields
+        a lockfile-only subproject rather than being silently dropped."""
+        source_files = fake_targets_of_paths([Path("orphan/maven_install.json")])
+        subprojects, _ = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert len(subprojects) == 1
+        assert subprojects[0].root_dir == out.Fpath("orphan")
+        ds = subprojects[0].dependency_source.value
+        assert isinstance(ds, out.LockfileOnly)
+
+    @pytest.mark.quick
+    def test_no_lockfile_yields_no_subproject(self) -> None:
+        """A workspace with a MODULE.bazel but no maven_install.json is not
+        an SCA subproject as far as this matcher is concerned."""
+        source_files = fake_targets_of_paths([Path("MODULE.bazel")])
+        subprojects, used = BazelMavenInstallMatcher().make_subprojects(source_files)
+
+        assert subprojects == []
+        assert used == frozenset()
+
+
+@pytest.mark.quick
+def test_filter_dependency_source_files():
+    valid_paths = fake_targets_of_paths(
+        {Path("Pipfile.lock"), Path("requirements.txt")}
+    )
+    invalid_paths = fake_targets_of_paths({Path("unknown.lock")})
+    candidates = valid_paths | invalid_paths
+
+    filtered_paths = filter_dependency_source_files(candidates)
+
+    assert filtered_paths == valid_paths

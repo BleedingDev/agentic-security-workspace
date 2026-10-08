@@ -1,0 +1,13 @@
+Test name: without git > basic gitignore
+--- Files not added to git ---
+.gitignore
+a
+b
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+--- Selected targets ---
+selected .gitignore
+selected a
+selected b
+--- Skipped targets ---

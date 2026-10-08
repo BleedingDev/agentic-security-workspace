@@ -1,0 +1,32 @@
+(*
+   Copyright (c) 2023-2024 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(* A Semgrep.dev token representing your identity.
+ * This is stored in ~/.semgrep/settings.yml and initially fetched
+ * from https://semgrep.dev during 'semgrep login'
+ *)
+type token = Token of string
+
+let string_of_token (Token str) = str
+
+(* TODO: remove at some point and force to get first a semgrep capability *)
+
+let unsafe_token_of_string str = Token str
+let auth_header_of_token (Token str) = ("Authorization", "Bearer " ^ str)
+
+(* TODO: improve this to be more accurate to what the token actually is. (Is it
+   a JWT? etc.) *)
+let well_formed token =
+  let (Token str) = token in
+  String.length str > 0
+
+let equal (Token a) (Token b) = String.equal a b

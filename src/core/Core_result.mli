@@ -1,0 +1,156 @@
+(*
+   Copyright (c) 2021-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(* One match *)
+type processed_match = {
+  pm : Core_match.t;
+  (* semgrep-core is now responsible for the nosemgrep and autofix *)
+  is_ignored : bool;
+  autofix_edit : Textedit.t option;
+}
+[@@deriving show]
+
+(* Final match result for all the files and all the rules *)
+type t = {
+  processed_matches : processed_match list;
+  errors : Core_error.t list;
+  (* Fixpoint timeouts happen more often than we would like, and it's mainly
+    Semgrep devs that will use this info for debugging, so for now we are
+    separating these timeouts and reporting them as profiling data instead.
+    See 'OSS/src/rule/semgrep_output_v1.atd'. *)
+  fixpoint_timeouts : Core_error.t list;
+  (* The targets are all the files that were considered valid targets for the
+   * semgrep scan. This excludes files that were filtered out on purpose
+   * due to being in the wrong language, too big, etc.
+   * It includes targets that couldn't be scanned, for instance due to
+   * a parsing error.
+   * TODO: are we actually doing that? this was a comment
+   * for Core_scan.scan but I'm not sure we're doing it.
+   *)
+  scanned : Target.t list;
+  (* extra information useful to also give to the user (in JSON or
+   * in textual reports) or for tools (e.g., the playground).
+   *)
+  skipped_targets : Semgrep_output_v1_t.skipped_target list;
+  skipped_rules : Rule_error.invalid_rule list;
+  (*
+     valid_rules: deduplicated, valid rules
+     rules_with_targets: subset of valid_rules applicable to one or more target
+  *)
+  valid_rules : Rule.rule list;
+  rules_with_targets : Rule.rule list;
+  quick_profiling : Core_quick_profiling.t option;
+  (* THINK(iago): If we deprecated `-json_time` we could perhaps merge
+      'quick_profiling' with 'profiling'. *)
+  profiling : Core_profiling.t option;
+  explanations : Matching_explanation.t list option;
+  rules_by_engine : (Rule_ID.t * Engine_kind.t) list;
+  interfile_languages_used : Analyzer.t list;
+  (* Scan-adjacent information optionally collected to enable
+     SSC features.
+     This information must be collected here, at the point that we
+     return from the core engine.
+  *)
+  symbol_analysis : Semgrep_output_v1_t.symbol_analysis option;
+}
+[@@deriving show]
+
+type result_or_exn = (t, Exception.t) result
+
+(* just set default values for is_ignored (false) and autofix_edit (None) *)
+val mk_processed_match : Core_match.t -> processed_match
+
+(* Intermediate match result.
+ * The 'a below can be substituted with different profiling types
+ * in Core_profiling.ml.
+ * This usually represents the match results for one target file
+ * (possibly matches coming from more than one rule).
+ *)
+
+type 'a match_result = {
+  matches : Core_match.t list;
+  errors : Core_error.ErrorSet.t;
+  (* THINK: We could merge 'quick_profiling' and 'profiling', having a record type
+    like: type 'a t = { parsing_stats : ...; ...; extra : 'a option; } ??? *)
+  quick_profiling : Core_quick_profiling.t option;
+  profiling : 'a option;
+  explanations : Matching_explanation.t list;
+}
+[@@deriving show]
+
+(* shortcuts *)
+type matches_single_file = Core_profiling.partial_profiling match_result
+[@@deriving show]
+
+type matches_single_file_with_time = Core_profiling.file_profiling match_result
+[@@deriving show]
+
+(* take the match results for each file, all the rules, all the targets,
+ * and build the final result
+ *)
+val mk_result :
+  matches_single_file_with_time list ->
+  (Rule.rule * Engine_kind.t) list ->
+  Rule_error.invalid_rule list ->
+  Target.t list ->
+  Analyzer.t list ->
+  rules_parse_time:float ->
+  t
+
+(* This is useful when an exn was raised during a scan but we
+ * still need to print a core_result on stdout in JSON. In that
+ * case we usually transform the exn into a Core_error that gets
+ * added in the errors field.
+ * This is also used for semgrep-core metachecker (-check_rules)
+ *)
+val mk_result_with_just_errors : Core_error.t list -> t
+val empty_match_result : Core_profiling.times match_result
+
+val mk_match_result :
+  Core_match.t list -> Core_error.ErrorSet.t -> 'a -> 'a match_result
+
+val quick_add_parse_time_opt :
+  Fpath.t -> float option -> 'a match_result -> 'a match_result
+
+val quick_add_match_time :
+  Fpath.t -> Rule_ID.t -> float -> 'a match_result -> 'a match_result
+
+val quick_add_taint_stats :
+  Core_quick_profiling.Tainting_stats.t -> 'a match_result -> 'a match_result
+
+(* match results profiling adjustment helpers *)
+val map_profiling : ('a -> 'b) -> 'a match_result -> 'b match_result
+
+val add_run_time :
+  Fpath.t ->
+  float option ->
+  matches_single_file ->
+  matches_single_file_with_time
+
+val add_rule :
+  Rule.rule ->
+  Core_profiling.times match_result ->
+  Core_profiling.rule_profiling match_result
+
+(* aggregate results *)
+val collate_pattern_results :
+  Core_profiling.times match_result list -> Core_profiling.times match_result
+
+val collate_rule_results :
+  Fpath.t ->
+  Core_profiling.rule_profiling match_result list ->
+  (* a.k.a matches_single_file *)
+  Core_profiling.partial_profiling match_result
+
+val compare_processed_match : processed_match -> processed_match -> int
+(** Compare two matches so as to sort them by location
+    (file, line, position) *)

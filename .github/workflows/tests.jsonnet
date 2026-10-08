@@ -1,0 +1,360 @@
+// The goals of this workflow are to check that:
+// - we can build semgrep-core and pysemgrep
+// - all our semgrep-core and pysemgrep (and osemgrep) tests are passing
+// - we can build a Docker image (for amd64 and arm64)
+// - we can build Linux and MacOS binaries and python "wheels" for pypi
+//   (also for amd64 and arm64)
+// - we don't have any perf regressions in our benchmarks
+
+local actions = import 'libs/actions.libsonnet';
+local gha = import 'libs/gha.libsonnet';
+local semgrep = import 'libs/semgrep.libsonnet';
+local uses = import 'libs/uses.libsonnet';
+
+// some jobs rely on artifacts produced by these workflow
+local core_x86 = import 'build-test-core-x86.jsonnet';
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+// Bence's automatic snapshot update PR
+
+local failure_and_right_event =
+  "failure() && github.event_name == 'pull_request' && (github.actor != 'dependabot[bot]' && !(github.event.pull_request.head.repo.full_name != github.repository))";
+
+local snapshot_update_pr_steps(add_paths, repo_name) = [
+  // because of the fail-fast setting, we expect only the fastest failing
+  // job to get to the steps below
+  {
+    name: 'Prepare repo for snapshot commit',
+    'if': 'failure()',
+    run: |||
+      # the commit step that follows will fail to fetch the pfff submodule
+      # (perhaps because of the github token's permissions)
+      # so we disable recursive fetching
+      git config fetch.recurseSubmodules false
+    |||,
+  },
+  {
+    name: 'Configure git creds for push',
+    id: 'configure-creds',
+    'if': failure_and_right_event,
+    run: |||
+      echo "machine github.com" >> ~/.netrc
+      echo "login ${{ github.repository }}" >> ~/.netrc
+      echo "password ${{ secrets.GITHUB_TOKEN }}" >> ~/.netrc
+    |||,
+  },
+  {
+    name: 'Commit snapshot updates',
+    id: 'snapshot-commit',
+    'if': failure_and_right_event,
+    uses: uses.EndBug.add_and_commit,
+    with: {
+      add: add_paths,
+      default_author: 'github_actions',
+      message: 'Update pytest snapshots',
+      new_branch: 'snapshot-updates-${{ github.run_id }}-${{ github.run_attempt }}',
+    },
+  },
+  {
+    name: 'Remove Credentials',
+    id: 'remove-creds',
+    'if': failure_and_right_event,
+    run: 'rm ~/.netrc',
+  },
+  {
+    name: 'Comment about any snapshot updates',
+    'if': "failure() && steps.snapshot-commit.outputs.pushed == 'true'",
+    env: {
+      PULL_REQUEST_NUMBER: '${{ github.event.pull_request.number }}',
+      COMMIT_LONG_SHA: '${{ steps.snapshot-commit.outputs.commit_long_sha }}',
+      COMMIT_SHA: '${{ steps.snapshot-commit.outputs.commit_sha }}',
+      GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
+    },
+    run: |||
+      echo ":camera_flash: The pytest shapshots changed in your PR." >> /tmp/message.txt
+      echo "Please carefully review these changes and make sure they are intended:" >> /tmp/message.txt
+      echo >> /tmp/message.txt
+      echo "1. Review the changes at https://github.com/semgrep/%(repo_name)s/commit/$COMMIT_LONG_SHA" >> /tmp/message.txt
+      echo "2. Accept the new snapshots with" >> /tmp/message.txt
+      echo >> /tmp/message.txt
+      echo "       git fetch origin && git cherry-pick \"$COMMIT_SHA\" && git push" >> /tmp/message.txt
+
+      gh pr comment "$PULL_REQUEST_NUMBER" --body-file /tmp/message.txt
+    ||| % { repo_name: repo_name },
+  },
+];
+
+// ----------------------------------------------------------------------------
+// Semgrep-core and osemgrep jobs
+// ----------------------------------------------------------------------------
+
+// This is mostly the same that in build-test-core-x86.jsonnet
+// but without the artifact creation and with more tests.
+// alt: we could factorize
+local test_semgrep_core_job =
+  semgrep.containers.ocaml_alpine.job(
+    actions.checkout_with_submodules() +
+    semgrep.build_test_steps()
+  );
+
+// alt: could factorize with previous job
+local test_osemgrep_job =
+  semgrep.containers.ocaml_alpine.job(
+    actions.checkout_with_submodules() +
+    [
+      semgrep.opam_setup(),
+    ] +
+    semgrep.osemgrep_test_steps_after_checkout
+  );
+
+// ----------------------------------------------------------------------------
+// Pytests
+// ----------------------------------------------------------------------------
+
+// Factorize a few steps for the test_xxx jobs below
+
+// alt: could just use submodule:true, not sure it's worth the opti
+local fetch_submodules_step = {
+  name: 'Fetch semgrep-cli submodules',
+  run: 'git submodule update --init --recursive --recommend-shallow cli/src/semgrep/semgrep_interfaces',
+};
+
+local download_x86_artifacts =
+  actions.download_artifact_step(core_x86.export.artifact_name, path='artifacts');
+
+local install_x86_artifacts = {
+  name: 'Install artifacts',
+  run: |||
+    # upload-artifact does not preserve the executable bit
+    # (https://github.com/actions/upload-artifact#permission-loss),
+    # so restore it before installing semgrep-core.
+    chmod +x artifacts/*
+    #alt: put it in cli/src/semgrep/bin/, like make copy-core-for-cli
+    sudo cp artifacts/* /usr/bin
+  |||,
+};
+
+
+local install_python_deps = {
+  name: 'Install Python dependencies',
+  'working-directory': 'cli',
+  run: 'uv sync --locked',
+};
+
+// Run pytest with many python versions
+local test_cli_job = {
+  name: 'test semgrep-cli',
+  'runs-on': 'ubuntu-22.04',
+  needs: [
+    // Needed for semgrep-core
+    'build-test-core-x86',
+  ],
+  permissions: gha.pull_request_permissions,
+  strategy: {
+    matrix: {
+      python: [
+        '3.10',
+        '3.11',
+        '3.12',
+        '3.13',
+        '3.14',
+      ],
+    },
+  },
+  steps:
+    actions.checkout() +
+    [
+      fetch_submodules_step,
+      actions.setup_python_step('${{ matrix.python }}'),
+      install_python_deps,
+      download_x86_artifacts,
+      install_x86_artifacts,
+      {
+        name: 'Run pytest',
+        'working-directory': 'cli',
+        // The --snapshot-update below works with the snapshot_update_pr_steps.
+        //
+        run: |||
+          # tests should simulate CI environment iff they need one
+          unset CI
+          unset "${!GITHUB_@}"
+          # TODO(jmgrosen): this is a temporary hack to fix snapshot output
+          # formatting in OSS tests. See #5493.
+          export COLUMNS=80
+
+          PYTEST_EXTRA_ARGS="--snapshot-update --allow-snapshot-deletion" make ci-test
+        |||,
+      },
+    ] + snapshot_update_pr_steps(
+      add_paths='cli/tests/default/e2e/snapshots',
+      repo_name='semgrep'
+    ),
+};
+
+// These tests aren't run by default by pytest.
+// To reproduce errors locally, use:
+//   $ cd cli/tests
+//   $ make qa
+
+local test_qa_job = {
+  name: 'quality assurance on semgrep',
+  'runs-on': 'ubuntu-22.04',
+  needs: [
+    'build-test-core-x86',
+  ],
+  strategy: {
+    'fail-fast': false,
+    matrix: {
+      split: [
+        1,
+        2,
+        3,
+        4,
+      ],
+    },
+  },
+  steps:
+    actions.checkout() +
+    [
+      // Is it indented that we also fetch tests/semgrep-rules?
+      {
+        name: 'Fetch semgrep-cli submodules',
+        run: 'git submodule update --init --recursive --recommend-shallow cli/src/semgrep/semgrep_interfaces tests/semgrep-rules',
+      },
+      actions.setup_python_step(semgrep.python_version),
+      download_x86_artifacts,
+      install_x86_artifacts,
+      // TODO: mostly like install_python_deps with PATH adjustment
+      {
+        name: 'Install semgrep',
+        'working-directory': 'cli',
+        run: |||
+          export PATH=/github/home/.local/bin:$PATH
+          uv sync --locked
+        |||,
+      },
+      {
+        uses: uses.actions.cache,
+        with: {
+          path: '~/.cache/qa-public-repos',
+          key: "qa-public-repos-${{ hashFiles('semgrep/tests/qa/*public_repos*') }}-${{ matrix.split }}",
+        },
+      },
+      {
+        run: |||
+          mkdir -p ~/.cache/qa-public-repos
+          touch ~/.cache/qa-public-repos/ok
+        |||,
+      },
+      {
+        name: 'Test semgrep',
+        'working-directory': 'cli',
+        run: |||
+          export PATH=/github/home/.local/bin:$PATH
+          uv run pytest -n auto -vv --tb=short --splits 4 --group ${{ matrix.split }} tests/qa
+        |||,
+        env: {
+          QA_TESTS_CACHE_PATH: '~/.cache/qa-public-repos',
+        },
+      },
+    ],
+};
+
+// ----------------------------------------------------------------------------
+// Benchmarks
+// ----------------------------------------------------------------------------
+
+local bench_prepare_steps =
+  actions.checkout() +
+  [
+    fetch_submodules_step,
+    actions.setup_python_step(semgrep.default_python_version),
+    download_x86_artifacts,
+    install_x86_artifacts,
+    install_python_deps,
+  ];
+
+// Run abbreviated version of benchmarks to check that they work
+local benchmarks_lite_job = {
+  'runs-on': 'ubuntu-22.04',
+  needs: [
+    'build-test-core-x86',
+  ],
+  steps: bench_prepare_steps + [
+    {
+      name: 'Test dummy benchmarks on latest',
+      'working-directory': 'cli',
+      run: |||
+        uv run semgrep --version
+        uv run semgrep-core -version
+        uv run python3 ../perf/run-benchmarks --dummy
+      |||,
+    },
+  ],
+};
+
+
+// ----------------------------------------------------------------------------
+// Docker
+// ----------------------------------------------------------------------------
+
+local build_test_docker_job = {
+  uses: './.github/workflows/build-test-docker.yml',
+};
+
+local right_ref_and_right_event =
+  "github.ref == 'refs/heads/develop' || (github.actor != 'dependabot[bot]' && !(github.event.pull_request.head.repo.full_name != github.repository))";
+
+// ----------------------------------------------------------------------------
+// The Workflow
+// ----------------------------------------------------------------------------
+
+// Do not run all the tests if you only modify the README.md or other docs
+local ignore_md = {
+  'paths-ignore': [
+    '**.md',
+  ],
+};
+
+{
+  name: 'tests',
+  on: {
+    workflow_dispatch: null,
+    pull_request: ignore_md,
+    push: {
+      branches: [
+        'develop',
+      ],
+    } + ignore_md,
+  },
+  // These extra permissions are needed by some of the jobs
+  // (e.g. build-test-javascript)
+  permissions: gha.write_permissions,
+  jobs: {
+    'test-semgrep-core': test_semgrep_core_job,
+    'test-osemgrep': test_osemgrep_job,
+    // Pysemgrep tests that require check-semgrep-pro
+    'test-cli': test_cli_job,
+    // Pysemgrep tests that require build-test-core-x86
+    'test-qa': test_qa_job,
+    'benchmarks-lite': benchmarks_lite_job,
+    // Docker stuff
+    'build-test-docker': build_test_docker_job,
+    'build-test-core-x86': {
+      uses: './.github/workflows/build-test-core-x86.yml',
+    },
+    'build-test-osx-x86': {
+      uses: './.github/workflows/build-test-osx-x86.yml',
+    },
+    'build-test-osx-arm64': {
+      uses: './.github/workflows/build-test-osx-arm64.yml',
+    },
+  },
+  export:: {
+    // Used in semgrep-proprietary.
+    snapshot_update_pr_steps: snapshot_update_pr_steps,
+  },
+}

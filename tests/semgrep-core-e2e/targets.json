@@ -1,0 +1,12 @@
+["Targets",
+  [
+    ["CodeTarget", {
+      "path": {
+        "fpath": "tests/semgrep-core-e2e/targets/basic.py",
+        "ppath": "/tests/semgrep-core-e2e/targets/basic.py"
+      },
+      "analyzer": "python",
+      "products":["sast"]
+    }]
+  ]
+]

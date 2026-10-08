@@ -1,0 +1,314 @@
+#
+# Copyright (c) 2024-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+import json
+
+import pytest
+from tests.conftest import _clean_stdout
+from tests.conftest import skip_on_windows
+from tests.fixtures import RunSemgrep
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__top(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp("rules/regex/regex-top.yaml").stdout, "results.json"
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__utf8(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-utf8.yaml", target_name="basic/regex-utf8.txt"
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__utf8_on_image(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    # https://github.com/returntocorp/semgrep/issues/4258
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-utf8.yaml",
+            target_name="image/semgrep.png",
+            options=["--no-exclude-binary-files"],
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__child(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp("rules/regex/regex-child.yaml").stdout, "results.json"
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__not(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/pattern-not-regex/regex-not.yaml", target_name="basic/stupid.py"
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__not2(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/pattern-not-regex/regex-not2.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__pattern_regex_and_pattern_not_regex(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot
+):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/pattern-not-regex/regex-not-with-pattern-regex.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_rule__issue2465(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/pattern-not-regex/issue2465.yaml",
+            target_name="pattern-not-regex/issue2465.requirements.txt",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail
+@skip_on_windows  # indented output from posix snapshot
+def test_regex_rule__invalid_expression(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    stdout, stderr = run_semgrep_in_tmp(
+        "rules/regex/regex-invalid.yaml", assert_exit_code=2
+    )
+    posix_snapshot.assert_match(stderr, "error.txt")
+    posix_snapshot.assert_match(_clean_stdout(stdout), "error.json")
+
+
+# https://github.com/returntocorp/semgrep/pull/8510
+@pytest.mark.kinda_slow
+def test_metavariable_regex_const_prop(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-const-prop.yaml",
+            target_name="metavariable_propagation/metavariable-regex-const-prop.dockerfile",
+        ).stdout,
+        "results.json",
+    )
+
+
+# https://github.com/returntocorp/semgrep/pull/8510
+@pytest.mark.kinda_slow
+def test_metavariable_regex_rule(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp("rules/metavariable-regex/metavariable-regex.yaml").stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_metavariable_regex_multi_rule(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-multi-rule.yaml"
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_metavariable_multi_regex_rule(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-multi-regex.yaml"
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_with_any_language_rule(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-any-language.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_with_any_language_multiple_rule(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot
+):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-any-language-multiple.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.osemfail
+@pytest.mark.kinda_slow
+@skip_on_windows  # indented output from posix snapshot
+def test_invalid_regex_with_any_language_rule(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot
+):
+    stdout, stderr = run_semgrep_in_tmp(
+        "rules/regex/regex-any-language-invalid.yaml",
+        target_name="basic/regex-any-language.html",
+        assert_exit_code=7,
+    )
+    posix_snapshot.assert_match(stderr, "error.txt")
+    posix_snapshot.assert_match(_clean_stdout(stdout), "error.json")
+
+
+@pytest.mark.kinda_slow
+def test_regex_with_any_language_rule_none_alias(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot
+):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-any-language-alias-none.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_regex_with_any_language_multiple_rule_none_alias(
+    run_semgrep_in_tmp: RunSemgrep, posix_snapshot
+):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/regex/regex-any-language-multiple-alias-none.yaml",
+            target_name="basic/regex-any-language.html",
+        ).stdout,
+        "results.json",
+    )
+
+
+# https://github.com/returntocorp/semgrep/pull/8510
+@pytest.mark.kinda_slow
+def test_metavariable_propagation_regex(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/metavariable_propagation/metavariable-regex-propagation.yaml",
+            target_name="metavariable_propagation/metavariable-regex-propagation.py",
+        ).stdout,
+        "results.json",
+    )
+
+
+@pytest.mark.kinda_slow
+def test_pattern_regex_empty_file(run_semgrep_in_tmp: RunSemgrep, posix_snapshot):
+    posix_snapshot.assert_match(
+        run_semgrep_in_tmp(
+            "rules/pattern-regex-empty-file.yaml",
+            target_name="empty/totally_empty_file",
+        ).stdout,
+        "results.json",
+    )
+
+
+# Regression test for ENGINE-2932: a capture-group metavariable-regex used to
+# emit two findings on the same range -- the correct one (with $ALG bound) plus
+# a bare duplicate whose message still read "a hash $ALG was detected". We must
+# get exactly one finding, with $ALG substituted.
+@pytest.mark.kinda_slow
+def test_metavariable_regex_capture_group_no_duplicate(run_semgrep_in_tmp: RunSemgrep):
+    results = json.loads(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-capture-group.yaml",
+            target_name="metavariable_regex_capture/capture-group.py",
+        ).stdout
+    )["results"]
+    assert len(results) == 1
+    message = results[0]["extra"]["message"]
+    assert "$ALG" not in message
+    assert message == "a hash Sha512_256 was detected"
+
+
+# Regression test for ENGINE-2932: a metavariable-pattern that binds a new
+# metavariable ($Y) must return only the augmented finding, not a bare duplicate
+# whose message still reads "found secret argument $Y".
+@pytest.mark.kinda_slow
+def test_metavariable_pattern_binding_no_duplicate(run_semgrep_in_tmp: RunSemgrep):
+    results = json.loads(
+        run_semgrep_in_tmp(
+            "rules/metavariable-pattern/metavariable-pattern-binding.yaml",
+            target_name="metavariable_pattern_binding/binding.py",
+        ).stdout
+    )["results"]
+    assert len(results) == 1
+    message = results[0]["extra"]["message"]
+    assert "$Y" not in message
+    assert message == 'found secret argument "password"'
+
+
+# Regression test for ENGINE-2932: when a capture-group regex matches the
+# metavariable value multiple times, every binding-set must be preserved as its
+# own finding with the metavariable substituted -- and none left unsubstituted.
+@pytest.mark.kinda_slow
+def test_metavariable_regex_capture_group_multi_match(run_semgrep_in_tmp: RunSemgrep):
+    results = json.loads(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-capture-group-multi.yaml",
+            target_name="metavariable_regex_capture/capture-group-multi.py",
+        ).stdout
+    )["results"]
+    messages = sorted(r["extra"]["message"] for r in results)
+    assert all("$ALG" not in m for m in messages)
+    assert messages == [
+        "a hash Sha1 was detected",
+        "a hash Sha256 was detected",
+        "a hash Sha384 was detected",
+    ]
+
+
+# Regression test for ENGINE-2932: a binding condition combined with a
+# non-binding one (which contributes an empty binding-set) must NOT resurrect a
+# bare, unsubstituted duplicate finding. Exactly one substituted finding.
+@pytest.mark.kinda_slow
+def test_metavariable_regex_mixed_conditions_no_duplicate(
+    run_semgrep_in_tmp: RunSemgrep,
+):
+    results = json.loads(
+        run_semgrep_in_tmp(
+            "rules/metavariable-regex/metavariable-regex-mixed-conditions.yaml",
+            target_name="metavariable_regex_capture/mixed-conditions.py",
+        ).stdout
+    )["results"]
+    assert len(results) == 1
+    message = results[0]["extra"]["message"]
+    assert "$ALG" not in message
+    assert message == "a hash Sha512_256 was detected"

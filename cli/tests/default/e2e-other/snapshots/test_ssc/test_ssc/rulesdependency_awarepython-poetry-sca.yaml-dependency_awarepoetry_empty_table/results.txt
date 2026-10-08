@@ -1,0 +1,113 @@
+=== exit code
+0
+=== end of exit code
+
+=== stdout - plain
+{
+  "engine_requested": "OSS",
+  "errors": [],
+  "paths": {
+    "scanned": [
+      "targets/dependency_aware/poetry_empty_table/poetry.lock"
+    ]
+  },
+  "profiling_results": [],
+  "results": [
+    {
+      "check_id": "rules.dependency_aware.python-poetry-sca",
+      "end": {
+        "col": 1,
+        "line": 103,
+        "offset": 0
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "0x42",
+        "lines": "requires login",
+        "message": "oh no",
+        "metadata": {},
+        "sca_info": {
+          "dependency_match": {
+            "dependency_pattern": {
+              "ecosystem": "pypi",
+              "package": "faker",
+              "semver_range": "<= 13.11.1"
+            },
+            "found_dependency": {
+              "allowed_hashes": {},
+              "children": [],
+              "ecosystem": "pypi",
+              "line_number": 103,
+              "lockfile_path": "targets/dependency_aware/poetry_empty_table/poetry.lock",
+              "manifest_path": "targets/dependency_aware/poetry_empty_table/pyproject.toml",
+              "package": "faker",
+              "transitivity": "direct",
+              "version": "1.0.0"
+            },
+            "lockfile": "targets/dependency_aware/poetry_empty_table/poetry.lock"
+          },
+          "reachability_rule": true,
+          "reachable": false,
+          "sca_finding_schema": 20220913
+        },
+        "severity": "WARNING"
+      },
+      "path": "targets/dependency_aware/poetry_empty_table/poetry.lock",
+      "start": {
+        "col": 1,
+        "line": 103,
+        "offset": 0
+      }
+    }
+  ],
+  "skipped_rules": [],
+  "time": "<masked in tests>",
+  "version": "0.42"
+}
+=== end of stdout - plain
+
+=== stderr - plain
+
+
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 2 files tracked by git with 1 Supply Chain rule:
+
+
+  CODE RULES
+  No code rules to run.
+
+  SUPPLY CHAIN RULES
+
+  Dependency Sources                                        Resolution Method   Ecosystem   Dependencies   Rules
+ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  targets/dependency_aware/poetry_empty_table/poetry.lock   Lockfile            Pypi        8                  1
+
+
+  Analysis   Rules
+ ──────────────────
+  Unknown        1
+
+
+
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 1 (0 blocking)
+ • Rules run: 1
+ • Targets scanned: 1
+ • Parsed lines: ~100.0%
+ • No ignore information available
+Ran 1 rule on 1 file: 1 finding.
+
+=== end of stderr - plain
+
+=== stdout - color
+<same as above: stdout - plain>
+=== end of stdout - color
+
+=== stderr - color
+<same as above: stderr - plain>
+=== end of stderr - color

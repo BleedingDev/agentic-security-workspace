@@ -1,0 +1,14 @@
+
+
+┌────────────────┐
+│ 1 Code Finding │
+└────────────────┘
+
+    targets/autofix/imported-entity.py
+   ❯❯❱ rules.autofix.exception-useless-parentheses
+          ❰❰ Blocking ❱❱
+          Found useless parentheses
+
+           ▶▶┆ Autofix ▶ raise RandomError
+            4┆ raise RandomError()
+

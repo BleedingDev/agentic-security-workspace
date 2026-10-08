@@ -1,0 +1,4273 @@
+#
+# Copyright (c) 2022-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+##############################################################################
+# Prelude
+##############################################################################
+# Testing 'semgrep ci' "end-to-end".
+#
+# TODO: most of the tests in this file rely on use_click_runner=True
+# because of some mocking and monkeypatching. Thus, this is this not
+# a real e2e test because cli/bin/semgrep is not invoked.
+# Try to use environment variables instead of Python monkey patching
+# so that those tests can also pass with osemgrep.
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections import defaultdict
+from pathlib import Path
+from textwrap import dedent
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Mapping
+from typing import Optional
+from typing import Sequence
+from typing import Tuple
+from typing import Union
+
+import pytest
+from requests.exceptions import ConnectionError
+from ruamel.yaml import YAML
+from tests.conftest import load_anonymous_user_id
+from tests.conftest import make_semgrepconfig_file
+from tests.conftest import make_settings_file
+from tests.conftest import str_containing
+from tests.default.e2e.test_baseline import _git_commit
+from tests.default.e2e.test_baseline import _git_merge
+from tests.fixtures import RunSemgrep
+
+import semgrep.run_scan
+import semgrep.semgrep_interfaces.semgrep_output_v1 as out
+from semdep.parsers.util import DependencyParserError
+from semgrep import telemetry
+from semgrep.app.scans import ScanHandler
+from semgrep.constants import OutputFormat
+from semgrep.core_runner import CoreRunner
+from semgrep.engine import EngineType
+from semgrep.error import SemgrepCoreError
+from semgrep.error import SemgrepError
+from semgrep.error_handler import ErrorHandler
+from semgrep.meta import GithubMeta
+from semgrep.meta import GitlabMeta
+from semgrep.meta import GitMeta
+from semgrep.metrics import Metrics
+from semgrep.output import OutputHandler
+from semgrep.output_extra import OutputExtra
+from semgrep.rpc import RpcSession
+from semgrep.rule import Rule
+from semgrep.rule_lang import RuleValidationMode
+from semgrep.rule_match import RuleMatchMap
+from semgrep.settings import generate_anonymous_user_id
+from semgrep.state import get_state
+from semgrep.subproject import DependencyResolutionConfig
+from semgrep.symbol_analysis import SubprojectSymbolAnalysis
+from semgrep.target_manager import SAST_PRODUCT
+from semgrep.target_manager import SECRETS_PRODUCT
+from semgrep.target_manager import TargetManager
+from semgrep.target_mode import TargetModeConfig
+
+##############################################################################
+# Constants
+##############################################################################
+
+pytestmark = pytest.mark.kinda_slow
+
+REPO_ORG_NAME = "org_name"
+REPO_DIR_NAME = "project_name"
+AUTHOR_EMAIL = "test_environment@test.r2c.dev"
+AUTHOR_NAME = "Environment Test"
+BRANCH_NAME = "some/branch-name"
+MAIN_BRANCH_NAME = "main"
+COMMIT_MESSAGE = "some: commit message! foo"
+COMMIT_MESSAGE_2 = "Some other commit/ message"
+REMOTE_REPO_URL = "git@github.com:example/fake.git"
+DEPLOYMENT_ID = 33
+BAD_CONFIG = dedent(
+    """
+    rules:
+    - id: eqeq-bad
+      message: "useless comparison"
+      languages: [python]
+      severity: ERROR
+      foo: bar
+"""
+).lstrip()
+GENERIC_SECRETS_AND_REAL_RULE = dedent(
+    """
+    rules:
+    - id: generic-secrets-rule-example
+      message: "generic secrets rule message"
+      languages: [python]
+      severity: ERROR
+      pattern: $X
+      metadata:
+        product: secrets
+        'semgrep.ruleset': 'semgrep-secrets-ai'
+    - id: real-rule-example
+      message: "this rule should actually display findings in CLI"
+      languages: [python]
+      severity: ERROR
+      pattern: $X
+"""
+).lstrip()
+FROZEN_ISOTIMESTAMP = out.Datetime("1970-01-01T00:00:00Z")
+DUMMY_APP_TOKEN_ALICE = "peasoup"
+DUMMY_APP_TOKEN_BOB = "coolcucumber"
+
+# To ensure our tests are as accurate as possible, lets try to detect what
+# GITHUB_ vars the app code uses, so the tests can enforce the env is mocked
+# appropriately.
+# UPDATE: the code below is now commented because it's using `git grep`
+# which prevents to build pysemgrep (cd cli; make build) when not
+# inside a repository (as in pro/.../check-semgrep-oss.jsonnet).
+# Instead, we run the commented code below and just copy pasted the
+# output in the USED_GITHUB_VARS below.
+#
+##_cli_src = (Path(__file__).parent.parent.parent.parent / "src").resolve()
+##USED_GITHUB_VARS = set(
+##    subprocess.run(
+##        f"git grep --recurse-submodules -hPo 'GITHUB_[\\w_]*' {_cli_src}",
+##        shell=True,
+##        capture_output=True,
+##        check=True,
+##    )
+##    .stdout.decode()
+##    .strip()
+##    .split("\n")
+##) - {
+##    "GITHUB_TOKEN",  # not used in the cli, just passed to the backend
+##    "GITHUB_EVENT_PATH",  # TODO: mock this for more than just PR events
+##    "GITHUB_xxx",  # not used, just an example in comments
+##}
+
+USED_GITHUB_VARS = {
+    "GITHUB_HEAD_REF",
+    "GITHUB_REPOSITORY",
+    "GITHUB_RUN_ID",
+    "GITHUB_SERVER_URL",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_API_URL",
+    "GITHUB_SHA",
+    "GITHUB_WORKSPACE",
+    "GITHUB_REF",
+    "GITHUB_REPOSITORY_OWNER_ID",
+    "GITHUB_ACTIONS",
+    "GITHUB_REPOSITORY_ID",
+}
+
+assert "GITHUB_ACTIONS" in USED_GITHUB_VARS  # ensure the parsing did something
+
+# And then mock the baseline github env that is shared for all event types.
+DEFAULT_GITHUB_VARS = {
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_ACTOR": "some_test_username",
+    "GITHUB_API_URL": "https://api.github.com",
+    "GITHUB_REPOSITORY": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+    "GITHUB_RUN_ID": "35",
+    "GITHUB_SERVER_URL": "https://github.com",
+    "GITHUB_WORKSPACE": "/home/runner/work/actions-test/actions-test",
+    "GITHUB_REPOSITORY_ID": "4",
+    "GITHUB_REPOSITORY_OWNER_ID": "2",
+}
+
+##############################################################################
+# Fixtures
+##############################################################################
+
+
+# Can we have this as a repo we can clone with 'git clone' so we can
+# inspect it and try semgrep commands on it?
+@pytest.fixture
+def git_path_empty_repo(monkeypatch, tmp_path):
+    """
+    Initialize a git repo with no commits
+    """
+    repo_base = tmp_path / REPO_DIR_NAME
+    repo_base.mkdir()
+
+    monkeypatch.chdir(repo_base)
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    # Initialize State
+    subprocess.run(
+        ["git", "config", "user.email", AUTHOR_EMAIL],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", AUTHOR_NAME],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-B", MAIN_BRANCH_NAME],
+        check=True,
+        capture_output=True,
+    )
+    yield repo_base
+
+
+# Same remark as above. It would be nice to be able to clone this repo.
+@pytest.fixture
+def git_tmp_path_with_commit(monkeypatch, tmp_path, mocker):
+    """
+    Initialize a git repo at a temp directory with one dummy commit.
+    """
+    repo_base = tmp_path / REPO_DIR_NAME
+    repo_base.mkdir()
+
+    monkeypatch.chdir(repo_base)
+
+    # Initialize State
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", AUTHOR_EMAIL],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", AUTHOR_NAME],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-B", MAIN_BRANCH_NAME],
+        check=True,
+        capture_output=True,
+    )
+
+    foo = repo_base / "foo.py"
+    foo.write_text(f"x = 1\n")
+
+    unknown_ext = repo_base / "xyz.txt"
+    unknown_ext.write_text("xyz")
+
+    lockfile1 = repo_base / "poetry.lock"
+    lockfile1.write_text(
+        dedent(
+            """\
+    [[package]]
+    name = "badlib"
+    version = "99.99.99"
+    description = "it's bad"
+    category = "dev"
+    optional = false
+    python-versions = ">=3.7"
+
+    [[package]]
+    name = "mypy"
+    version = "0.950"
+    description = "Optional static typing for Python"
+    category = "dev"
+    optional = false
+    python-versions = ">=3.6"
+
+    [[package]]
+    name = "python-dateutil"
+    version = "2.8.2"
+    description = "Extensions to the standard Python datetime module"
+    category = "main"
+    optional = false
+    python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+    """
+        )
+    )
+
+    lockfile2 = repo_base / "yarn.lock"
+    lockfile2.write_text(
+        dedent(
+            """\
+    # THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.
+    # yarn lockfile v1
+
+
+    lodash@4.17.20:
+      version "4.17.20"
+      resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.18.tgz#5c5f072c5c02f386378dd3f6325b529376210427"
+      integrity sha512-au4L1q0HKcaaa37qOdpWWhwzDnB/taYJfRiKULnaT+Ml9UaBIjJ2SOJMeLtSeeLT+zUdyFMm0+ts+j4eeuUpIA==
+    """
+        )
+    )
+
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", COMMIT_MESSAGE],
+        check=True,
+        capture_output=True,
+    )
+
+    base_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    subprocess.run(
+        ["git", "checkout", "-B", BRANCH_NAME],
+        check=True,
+        capture_output=True,
+    )
+
+    shutil.copy(
+        Path(__file__).parent.parent / "e2e" / "targets" / "ci" / "foo.py",
+        repo_base / "foo.py",
+    )
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", COMMIT_MESSAGE_2],
+        check=True,
+        capture_output=True,
+    )
+    head_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    mocker.patch.object(
+        GitlabMeta, "_fetch_branch_get_merge_base", return_value=base_commit
+    )
+
+    mocker.patch.object(GithubMeta, "_shallow_fetch_branch", return_value=None)
+
+    repo_copy_base = tmp_path / "checkout_project_name"
+    repo_copy_base.mkdir()
+    monkeypatch.chdir(repo_copy_base)
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", repo_base],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "fetch", "origin"])
+    subprocess.run(["git", "checkout", f"{MAIN_BRANCH_NAME}"])
+    subprocess.run(["git", "checkout", f"{BRANCH_NAME}"])
+    subprocess.run(
+        ["git", "config", "user.email", AUTHOR_EMAIL],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", AUTHOR_NAME],
+        check=True,
+        capture_output=True,
+    )
+
+    yield (repo_copy_base, base_commit, head_commit)
+
+
+@pytest.fixture
+def scan_config():
+    return dedent(
+        """
+        rules:
+        - id: eqeq-bad
+          pattern: $X == $X
+          message: "useless comparison"
+          languages: [python]
+          severity: ERROR
+          metadata:
+            source: https://semgrep.dev/r/eqeq-bad
+        - id: eqeq-five
+          pattern: $X == 5
+          message: "useless comparison to 5"
+          languages: [python]
+          severity: ERROR
+          metadata:
+            dev.semgrep.actions: []
+            source: https://semgrep.dev/r/eqeq-five
+            semgrep.dev:
+                rule:
+                    rule_id: "abcd"
+                    version_id: "version1"
+                    url: "https://semgrep.dev/r/python.eqeq-five"
+                    shortlink: "https://sg.run/abcd"
+                src: unchanged
+          fix: $X == 2
+        - id: eqeq-four
+          pattern: $X == 4
+          message: "useless comparison to 4"
+          languages: [python]
+          severity: ERROR
+          metadata:
+            dev.semgrep.actions: ["block"]
+            source: https://semgrep.dev/r/eqeq-four
+            semgrep.dev:
+                rule:
+                    rule_id: abce
+                    version_id: version2
+                    url: "https://semgrep.dev/r/python.eqeq-five"
+                    shortlink: "https://sg.run/abcd"
+                src: new-version
+        - id: abceversion1
+          pattern: $X == 4
+          message: "useless comparison to 4 (old version)"
+          languages: [python]
+          severity: ERROR
+          metadata:
+            dev.semgrep.actions: []
+            source: https://semgrep.dev/r/abceversion1
+            semgrep.dev:
+                rule:
+                    rule_id: abce
+                    version_id: version1
+                    url: "https://semgrep.dev/r/python.eqeq-five"
+                    shortlink: "https://sg.run/abcd"
+                    rule_name: eqeq-four
+                src: previous-scan
+        - id: taint-test
+          message: "unsafe use of danger"
+          languages: [python]
+          severity: WARNING
+          mode: taint
+          pattern-sources:
+            - pattern: danger
+          pattern-sinks:
+            - pattern: sink($X)
+          metadata:
+            dev.semgrep.actions: ["block"]
+            source: https://semgrep.dev/r/taint-test
+            semgrep.dev:
+                rule:
+                    rule_id: abcf
+                    version_id: version1
+                    url: "https://semgrep.dev/r/python.eqeq-five"
+                    shortlink: "https://sg.run/abcd"
+                src: new-rule
+        - id: supply-chain1
+          message: "found a dependency"
+          languages: [python]
+          severity: ERROR
+          r2c-internal-project-depends-on:
+            namespace: pypi
+            package: badlib
+            version: == 99.99.99
+          metadata:
+            dev.semgrep.actions: []
+            source: https://semgrep.dev/-/advisories/supply-chain1
+            sca-kind: upgrade-only
+        - id: supply-chain2
+          message: "found a dependency"
+          languages: [js]
+          severity: ERROR
+          r2c-internal-project-depends-on:
+            namespace: npm
+            package: badlib
+            version: == 99.99.99
+          metadata:
+            dev.semgrep.actions: []
+            source: https://semgrep.dev/-/advisories/supply-chain2
+            sca-kind: upgrade-only
+        - id: supply-chain3
+          message: "found another dependency but its a bad one >:D"
+          languages: [js]
+          severity: ERROR
+          r2c-internal-project-depends-on:
+            namespace: npm
+            package: verbadlib
+            version: == 99.99.99
+          metadata:
+            dev.semgrep.actions: ["block"]
+            source: https://semgrep.dev/-/advisories/supply-chain3
+            sca-kind: reachable
+        """
+    ).lstrip()
+
+
+@pytest.fixture(autouse=True)
+def automocks(mocker, mock_ci_api):
+    """
+    Necessary patches to run `semgrep ci` tests
+    """
+    mocker.patch.object(
+        GitMeta,
+        "commit_timestamp",
+        FROZEN_ISOTIMESTAMP,
+    )
+
+
+@pytest.fixture
+def mocked_scan_id() -> int:
+    return 12345
+
+
+@pytest.fixture
+def mocked_task_id() -> str:
+    return "00000000-0000-0000-0000-000000000000"
+
+
+@pytest.fixture
+def enable_dependency_query() -> bool:
+    return False
+
+
+@pytest.fixture
+def always_suppress_errors(mocker):
+    mocker.patch.object(ScanHandler, "always_suppress_errors", False)
+
+
+# Defining these fixtures to return functions allows the hostname (SEMGREP_URL) to be set for each test,
+# permitting tests that use different base URLs to succeed using these mocks.
+@pytest.fixture
+def start_scan_mock_maker(
+    requests_mock,
+    scan_config,
+    mocked_scan_id,
+    enable_dependency_query,
+):
+    # TODO: fix the noqa above
+    def _start_scan_func(
+        semgrep_url: str = "https://semgrep.dev",
+        product_ignored_files: Mapping[out.Product, List[str]] = {},  # noqa
+        project_merge_base: Optional[str] = None,
+        enabled_products: Optional[List[str]] = None,
+    ):
+        scan_info = {
+            **({"id": mocked_scan_id} if mocked_scan_id else {}),
+            "enabled_products": (
+                enabled_products if enabled_products is not None else ["sast", "sca"]
+            ),
+            "deployment_id": DEPLOYMENT_ID,
+            "deployment_name": "org_name",
+        }
+        config = {
+            "rules": YAML(typ="safe").load(scan_config),
+            **(
+                {"project_merge_base": project_merge_base} if project_merge_base else {}
+            ),
+            "triage_ignored_syntactic_ids": ["f3b21c38bc22a1f1f870d49fc3a40244"],
+            "triage_ignored_match_based_ids": [
+                "e536489e68267e16e71dd76a61e27815fd86a7e2417d96f8e0c43af48540a41d41e6acad52f7ccda83b5c6168dd5559cd49169617e3aac1b7ea091d8a20ebf12_0"
+            ],
+        }
+        engine_params = {
+            "dependency_query": enable_dependency_query,
+            "product_ignored_files": [
+                [product.to_json(), ignores]
+                for product, ignores in product_ignored_files.items()
+            ],
+        }
+
+        # Register v2 endpoints (default path): POST creates scan, GET polls for config
+        create_scan_mock = requests_mock.post(
+            f"{semgrep_url}/api/cli/v2/scans",
+            json={"info": scan_info},
+        )
+        requests_mock.get(
+            re.compile(r"/api/cli/v2/scans/[^/]+/config"),
+            json={
+                "status": "success",
+                "config": config,
+                "engine_params": engine_params,
+            },
+        )
+
+        # Also register v1 endpoint as fallback
+        start_scan_response = out.ScanResponse.from_json(
+            {"info": scan_info, "config": config, "engine_params": engine_params}
+        )
+        print(start_scan_response.to_json())
+        requests_mock.post(
+            f"{semgrep_url}/api/cli/scans", json=start_scan_response.to_json()
+        )
+
+        return create_scan_mock
+
+    return _start_scan_func
+
+
+@pytest.fixture
+def upload_results_mock_maker(requests_mock, mocked_scan_id, mocked_task_id):
+    def _upload_results_func(semgrep_url: str = "https://semgrep.dev"):
+        results_response = out.CiScanResultsResponse(errors=[], task_id=mocked_task_id)
+        return requests_mock.post(
+            f"{semgrep_url}/api/agent/scans/{mocked_scan_id}/results",
+            json=results_response.to_json(),
+        )
+
+    return _upload_results_func
+
+
+@pytest.fixture
+def mocked_complete_response():
+    return out.CiScanCompleteResponse(
+        success=True, app_block_override=True, app_block_reason="Test Reason"
+    )
+
+
+@pytest.fixture
+def complete_scan_mock_maker(requests_mock, mocked_scan_id, mocked_complete_response):
+    def _complete_scan_func(semgrep_url: str = "https://semgrep.dev"):
+        return requests_mock.post(
+            f"{semgrep_url}/api/agent/scans/{mocked_scan_id}/complete",
+            json=mocked_complete_response.to_json(),
+        )
+
+    return _complete_scan_func
+
+
+@pytest.fixture
+def scan_failure_mock_maker(requests_mock, mocked_scan_id):
+    def _scan_failure_func(semgrep_url: str = "https://semgrep.dev"):
+        return requests_mock.post(
+            f"{semgrep_url}/api/agent/scans/{mocked_scan_id}/error",
+            json=json.dumps({"exit_code": 0}),
+        )
+
+    return _scan_failure_func
+
+
+@pytest.fixture
+def mock_ci_api(
+    start_scan_mock_maker, upload_results_mock_maker, complete_scan_mock_maker
+):
+    # just for easier access to all mocks in tests that want them.
+    pass
+
+
+@pytest.fixture(params=[True, False], ids=["autofix", "noautofix"])
+def autofix(request):
+    return request.param
+
+
+@pytest.fixture
+def mock_autofix(request, mocker, autofix):
+    mocker.patch.object(ScanHandler, "autofix", autofix)
+
+
+##############################################################################
+# The tests
+##############################################################################
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {  # Local run with no CI env vars
+            "SEMGREP_APP_TOKEN": "dummy",
+            "SEMGREP_REPO_URL": REMOTE_REPO_URL,
+        },
+        {  # Github full scan
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": f"refs/heads/{BRANCH_NAME}",
+            "GITHUB_BASE_REF": "",
+            "GITHUB_HEAD_REF": "",
+        },
+        {  # Github full scan with custom tenant
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": f"refs/heads/{BRANCH_NAME}",
+            "GITHUB_BASE_REF": "",
+            "GITHUB_HEAD_REF": "",
+            "SEMGREP_URL": "https://tenantname.semgrep.dev",
+        },
+        {  # Github full scan with SEMGREP env vars set
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": f"refs/heads/{BRANCH_NAME}",
+            "GITHUB_BASE_REF": "",
+            "GITHUB_HEAD_REF": "",
+            "SEMGREP_REPO_NAME": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "SEMGREP_JOB_URL": "customjoburl.com",
+            "SEMGREP_PR_ID": "312",  # should make the event_name `pull_request`
+            "SEMGREP_PR_TITLE": "PR_TITLE",
+            "SEMGREP_BRANCH": BRANCH_NAME,
+        },
+        {  # github but different server url - full scan
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": f"refs/heads/{BRANCH_NAME}",
+            "GITHUB_BASE_REF": "",
+            "GITHUB_HEAD_REF": "",
+            "GITHUB_SERVER_URL": "https://some.enterprise.url.com",
+        },
+        {  # Github PR
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "pull_request",
+            # Sent in metadata but no functionality change
+            "GITHUB_REF": "refs/pull/123/merge",
+            "GITHUB_BASE_REF": MAIN_BRANCH_NAME,
+            "GITHUB_HEAD_REF": BRANCH_NAME,
+        },
+        {  # Github PR with additional project metadata
+            "CI": "true",
+            **DEFAULT_GITHUB_VARS,
+            "GITHUB_EVENT_NAME": "pull_request",
+            # Sent in metadata but no functionality change
+            "GITHUB_REF": "refs/pull/123/merge",
+            "GITHUB_BASE_REF": MAIN_BRANCH_NAME,
+            "GITHUB_HEAD_REF": BRANCH_NAME,
+            "SEMGREP_PROJECT_CONFIG": "tags:\n- tag1\n- tag_key:tag_val\n",
+        },
+        {  # Gitlab PR
+            "CI": "true",
+            "GITLAB_CI": "true",
+            "CI_PROJECT_PATH": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "CI_PIPELINE_SOURCE": "merge_request_event",  # or push
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME": MAIN_BRANCH_NAME,
+            "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME": BRANCH_NAME,
+            # Sent in metadata but no actual functionality change
+            "CI_MERGE_REQUEST_PROJECT_URL": "https://some.project.url.test.placeholder",
+            "CI_JOB_TOKEN": "some-token-test-placeholder",
+            "CI_COMMIT_REF_NAME": BRANCH_NAME,
+            "CI_COMMIT_SHA": "unused-commit-test-placeholder",
+            "CI_PROJECT_URL": "https://example.com/gitlab-org/gitlab-foss",
+            "CI_JOB_URL": "https://gitlab.com/gitlab-examples/ci-debug-trace/-/jobs/379424655",
+            "CI_MERGE_REQUEST_IID": "unused-iid-test-placeholder",
+            "CI_MERGE_REQUEST_DIFF_BASE_SHA": "unused-commit-test-placeholder",
+            "CI_MERGE_REQUEST_TITLE": "unused-merge-request-title-test-placeholder",
+        },
+        {  # Gitlab PR but with SEMGREP env vars set
+            "CI": "true",
+            "GITLAB_CI": "true",
+            "SEMGREP_REPO_NAME": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "CI_PIPELINE_SOURCE": "merge_request_event",  # or push
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME": MAIN_BRANCH_NAME,
+            "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME": BRANCH_NAME,
+            # Sent in metadata but no actual functionality change
+            "CI_MERGE_REQUEST_PROJECT_URL": "https://some.project.url.test.placeholder",
+            "CI_JOB_TOKEN": "some-token-test-placeholder",
+            "CI_COMMIT_REF_NAME": BRANCH_NAME,
+            "SEMGREP_COMMIT": "unused-commit-test-placeholder",
+            "SEMGREP_REPO_URL": "https://example.com/gitlab-org/gitlab-foss",
+            "SEMGREP_JOB_URL": "https://gitlab.com/gitlab-examples/ci-debug-trace/-/jobs/379424655",
+            "SEMGREP_PR_ID": "unused-iid-test-placeholder",
+            "CI_MERGE_REQUEST_DIFF_BASE_SHA": "unused-commit-test-placeholder",
+            "SEMGREP_PR_TITLE": "unused-merge-request-title-test-placeholder",
+        },
+        {  # Gitlab
+            "CI": "true",
+            "GITLAB_CI": "true",
+            "CI_PROJECT_PATH": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "CI_PIPELINE_SOURCE": "push",
+            "CI_COMMIT_BRANCH": BRANCH_NAME,
+            # Sent in metadata but no actual functionality change
+            "CI_JOB_TOKEN": "some-token-test-placeholder",
+            "CI_COMMIT_REF_NAME": BRANCH_NAME,
+            "CI_COMMIT_SHA": "unused-commit-test-placeholder",
+            "CI_PROJECT_URL": "https://example.com/gitlab-org/gitlab-foss",
+            "CI_JOB_URL": "https://gitlab.com/gitlab-examples/ci-debug-trace/-/jobs/379424655",
+        },
+        {  # Circle CI
+            "CI": "true",
+            "CIRCLECI": "true",
+            "CIRCLE_PROJECT_USERNAME": REPO_DIR_NAME,
+            "CIRCLE_PROJECT_REPONAME": REPO_DIR_NAME,
+            "CIRCLE_REPOSITORY_URL": f"git@github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "CIRCLE_BRANCH": BRANCH_NAME,
+            "CIRCLE_BUILD_URL": "https://circle.ci.build.url",
+            "CIRCLE_PULL_REQUEST": f"https://github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}/pull/35",
+        },
+        {  # Circle CI, overwrite autodetected variables
+            "CI": "true",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "SEMGREP_PR_ID": "99999",
+            "CIRCLECI": "true",
+            "CIRCLE_PROJECT_USERNAME": REPO_DIR_NAME,
+            "CIRCLE_PROJECT_REPONAME": REPO_DIR_NAME,
+            "CIRCLE_REPOSITORY_URL": f"git@github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "CIRCLE_BRANCH": BRANCH_NAME,
+            "CIRCLE_BUILD_URL": "https://circle.ci.build.url",
+            "CIRCLE_PULL_REQUEST": f"https://github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}/pull/35",
+        },
+        {  # Jenkins
+            "JENKINS_URL": "some_url",
+            "GIT_URL": "https://github.com/org/repo.git/",
+            "GIT_BRANCH": BRANCH_NAME,
+            "BUILD_URL": "https://jenkins.build.url",
+        },
+        {  # Jenkins, overwrite autodetected variables
+            "JENKINS_URL": "some_url",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "GIT_URL": "https://github.com/org/repo.git/",
+            "GIT_BRANCH": BRANCH_NAME,
+            "BUILD_URL": "https://jenkins.build.url",
+        },
+        {  # Jenkins, not defined GIT_URL
+            "JENKINS_URL": "some_url",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "GIT_BRANCH": BRANCH_NAME,
+            "BUILD_URL": "https://jenkins.build.url",
+        },
+        {  # Bitbucket
+            "CI": "true",
+            "BITBUCKET_BUILD_NUMBER": "hi",
+            "BITBUCKET_REPO_FULL_NAME": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "BITBUCKET_GIT_HTTP_ORIGIN": f"http://bitbucket.org/{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "BITBUCKET_BRANCH": BRANCH_NAME,
+            "BITBUCKET_PIPELINE_UUID": "a-uuid",
+            "BITBUCKET_PR_ID": "35",
+        },
+        {  # Bitbucket, overwrite autodetected variables
+            "CI": "true",
+            "BITBUCKET_BUILD_NUMBER": "hi",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "SEMGREP_PR_ID": "99999",
+            "BITBUCKET_REPO_FULL_NAME": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "BITBUCKET_GIT_HTTP_ORIGIN": f"http://bitbucket.org/{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "BITBUCKET_BRANCH": BRANCH_NAME,
+            "BITBUCKET_PIPELINE_UUID": "a-uuid",
+            "BITBUCKET_PR_ID": "35",
+        },
+        {  # Azure Pipelines
+            "BUILD_BUILDID": "some_id",
+            "BUILD_REPOSITORY_URI": f"https://github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "SYSTEM_PULLREQUEST_SOURCEBRANCH": BRANCH_NAME,
+            "SYSTEM_TEAMFOUNDATIONSERVERURI": "https://azure.pipeline.url/",
+            "SYSTEM_TEAMPROJECTID": "project_id",
+            "SYSTEM_JOBID": "job_id",
+            "SYSTEM_TASKINSTANCEID": "task_id",
+            "SYSTEM_PULLREQUEST_PULLREQUESTNUMBER": "1234",
+        },
+        {  # Azure Pipelines, overwrite autodetected variables
+            "BUILD_BUILDID": "some_id",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "SEMGREP_PR_ID": "34566",
+            "BUILD_REPOSITORY_URI": f"https://github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "SYSTEM_PULLREQUEST_SOURCEBRANCH": BRANCH_NAME,
+            "SYSTEM_TEAMFOUNDATIONSERVERURI": "https://azure.pipeline.url/",
+            "SYSTEM_TEAMPROJECTID": "project_id",
+            "SYSTEM_JOBID": "job_id",
+            "SYSTEM_TASKINSTANCEID": "task_id",
+        },
+        {  # Buildkite
+            "BUILDKITE": "true",
+            "BUILDKITE_REPO": f"git@github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "BUILDKITE_BRANCH": BRANCH_NAME,
+            "BUILDKITE_BUILD_URL": "https://buildkite.build.url/something",
+            "BUILDKITE_JOB_ID": "42",
+            "BUILDKITE_PULL_REQUEST": "35",
+            "BUILDKITE_BUILD_AUTHOR": AUTHOR_NAME,
+            "BUILDKITE_BUILD_AUTHOR_EMAIL": AUTHOR_EMAIL,
+            "BUILDKITE_MESSAGE": COMMIT_MESSAGE,
+        },
+        {  # Buildkite, overwrite autodetected variables
+            "BUILDKITE": "true",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "SEMGREP_PR_ID": "99999",
+            "BUILDKITE_REPO": f"git@github.com/{REPO_DIR_NAME}/{REPO_DIR_NAME}.git",
+            "BUILDKITE_BRANCH": BRANCH_NAME,
+            "BUILDKITE_BUILD_URL": "https://buildkite.build.url/something",
+            "BUILDKITE_JOB_ID": "42",
+            "BUILDKITE_PULL_REQUEST": "35",
+            "BUILDKITE_BUILD_AUTHOR": AUTHOR_NAME,
+            "BUILDKITE_BUILD_AUTHOR_EMAIL": AUTHOR_EMAIL,
+            "BUILDKITE_MESSAGE": COMMIT_MESSAGE,
+        },
+        {  # Travis CI
+            "CI": "true",
+            "TRAVIS": "true",
+            "TRAVIS_REPO_SLUG": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "TRAVIS_PULL_REQUEST_BRANCH": BRANCH_NAME,
+            "TRAVIS_JOB_WEB_URL": "https://travis.job.web.url/",
+            "TRAVIS_PULL_REQUEST": "35",
+            "TRAVIS_COMMIT_MESSAGE": COMMIT_MESSAGE,
+        },
+        {  # Travis CI
+            "CI": "true",
+            "TRAVIS": "true",
+            "SEMGREP_REPO_NAME": "a/repo/name",
+            "SEMGREP_REPO_URL": "https://random.url.org/some/path",
+            "SEMGREP_BRANCH": "branch/some-other-branch-name",
+            "SEMGREP_JOB_URL": "https://another.random.url.org/some/path",
+            "SEMGREP_COMMIT": "<some_random_commit>",
+            "SEMGREP_PR_ID": "99999",
+            "TRAVIS_REPO_SLUG": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "TRAVIS_PULL_REQUEST_BRANCH": BRANCH_NAME,
+            "TRAVIS_JOB_WEB_URL": "https://travis.job.web.url/",
+            "TRAVIS_PULL_REQUEST": "35",
+            "TRAVIS_COMMIT_MESSAGE": COMMIT_MESSAGE,
+        },
+        {  # Special SCM with org in path
+            "CI": "true",
+            "SEMGREP_REPO_NAME": f"{REPO_ORG_NAME}/{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "SEMGREP_REPO_URL": f"https://some.enterprise.url.com/{REPO_ORG_NAME}/{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            # Sent in metadata but no functionality change
+            "SEMGREP_PR_ID": "35",
+            "SEMGREP_BRANCH": BRANCH_NAME,
+        },
+        {  # URL that doesn't parse correctly
+            "CI": "true",
+            "SEMGREP_REPO_NAME": f"{REPO_ORG_NAME}/{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+            "SEMGREP_REPO_URL": "https://gitlab.net/foo.bar/a-b/a-b-c-d",
+            # Sent in metadata but no functionality change
+            "SEMGREP_PR_ID": "35",
+            "SEMGREP_BRANCH": BRANCH_NAME,
+        },
+    ],
+    ids=[
+        "local",
+        "github-push",
+        "github-push-with-app-url",
+        "github-push-special-env-vars",
+        "github-enterprise",
+        "github-pr",
+        "github-pr-semgrepconfig",
+        "gitlab",
+        "gitlab-special-env-vars",
+        "gitlab-push",
+        "circleci",
+        "circleci-overwrite-autodetected-variables",
+        "jenkins",
+        "jenkins-overwrite-autodetected-variables",
+        "jenkins-missing-vars",
+        "bitbucket",
+        "bitbucket-overwrite-autodetected-variables",
+        "azure-pipelines",
+        "azure-pipelines-overwrite-autodetected-variables",
+        "buildkite",
+        "buildkite-overwrite-autodetected-variables",
+        "travis",
+        "travis-overwrite-autodetected-variables",
+        "self-hosted",
+        "unparsable_url",
+    ],
+)
+@pytest.mark.skipif(
+    sys.version_info < (3, 8),
+    reason="snapshotting mock call kwargs doesn't work on py3.7",
+)
+@pytest.mark.osemfail
+def test_full_run(
+    tmp_path,
+    git_tmp_path_with_commit,
+    snapshot,
+    env,
+    run_semgrep: RunSemgrep,
+    mocker,
+    mock_autofix,
+    start_scan_mock_maker,
+    upload_results_mock_maker,
+    complete_scan_mock_maker,
+):
+    repo_copy_base, base_commit, head_commit = git_tmp_path_with_commit
+
+    # Set envvars that depend on commit hashes:
+    if env.get("GITLAB_CI"):
+        env["CI_COMMIT_SHA"] = head_commit
+    if env.get("GITHUB_ACTIONS"):
+        env["GITHUB_SHA"] = head_commit
+
+        if env["GITHUB_EVENT_NAME"] == "pull_request":
+            event = {
+                "pull_request": {
+                    "user": {
+                        "login": "user-login",
+                        "avatar_url": "some.user.avatar.com",
+                    },
+                    "head": {
+                        "sha": head_commit,
+                        "ref": BRANCH_NAME,
+                        "number": "7",
+                        "title": "placeholder-pr-title",
+                        "repo": {"clone_url": "git://github.com/head/repo.git"},
+                    },
+                    "base": {
+                        "sha": base_commit,
+                        "ref": "main",
+                        "repo": {"clone_url": "git://github.com/base/repo.git"},
+                    },
+                },
+                "sender": {
+                    "login": "test-username",
+                    "avatar_url": "some.test.avatar.url.com",
+                },
+            }
+            event_path = tmp_path / "event_path.json"
+            event_path.write_text(json.dumps(event))
+            env["GITHUB_EVENT_PATH"] = str(event_path)
+
+        assert USED_GITHUB_VARS <= set(
+            env.keys()
+        ), f"not all github vars are set, missing: {USED_GITHUB_VARS - set(env.keys())}"
+
+    if env.get("CIRCLECI"):
+        env["CIRCLE_SHA1"] = head_commit
+    if env.get("JENKINS_URL"):
+        env["GIT_COMMIT"] = head_commit
+    if env.get("BITBUCKET_BUILD_NUMBER"):
+        env["BITBUCKET_COMMIT"] = head_commit
+    if env.get("BUILD_BUILDID"):
+        env["SYSTEM_PULLREQUEST_SOURCECOMMITID"] = head_commit
+    if env.get("BUILDKITE"):
+        env["BUILDKITE_COMMIT"] = head_commit
+    if env.get("TRAVIS"):
+        env["TRAVIS_COMMIT"] = head_commit
+    env["SEMGREP_APP_TOKEN"] = "fake-key-from-tests"
+
+    if env.get("SEMGREP_PROJECT_CONFIG"):
+        contents = env.get("SEMGREP_PROJECT_CONFIG")
+        make_semgrepconfig_file(repo_copy_base, contents)
+
+    start_scan_mock = start_scan_mock_maker(
+        env.get("SEMGREP_URL", "https://semgrep.dev")
+    )
+    upload_results_mock = upload_results_mock_maker(
+        env.get("SEMGREP_URL", "https://semgrep.dev")
+    )
+    complete_scan_mock = complete_scan_mock_maker(
+        env.get("SEMGREP_URL", "https://semgrep.dev")
+    )
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        strict=False,
+        assert_exit_code=None,
+        env=env,
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+                head_commit[:7],
+                base_commit,
+                re.compile(r'GITHUB_EVENT_PATH="(.+?)"'),
+                re.compile(
+                    r"\(<MagicMock name='post\(\)\.json\(\)\.get\(\)' id='\d+'>\)"
+                ),
+                re.compile(r'"commit_hash": "(.*)",?'),
+                re.compile(r'"commit_timestamp": "(.*)",?'),
+            ]
+        ),
+        "results.txt",
+    )
+
+    # Check correct metadata
+    scan_create_json = start_scan_mock.last_request.json()
+    prj_meta_json = scan_create_json["project_metadata"]
+    scan_meta_json = scan_create_json["scan_metadata"]
+
+    if "SEMGREP_COMMIT" in env:
+        assert prj_meta_json["commit"] == env["SEMGREP_COMMIT"]
+        prj_meta_json["commit"] = "sanitized semgrep commit"
+    else:
+        assert prj_meta_json["commit"] == head_commit
+        prj_meta_json["commit"] = "sanitized"
+
+    scan_meta_json["cli_version"] = "<sanitized version>"
+    scan_meta_json["unique_id"] = "<sanitized id>"
+
+    if env.get("GITHUB_ACTIONS"):
+        if env["GITHUB_EVENT_NAME"] == "pull_request":
+            # TODO: support this on other CI providers
+            # make sure we're sending the correct base commit so the app can
+            # calculate the merge base
+            assert prj_meta_json["base_branch_head_commit"] == base_commit
+            prj_meta_json["base_branch_head_commit"] = "sanitized"
+
+    assert prj_meta_json["commit_timestamp"] == FROZEN_ISOTIMESTAMP.value
+
+    if env.get("GITLAB_CI"):
+        # If in a merge pipeline, base_sha is defined, otherwise is None
+        gitlab_base_sha = (
+            base_commit if env.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME") else None
+        )
+        if gitlab_base_sha != None:
+            assert prj_meta_json["base_sha"] == gitlab_base_sha
+            prj_meta_json["base_sha"] = "sanitized"
+
+    snapshot.assert_match(json.dumps(scan_create_json, indent=2), "meta.json")
+
+    findings_and_ignores_json = upload_results_mock.last_request.json()
+    for f in findings_and_ignores_json["findings"]:
+        assert f["commit_date"] is not None
+        f["commit_date"] = "sanitized"
+    for f in findings_and_ignores_json["ignores"]:
+        assert f["commit_date"] is not None
+        f["commit_date"] = "sanitized"
+    for f in findings_and_ignores_json["contributions"]:
+        assert f["commit_hash"] is not None
+        f["commit_hash"] = "sanitized"
+        assert f["commit_timestamp"] is not None
+        f["commit_timestamp"] = "sanitized"
+    snapshot.assert_match(
+        json.dumps(findings_and_ignores_json, indent=2), "findings_and_ignores.json"
+    )
+
+    complete_json = complete_scan_mock.last_request.json()
+    complete_json["stats"]["total_time"] = 0.5  # Sanitize time for comparison
+    # TODO: flaky tests (on Linux at least)
+    # see https://linear.app/r2c/issue/PA-2461/restore-flaky-e2e-tests for more info
+    complete_json["stats"]["lockfile_scan_info"] = {}
+    snapshot.assert_match(json.dumps(complete_json, indent=2), "complete.json")
+
+
+@pytest.mark.osemfail
+def test_lockfile_parse_failure_reporting(
+    git_tmp_path_with_commit,
+    run_semgrep: RunSemgrep,
+    snapshot,
+    start_scan_mock_maker,
+    upload_results_mock_maker,
+    complete_scan_mock_maker,
+):
+    repo_base, base_commit, _ = git_tmp_path_with_commit
+    subprocess.run(
+        ["git", "config", "user.email", AUTHOR_EMAIL],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", AUTHOR_NAME],
+        check=True,
+        capture_output=True,
+    )
+
+    bad_lockfile = repo_base / "Pipfile.lock"
+    bad_lockfile.write_text(
+        dedent(
+            """
+            invalid
+            {
+                "_meta": {
+                    "hash": {
+                        "sha256": "7f7606f08e0544d8d012ef4d097dabdd6df6843a28793eb6551245d4b2db4242"
+                    },
+                    "pipfile-spec": 6,
+                    "requires": {
+                        "python_version": "3.8"
+                    },
+                    "sources": [
+                        {
+                            "name": "pypi",
+                            "url": "https://pypi.org/simple",
+                            "verify_ssl": true
+                        }
+                    ]
+                },
+                "default": {},
+                "develop": {}
+            }
+            """
+        )
+    )
+
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Bad lockfile"],
+        check=True,
+        capture_output=True,
+    )
+
+    head_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+                head_commit[:7],
+                base_commit,
+                re.compile(r'GITHUB_EVENT_PATH="(.+?)"'),
+                re.compile(
+                    r"\(<MagicMock name='post\(\)\.json\(\)\.get\(\)' id='\d+'>\)"
+                ),
+                re.compile(r'"commit_hash": "(.*)",?'),
+                re.compile(r'"commit_timestamp": "(.*)",?'),
+            ]
+        ),
+        "results.txt",
+    )
+
+    # Check correct metadata
+    findings_and_ignores_json = upload_results_mock.last_request.json()
+    for f in findings_and_ignores_json["findings"]:
+        assert f["commit_date"] is not None
+        f["commit_date"] = "sanitized"
+    for f in findings_and_ignores_json["ignores"]:
+        assert f["commit_date"] is not None
+        f["commit_date"] = "sanitized"
+    for f in findings_and_ignores_json["contributions"]:
+        assert f["commit_hash"] is not None
+        f["commit_hash"] = "sanitized"
+        assert f["commit_timestamp"] is not None
+        f["commit_timestamp"] = "sanitized"
+    snapshot.assert_match(
+        json.dumps(findings_and_ignores_json, indent=2), "findings_and_ignores.json"
+    )
+
+    complete_json = complete_scan_mock.last_request.json()
+    complete_json["stats"]["total_time"] = 0.5  # Sanitize time for comparison
+    complete_json["stats"]["lockfile_scan_info"] = {}
+    assert len(complete_json["dependency_parser_errors"]) > 0
+    snapshot.assert_match(json.dumps(complete_json, indent=2), "complete.json")
+
+
+# TODO: flaky test on Linux
+# see https://linear.app/r2c/issue/PA-2461/restore-flaky-e2e-tests
+# def test_github_ci_bad_base_sha(
+#    run_semgrep: RunSemgrep, snapshot, git_tmp_path, tmp_path, monkeypatch, start_scan_mock, upload_results_mock, complete_scan_mock
+# ):
+#    """
+#    Github PullRequest Event Webhook file's reported base sha is not guaranteed
+#    to be the shahash of the latest commit on the base branch
+#
+#    In particular the following situations can cause the base sha to be stale
+#    (and if we rely on it being latest cause semgrep to incorrectly calculate merge-base):
+#    - If new commits are pushed onto base branch and a githubaction is rerun
+#    - If the base branch latest is merged into some third branch and that third branch
+#      is merged into the PR branch
+#
+#    Note that simply merging the base branch into the PR branch does cause the base sha to be updated
+#
+#    This test verifies that we scan the right things even if base sha in a mocked github
+#    env is stale. Note that the test does not mock the exact situations above but simply
+#    some state where reported base sha is stale
+#    """
+#
+#    # Setup Git Repo
+#    """
+#        *   17b3114 (HEAD -> bar) merging foo
+#        |\
+#        | * f7ee312 (foo) commit #2
+#        * | e04f88c commit #1
+#        |/
+#        * 191a3ac commit #1
+#
+#    Regenerate this tree by running:
+#        git_log = subprocess.run(["git", "--no-pager", "log", "--oneline", "--decorate", "--graph"], check=True, capture_output=True, encoding="utf-8")
+#        print(git_log.stdout)
+#    """
+#    commits = defaultdict(list)
+#    foo = git_tmp_path / "foo.py"
+#    bar = git_tmp_path / "bar.py"
+#
+#    subprocess.run(["git", "checkout", "-b", "foo"])
+#    foo.open("a").write(f"foo == 5\n\n")
+#    commits["foo"].append(_git_commit(1, add=True))
+#
+#    subprocess.run(["git", "checkout", "-b", "bar"])
+#    bar.open("a").write(f"bar == 5\n\n")
+#    commits["bar"].append(_git_commit(1, add=True))
+#
+#    subprocess.run(["git", "checkout", "foo"])
+#    foo.open("a").write(f"new == 5\n\n")
+#    commits["foo"].append(_git_commit(2, add=True))
+#
+#    subprocess.run(["git", "checkout", "bar"])
+#    commits["bar"].append(_git_merge("foo"))
+#
+#    # Mock Github Actions Env Vars
+#    env = {
+#        "CI": "true",
+#        "GITHUB_ACTIONS": "true",
+#        "GITHUB_EVENT_NAME": "pull_request",
+#        "GITHUB_REPOSITORY": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+#        # Sent in metadata but no functionality change
+#        "GITHUB_RUN_ID": "35",
+#        "GITHUB_ACTOR": "some_test_username",
+#        "GITHUB_REF": BRANCH_NAME,
+#    }
+#    event = {
+#        "pull_request": {
+#            "user": {
+#                "login": "user-login",
+#                "avatar_url": "some.user.avatar.com",
+#            },
+#            "head": {
+#                "sha": commits["bar"][-1],
+#                "ref": "bar",
+#                "number": "7",
+#                "title": "placeholder-pr-title",
+#                "repo": {"clone_url": str(git_tmp_path)},
+#            },
+#            "base": {
+#                "sha": commits["foo"][0],  # Note how this is not latest commit in foo
+#                "ref": "foo",
+#                "repo": {"clone_url": str(git_tmp_path)},
+#            },
+#        },
+#        "sender": {
+#            "login": "test-username",
+#            "avatar_url": "some.test.avatar.url.com",
+#        },
+#    }
+#    event_path = tmp_path / "event_path.json"
+#    event_path.write_text(json.dumps(event))
+#    env["GITHUB_EVENT_PATH"] = str(event_path)
+#    env["SEMGREP_APP_TOKEN"] = "fake-key-from-tests"
+#
+#    # Mimic having a remote by having a new repo dir and pointing origin to the repo
+#    # we setup above
+#    repo_copy_base = tmp_path / "copy"
+#    repo_copy_base.mkdir()
+#    monkeypatch.chdir(repo_copy_base)
+#    subprocess.run(["git", "init"], check=True, capture_output=True)
+#    subprocess.run(
+#        ["git", "remote", "add", "origin", git_tmp_path],
+#        check=True,
+#        capture_output=True,
+#    )
+#    subprocess.run(["git", "fetch", "origin", "--depth", "1", "bar:bar"])
+#    subprocess.run(["git", "checkout", "bar"], check=True, capture_output=True)
+#
+#    result = run_semgrep(
+#        options=["ci", "--debug", "--no-force-color", "--no-suppress-errors"],
+#        strict=False,
+#        assert_exit_code=None,
+#        env=env,
+#    )
+#
+#    snapshot.assert_match(
+#        result.as_snapshot(
+#            mask=[
+#                re.compile(r'GITHUB_EVENT_PATH="(.+?)"'),
+#                re.compile(r"\(<MagicMock name='post\(\)\.json\(\)\.get\(\)' id='\d+'>\)")
+#                # Mask variable debug output
+#                re.compile(r"/(.*)/semgrep-core"),
+#                re.compile(r"loaded 1 configs in(.*)"),
+#                re.compile(r".*https://semgrep.dev(.*).*"),
+#                re.compile(r"(.*Main\.Dune__exe__Main.*)"),
+#                re.compile(r"(.*Main\.Run_semgrep.*)"),
+#                re.compile(r"(.*Main\.Common.*)"),
+#                re.compile(r"(.*Main\.Parse_target.*)"),
+#                re.compile(r"(.*Main\.Core_CLI.*)"),
+#                re.compile(r"semgrep ran in (.*) on 1 files"),
+#                re.compile(r"\"total_time\":(.*)"),
+#                re.compile(r"\"commit_date\":(.*)"),
+#                re.compile(r"-targets (.*) -timeout"),
+#                re.compile(r"-rules (.*).json"),
+#                re.compile(r".*Main.Autofix.*"),
+#                str(git_tmp_path),
+#                str(tmp_path),
+#            ]
+#        ),
+#        "results.txt",
+#    )
+#
+#    findings_json = upload_results_mock.last_request.json()
+#    assert (
+#        len(findings_json["findings"]) == 1
+#    ), "Potentially scanning wrong files/commits"
+
+
+@pytest.mark.parametrize("app_project_merge_base", [True, False])
+@pytest.mark.osemfail
+def test_shallow_wrong_merge_base(
+    run_semgrep: RunSemgrep,
+    snapshot,
+    git_tmp_path,
+    tmp_path,
+    monkeypatch,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    app_project_merge_base,
+):
+    """ """
+    commits = defaultdict(list)
+    foo = git_tmp_path / "foo.py"
+    bar = git_tmp_path / "bar.py"
+    baz = git_tmp_path / "baz.py"
+
+    subprocess.run(["git", "checkout", "-b", "foo"])
+    foo.open("a").write(f"foo == 5\n")
+    commits["foo"].append(_git_commit(1, add=True))
+    subprocess.run(
+        [
+            "git",
+            "show",
+            "-s",
+            "--format=%ct",
+            "b903231925961ac9d787ae53ee0bd15ec156e689",
+        ]
+    )
+
+    subprocess.run(["git", "checkout", "-b", "baz"])
+    baz.open("a").write(f"baz == 5\n")
+    commits["baz"].append(_git_commit(2, add=True))
+
+    subprocess.run(["git", "checkout", "foo"])
+    foo.open("a").write("foo == 5\n")
+    commits["foo"].append(_git_commit(3, add=True))
+
+    subprocess.run(["git", "checkout", "-b", "bar"])
+    bar.open("a").write(f"bar == 5\n\n")
+    commits["bar"].append(_git_commit(4, add=True))
+
+    for _ in range(16):
+        subprocess.run(["git", "checkout", "foo"])
+        foo.open("a").write(f"new == 5\n\n")
+        commits["foo"].append(_git_commit(5, add=True))
+
+    commits["foo"].append(_git_merge("baz"))
+    git_log = subprocess.run(
+        ["git", "--no-pager", "log", "--oneline", "--decorate", "--graph", "--all"],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    print(git_log.stdout)
+
+    subprocess.run(["git", "checkout", "bar"])
+    git_log = subprocess.run(
+        ["git", "--no-pager", "log", "--oneline", "--decorate", "--graph"],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    print(git_log.stdout)
+
+    # Mock Github Actions Env Vars
+    env = {
+        "CI": "true",
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_EVENT_NAME": "pull_request",
+        "GITHUB_REPOSITORY": f"{REPO_DIR_NAME}/{REPO_DIR_NAME}",
+        # Sent in metadata but no functionality change
+        "GITHUB_RUN_ID": "35",
+        "GITHUB_ACTOR": "some_test_username",
+        "GITHUB_REF": BRANCH_NAME,
+    }
+    event = {
+        "pull_request": {
+            "user": {
+                "login": "user-login",
+                "avatar_url": "some.user.avatar.com",
+            },
+            "head": {
+                "sha": commits["bar"][-1],
+                "ref": "bar",
+                "number": "7",
+                "title": "placeholder-pr-title",
+                "repo": {"clone_url": str(git_tmp_path)},
+            },
+            "base": {
+                "sha": commits["foo"][-1],  # Note how this is not latest commit in foo
+                "ref": "foo",
+                "repo": {"clone_url": str(git_tmp_path)},
+            },
+        },
+        "sender": {
+            "login": "test-username",
+            "avatar_url": "some.test.avatar.url.com",
+        },
+    }
+    event_path = tmp_path / "event_path.json"
+    event_path.write_text(json.dumps(event))
+    env["GITHUB_EVENT_PATH"] = str(event_path)
+    env["SEMGREP_APP_TOKEN"] = "fake-key-from-tests"
+
+    # Mimic having a remote by having a new repo dir and pointing origin to the repo
+    # we setup above
+    repo_copy_base = tmp_path / "copy"
+    repo_copy_base.mkdir()
+    monkeypatch.chdir(repo_copy_base)
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", git_tmp_path],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "fetch", "origin", "--depth", "1", "bar:bar"])
+    subprocess.run(["git", "checkout", "bar"], check=True, capture_output=True)
+
+    project_merge_base = commits["baz"][-1] if app_project_merge_base else None
+    start_scan_mock = start_scan_mock_maker(
+        "https://semgrep.dev", project_merge_base=project_merge_base
+    )
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    # Scan the wrong thing first and verify we get more findings than expected (2 > 1)
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-force-color", "--no-suppress-errors", "--oss-only"],
+        strict=False,
+        assert_exit_code=None,
+        env=env,
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                re.compile(r'GITHUB_EVENT_PATH="(.+?)"'),
+            ]
+        ),
+        "bad_results.txt",
+    )
+    findings_json = upload_results_mock.last_request.json()
+    assert (
+        len(findings_json["findings"]) == 2
+    ), "Test might be invalid since we expect this to scan the wrong thing"
+
+    # Run again with greater depth
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-force-color", "--no-suppress-errors", "--oss-only"],
+        strict=False,
+        assert_exit_code=None,
+        env={**env, "SEMGREP_GHA_MIN_FETCH_DEPTH": "100"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                re.compile(r'GITHUB_EVENT_PATH="(.+?)"'),
+            ]
+        ),
+        "results.txt",
+    )
+
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == (
+        2 if app_project_merge_base else 1
+    ), "Potentially scanning wrong files/commits"
+
+
+@pytest.mark.osemfail
+def test_config_run(
+    run_semgrep: RunSemgrep,
+    git_tmp_path_with_commit,
+    snapshot,
+    mock_autofix,
+    requests_mock,
+    scan_config,
+):
+    # This test seems to provide coverage over running `semgrep ci --config <registry thing>` while logged out
+    # Not actually sure who uses this, but its explicitly supported in code.
+    requests_mock.get("https://semgrep.dev/c/p/something", text=scan_config)
+    result = run_semgrep(
+        "p/something",
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": ""},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "results.txt",
+    )
+
+
+# Testing semgrep ci on an empty repo, where the expected behavior
+# is that the run succeeds
+@pytest.mark.osemfail
+def test_empty_repo_run(
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    git_path_empty_repo,
+    requests_mock,
+    scan_config,
+):
+    requests_mock.get("https://semgrep.dev/c/p/something", text=scan_config)
+    # Here we only test that the run exits with an exit code of 0
+    # i.e the cli succeeding
+    run_semgrep(
+        "p/something",
+        subcommand="ci",
+        options=["--no-suppress-errors"],
+        strict=False,
+        assert_exit_code=0,  # This run must succeed
+        env={
+            "SEMGREP_APP_TOKEN": "",
+            "SEMGREP_REPO_URL": REMOTE_REPO_URL,
+        },
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.kinda_slow
+@pytest.mark.parametrize(
+    "format",
+    ["--json", "--gitlab-sast", "--gitlab-secrets", "--sarif", "--emacs", "--vim"],
+)
+@pytest.mark.osemfail
+def test_outputs(
+    git_tmp_path_with_commit,
+    snapshot,
+    format,
+    mock_autofix,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only", format],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        output_format=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "results.txt",
+    )
+
+
+# NOTE: in the future, the App should ideally *not* send such commented lines,
+# but for now we have to do some filtering.
+@pytest.mark.kinda_slow
+@pytest.mark.parametrize("ignored_file", ["foo.py", "", "# foo.py"])
+@pytest.mark.parametrize("ignored_product", [SAST_PRODUCT, SECRETS_PRODUCT])
+@pytest.mark.osemfail
+def test_app_ignore(
+    git_tmp_path_with_commit,
+    snapshot,
+    ignored_file,
+    ignored_product,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker(
+        "https://semgrep.dev",
+        product_ignored_files={
+            ignored_product: [ignored_file],
+        },
+    )
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        output_format=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "results.txt",
+    )
+
+
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail
+def test_sarif_output_with_dataflow_traces(
+    git_tmp_path_with_commit,
+    snapshot,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--dataflow-traces", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        output_format=OutputFormat.SARIF,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "results.txt",
+    )
+
+
+@pytest.mark.parametrize("nosem", ["--enable-nosem", "--disable-nosem"])
+@pytest.mark.osemfail
+def test_nosem(
+    git_tmp_path_with_commit,
+    snapshot,
+    mock_autofix,
+    nosem,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only", nosem],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "output.txt",
+    )
+
+
+@pytest.mark.osemfail
+@pytest.mark.parametrize(
+    ("nosem_flag", "config_nosemgrep_disabled", "expected_disable_nosem"),
+    [
+        # No flag passed: the app's nosemgrep_disabled config drives behavior.
+        (None, True, True),
+        (None, False, False),
+        # An explicit flag always wins; the config value is ignored.
+        ("--enable-nosem", True, False),
+        ("--disable-nosem", False, True),
+    ],
+)
+def test_nosem_config_precedence(
+    git_tmp_path_with_commit,
+    mocker,
+    nosem_flag,
+    config_nosemgrep_disabled,
+    expected_disable_nosem,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """`semgrep ci` honors nosemgrep_disabled from the scan config only when
+    neither --enable-nosem nor --disable-nosem was passed; an explicit flag
+    always wins over the config value."""
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock_maker("https://semgrep.dev")
+
+    # Simulate the org-wide setting the app sends in the scan config.
+    mocker.patch.object(ScanHandler, "nosemgrep_disabled", config_nosemgrep_disabled)
+
+    # Capture the resolved run_scan args, then short-circuit so we don't need a
+    # real scan to assert how nosemgrep handling was resolved.
+    captured: Dict = {}
+
+    def fake_run_scan(**kwargs):
+        captured.update(kwargs)
+        raise SemgrepError("stop after capturing args", code=2)
+
+    mocker.patch.object(semgrep.run_scan, "run_scan", side_effect=fake_run_scan)
+
+    options = ["--no-suppress-errors", "--oss-only"]
+    if nosem_flag:
+        options.append(nosem_flag)
+
+    run_semgrep(
+        subcommand="ci",
+        options=options,
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    assert captured["disable_nosem"] is expected_disable_nosem
+
+
+@pytest.mark.osemfail  # This test inspects Python-only telemetry via a mock.
+@pytest.mark.parametrize(
+    ("app_products", "options", "expected_products"),
+    [
+        (["sast", "sca", "secrets"], [], (True, True, True)),
+        (["sast", "sca", "secrets"], ["--oss-only"], (True, True, False)),
+        (["sast"], ["--supply-chain"], (True, True, False)),
+        (["sca"], ["--code"], (True, True, False)),
+        (["sast"], ["--secrets"], (True, False, True)),
+        (["sca"], [], (False, True, False)),
+    ],
+)
+def test_scan_product_telemetry_from_flags_and_app(
+    git_tmp_path_with_commit,
+    mocker,
+    app_products,
+    options,
+    expected_products,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+):
+    start_scan_mock_maker(enabled_products=app_products)
+    mocker.patch.object(EngineType, "check_if_installed", return_value=True)
+    mocker.patch.object(EngineType, "get_pro_version", return_value="test")
+    mocker.patch.object(EngineType, "get_binary_path", return_value=Path("/tmp/core"))
+
+    def fake_run_scan(**kwargs):
+        raise SemgrepError("stop after capturing telemetry", code=2)
+
+    product_attrs = mocker.spy(telemetry, "scan_product_attrs")
+    mocker.patch.object(semgrep.run_scan, "run_scan", side_effect=fake_run_scan)
+
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", *options],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    product_attrs.assert_called_once_with(
+        code=expected_products[0],
+        supply_chain=expected_products[1],
+        secrets=expected_products[2],
+    )
+
+
+@pytest.mark.osemfail  # This test inspects Python-only telemetry via a mock.
+@pytest.mark.parametrize(
+    ("rule_body", "options", "expected_products"),
+    [
+        ("pattern: foo", [], (True, False, False)),
+        (
+            "r2c-internal-project-depends-on:\n"
+            "    namespace: pypi\n"
+            "    package: badlib\n"
+            '    version: "== 99.99.99"',
+            [],
+            (False, True, False),
+        ),
+        (
+            "r2c-internal-project-depends-on:\n"
+            "    namespace: pypi\n"
+            "    package: badlib\n"
+            '    version: "== 99.99.99"',
+            ["--code"],
+            (True, True, False),
+        ),
+    ],
+)
+def test_scan_product_telemetry_from_explicit_config(
+    git_tmp_path_with_commit,
+    tmp_path,
+    mocker,
+    run_semgrep: RunSemgrep,
+    rule_body,
+    options,
+    expected_products,
+):
+    rule_file = tmp_path / "rule.yaml"
+    rule_file.write_text(
+        "rules:\n"
+        "- id: product-rule\n"
+        "  message: product rule\n"
+        "  languages: [python]\n"
+        "  severity: ERROR\n"
+        f"  {rule_body}\n"
+    )
+    observed = []
+    real_product_attrs = telemetry.scan_product_attrs
+
+    def capture_product_attrs(*, code, supply_chain, secrets):
+        observed.append((code, supply_chain, secrets))
+        if len(observed) == 2:
+            raise SemgrepError("stop after resolving products", code=2)
+        return real_product_attrs(code=code, supply_chain=supply_chain, secrets=secrets)
+
+    mocker.patch.object(
+        telemetry, "scan_product_attrs", side_effect=capture_product_attrs
+    )
+
+    run_semgrep(
+        subcommand="ci",
+        options=[
+            "--config",
+            str(rule_file),
+            "--x-rule-validation",
+            "none",
+            "--no-suppress-errors",
+            *options,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": ""},
+        use_click_runner=True,
+    )
+
+    assert len(observed) == 2
+    assert observed[-1] == expected_products
+
+
+@pytest.mark.osemfail  # This test inspects Python-only telemetry via mocks.
+def test_nested_join_scan_preserves_ci_product_telemetry(
+    git_tmp_path_with_commit,
+    tmp_path,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+):
+    start_scan_mock_maker(enabled_products=["sast", "sca"])
+    mocker.patch.object(EngineType, "check_if_installed", return_value=True)
+    mocker.patch.object(EngineType, "get_pro_version", return_value="test")
+    mocker.patch.object(EngineType, "get_binary_path", return_value=Path("/tmp/core"))
+
+    rule_file = tmp_path / "join-part.yaml"
+    rule_file.write_text(
+        "rules:\n"
+        "- id: join-part\n"
+        "  pattern: foo\n"
+        "  message: join rule part\n"
+        "  languages: [python]\n"
+        "  severity: ERROR\n"
+    )
+    real_run_scan = semgrep.run_scan.run_scan
+
+    class StopNestedScan(Exception):
+        pass
+
+    mocker.patch.object(
+        semgrep.run_scan, "add_metrics_part1", side_effect=StopNestedScan
+    )
+
+    def fake_run_scan(**kwargs):
+        resource = get_state().telemetry.resource
+        assert resource is not None
+        attrs = resource.attributes
+        assert attrs is not None
+        before = dict(attrs)
+
+        with pytest.raises(StopNestedScan):
+            real_run_scan(
+                output_handler=kwargs["output_handler"],
+                scanning_roots=kwargs["scanning_roots"],
+                pattern=None,
+                lang=None,
+                config_strs=[str(rule_file)],
+                validation_mode=RuleValidationMode.NONE,
+                record_scan_product_attrs=False,
+            )
+
+        attrs = resource.attributes
+        assert attrs is not None
+        assert attrs["scan.product.supply_chain"] == before["scan.product.supply_chain"]
+        raise SemgrepError("stop after checking telemetry", code=2)
+
+    mocker.patch.object(semgrep.run_scan, "run_scan", side_effect=fake_run_scan)
+
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+
+# Regression for ENGINE-1824: `semgrep ci --sarif-output` must preserve
+# nosemgrep-suppressed findings in the SARIF file with `suppressions`
+# entries, not drop them entirely. The bucketing in commands/ci.py must
+# exclude suppressed matches only from the blocking/nonblocking exit-code
+# counters, while still routing them to OutputHandler so the SARIF
+# formatter (keep_ignores()=True) can emit them.
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail  # osemgrep does not write --sarif-output files
+def test_ci_sarif_output_preserves_nosemgrep_suppressions(
+    git_tmp_path_with_commit,
+    mock_autofix,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock_maker("https://semgrep.dev")
+
+    sarif_path = "out.sarif"
+    run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--enable-nosem",
+            "--sarif-output",
+            sarif_path,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    sarif = json.loads(Path(sarif_path).read_text())
+    results = sarif["runs"][0]["results"]
+    suppressed = [r for r in results if r.get("suppressions")]
+    # foo.py contains several `# nosemgrep` annotations; the SARIF file
+    # must retain those matches with `suppressions` entries rather than
+    # dropping them as the pre-fix ci.py path did.
+    assert len(suppressed) > 0, results
+    for r in suppressed:
+        assert r["suppressions"] == [{"kind": "inSource"}], r
+
+
+# Regression: --sarif-output must not zero out `CiScanResults.ignores`
+# on upload. Previously the JSON path populated it but the SARIF path
+# did not.
+@pytest.mark.kinda_slow
+@pytest.mark.parametrize(
+    "extra_options,expect_in_sarif_file",
+    [
+        ([], False),
+        (["--sarif-output", "out.sarif"], True),
+    ],
+    ids=["no-sarif", "sarif-output"],
+)
+@pytest.mark.osemfail  # osemgrep does not write --sarif-output files
+def test_ci_upload_ignores_field_populated_under_sarif(
+    git_tmp_path_with_commit,
+    mock_autofix,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    extra_options,
+    expect_in_sarif_file,
+):
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--enable-nosem",
+            *extra_options,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    uploaded = upload_results_mock.last_request.json()
+    assert len(uploaded["ignores"]) > 0, uploaded
+
+    if expect_in_sarif_file:
+        sarif = json.loads(Path("out.sarif").read_text())
+        suppressed = [r for r in sarif["runs"][0]["results"] if r.get("suppressions")]
+        assert len(suppressed) > 0, sarif["runs"][0]["results"]
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [GENERIC_SECRETS_AND_REAL_RULE],
+    ids=["generic_secrets_and_real_rule"],
+)
+@pytest.mark.osemfail
+def test_generic_secrets_output(
+    git_tmp_path_with_commit,
+    snapshot,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        options=["--oss-only"],
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "output.txt",
+    )
+
+    assert "real-rule-example" in result.raw_stdout
+    # because it doesn't go in the "Blocking findings" section or otherwise,
+    # the rule message doesn't show. these go straight to the App with minimal
+    # CLI output
+    assert "generic secrets rule message" not in result.raw_stdout
+
+
+SECRETS_ONLY_CONFIG = dedent(
+    """
+    rules:
+    - id: secret-rule-example
+      pattern: $X == $X
+      message: "secret rule message"
+      languages: [python]
+      severity: ERROR
+      metadata:
+        product: secrets
+    """
+)
+
+
+@pytest.mark.parametrize("scan_config", [SECRETS_ONLY_CONFIG], ids=["secrets_only"])
+@pytest.mark.osemfail
+def test_secrets_only_hides_code_scan_status(
+    git_tmp_path_with_commit,
+    run_semgrep: RunSemgrep,
+    mocker,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """When the Code product is not enabled, `semgrep ci` should not claim
+    "0 Code rules" and should say code scanning is not enabled rather than print
+    an empty code table (ENGINE-2878)."""
+    mocker.patch.object(ScanHandler, "enabled_products", ["secrets"])
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        options=["--oss-only"],
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    assert "with 0 Code rules" not in result.stderr
+    assert "Code scanning is not enabled." in result.stderr
+    assert "No code rules to run." not in result.stderr
+
+
+@pytest.mark.osemfail
+def test_semgrep_managed_scan_id(run_semgrep: RunSemgrep, requests_mock):
+    MANAGED_SCAN_ID = "12321"
+    scan_create = requests_mock.post(
+        "https://semgrep.dev/api/cli/v2/scans",
+        json={
+            "info": {
+                "id": 12345,
+                "enabled_products": [],
+                "deployment_id": 1,
+                "deployment_name": "test",
+            }
+        },
+    )
+    requests_mock.get(
+        re.compile(r"/api/cli/v2/scans/[^/]+/config"),
+        json={"status": "success", "config": {"rules": []}, "engine_params": {}},
+    )
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={
+            "SEMGREP_APP_TOKEN": "fake-key-from-tests",
+            "SEMGREP_MANAGED_SCAN_ID": MANAGED_SCAN_ID,
+        },
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    assert scan_create.call_count == 1
+    request_body = scan_create.request_history[-1].json()
+    assert request_body["scan_metadata"]["sms_scan_id"] == MANAGED_SCAN_ID
+
+
+@pytest.mark.parametrize("mocked_scan_id", [None])
+@pytest.mark.osemfail
+def test_dryrun(
+    tmp_path,
+    git_tmp_path_with_commit,
+    snapshot,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+):
+    _, base_commit, head_commit = git_tmp_path_with_commit
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--dry-run", "--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+
+    assert start_scan_mock.last_request.json()["scan_metadata"]["dry_run"] == True
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+                head_commit[:7],
+                base_commit,
+                re.compile(r'"commit_date": (.*),?'),
+                re.compile(r'"commit_timestamp": "(.*)",?'),
+                re.compile(r'"total_time": (.*),?'),
+                re.compile(r'"event_id": (.*),?'),
+            ]
+        ),
+        "results.txt",
+    )
+
+
+# this test is flaky with osemgrep since it does not mock any networking
+@pytest.mark.osemfail
+def test_fail_auth_invalid_key(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit, requests_mock
+):
+    """
+    Test that an invalid api key returns exit code 13, even when errors are supressed
+    """
+    requests_mock.post("https://semgrep.dev/api/cli/v2/scans", status_code=401)
+    fail_open = requests_mock.post("https://fail-open.prod.semgrep.dev/failure")
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=13,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    assert not fail_open.called
+
+
+@pytest.mark.osemfail
+def test_fail_auth_invalid_key_suppressed_by_default(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit, requests_mock
+):
+    """
+    Test that an invalid api key returns exit code 13, even when errors are supressed
+    """
+    scan_create = requests_mock.post(
+        "https://semgrep.dev/api/cli/v2/scans", status_code=401
+    )
+    fail_open = requests_mock.post("https://fail-open.prod.semgrep.dev/failure")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+    assert fail_open.called
+    assert fail_open.last_request.json() == {
+        "url": "https://semgrep.dev/api/cli/v2/scans",
+        "method": "POST",
+        "status_code": 401,
+        "request_id": scan_create.last_request.json()["scan_metadata"]["unique_id"],
+        "error": str_containing("INVALID_API_KEY_EXIT_CODE"),
+        "exit_code": 13,
+    }
+
+
+@pytest.mark.osemfail
+def test_fail_auth_invalid_response(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit, requests_mock
+):
+    """
+    Test that and invalid api key returns exit code 13
+    """
+    requests_mock.post("https://semgrep.dev/api/cli/v2/scans", status_code=500)
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.osemfail
+def test_fail_auth_invalid_response_can_be_supressed(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit, requests_mock
+):
+    """
+    Test that failure to authenticate with --suppres-errors returns exit code 0
+    """
+    requests_mock.post("https://semgrep.dev/api/cli/v2/scans", status_code=500)
+    mock_send = mocker.spy(ErrorHandler, "send")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+    mock_send.assert_called_once_with(mocker.ANY, 2)
+
+
+@pytest.mark.osemfail
+def test_fail_start_scan(run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit):
+    """
+    Test that failing to start scan does not have exit code 0 or 1
+    """
+    mocker.patch.object(ScanHandler, "start_scan", side_effect=Exception("Timeout"))
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.osemfail
+def test_fail_start_scan_error_handler(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit
+):
+    """
+    Test that failing to start scan with --suppres-errors returns exit code 0
+    """
+    mocker.patch.object(ScanHandler, "start_scan", side_effect=Exception("Timeout"))
+    mock_send = mocker.spy(ErrorHandler, "send")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+    mock_send.assert_called_once_with(mocker.ANY, 2)
+
+
+@pytest.mark.osemfail
+def test_fail_open_works_when_backend_is_down(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit, requests_mock
+):
+    """
+    Test that an invalid api key returns exit code 13, even when errors are supressed
+    """
+    scan_create = requests_mock.post(
+        "https://semgrep.dev/api/cli/v2/scans", exc=ConnectionError
+    )
+    fail_open = requests_mock.post("https://fail-open.prod.semgrep.dev/failure")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+    assert fail_open.called
+    assert fail_open.last_request.json() == {
+        "url": "https://semgrep.dev/api/cli/v2/scans",
+        "method": "POST",
+        "request_id": scan_create.last_request.json()["scan_metadata"]["unique_id"],
+        "error": str_containing("requests.exceptions.ConnectionError"),
+        "exit_code": 2,
+    }
+
+
+@pytest.mark.parametrize("scan_config", [BAD_CONFIG], ids=["bad_config"])
+@pytest.mark.osemfail
+def test_bad_config(
+    run_semgrep: RunSemgrep,
+    mocker,
+    git_tmp_path_with_commit,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    scan_failure_mock_maker,
+):
+    """
+    Test that bad rules has exit code > 1 and we notify the app.
+    """
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+    scan_failure_mock = scan_failure_mock_maker("https://semgrep.dev")
+
+    # This is the function that notifies the app of the failure.
+    report_failure = mocker.patch.object(ScanHandler, "report_failure")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=7,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    assert "Invalid rule schema" in result.stderr
+    report_failure.assert_called_once()
+
+
+@pytest.mark.parametrize("scan_config", [BAD_CONFIG], ids=["bad_config"])
+@pytest.mark.osemfail
+def test_bad_config_error_handler(
+    run_semgrep: RunSemgrep,
+    mocker,
+    git_tmp_path_with_commit,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    scan_failure_mock_maker,
+):
+    """
+    Test that bad rules with --suppres-errors returns exit code 0
+    and we notify the app.
+    """
+    # This is the function that traps all exceptions at the top level for
+    # all commands.
+    top_level_error_handler = mocker.spy(ErrorHandler, "send")
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+    scan_failure_mock = scan_failure_mock_maker("https://semgrep.dev")
+
+    # This is the function that notifies the app of the failure.
+    report_failure = mocker.patch.object(ScanHandler, "report_failure")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    assert "Invalid rule schema" in result.stderr
+    top_level_error_handler.assert_called_once_with(mocker.ANY, 7)
+    report_failure.assert_called_once()
+
+
+@pytest.mark.osemfail
+def test_fail_scan_findings(
+    run_semgrep: RunSemgrep,
+    mocker,
+    git_tmp_path_with_commit,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """
+    Test failure with findings has exit code == 1.
+
+    Asserts that error logs are NOT sent to fail-open
+    """
+    mock_send = mocker.spy(ErrorHandler, "send")
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    run_semgrep(
+        subcommand="ci",
+        options=["--suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    mock_send.assert_called_once_with(mocker.ANY, 1)
+    assert upload_results_mock.called
+
+
+@pytest.mark.osemfail
+def test_fail_finish_scan(run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit):
+    """
+    Test failure to send findings has exit code > 1
+    """
+    mocker.patch.object(ScanHandler, "report_findings", side_effect=Exception)
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.osemfail
+def test_backend_exit_code(
+    run_semgrep: RunSemgrep,
+    mocker,
+    git_tmp_path_with_commit,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """
+    Test backend sending non-zero exit code on complete causes exit 1
+    """
+    mocker.patch.object(
+        ScanHandler,
+        "report_findings",
+        return_value=out.CiScanCompleteResponse(True, True, "some reason to fail"),
+    )
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.osemfail
+def test_fail_finish_scan_error_handler(
+    run_semgrep: RunSemgrep, mocker, git_tmp_path_with_commit
+):
+    """
+    Test failure to send findings with --suppres-errors returns exit code 0
+    """
+    mocker.patch.object(ScanHandler, "report_findings", side_effect=Exception)
+    mock_send = mocker.spy(ErrorHandler, "send")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    mock_send.assert_called_once_with(mocker.ANY, 2)
+
+
+@pytest.mark.osemfail
+def test_git_failure(run_semgrep: RunSemgrep, git_tmp_path_with_commit, mocker):
+    """
+    Test failure from using git has exit code > 1
+    """
+    mocker.patch.object(GitMeta, "to_project_metadata", side_effect=Exception)
+    run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=2,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.osemfail
+def test_git_failure_error_handler(
+    run_semgrep: RunSemgrep, git_tmp_path_with_commit, mocker
+):
+    """
+    Test failure from using git --suppres-errors returns exit code 0
+    """
+    mocker.patch.object(GitMeta, "to_project_metadata", side_effect=Exception)
+    mock_send = mocker.spy(ErrorHandler, "send")
+    run_semgrep(
+        subcommand="ci",
+        target_name=None,
+        strict=False,
+        assert_exit_code=0,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    mock_send.assert_called_once_with(mocker.ANY, 2)
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+    rules:
+      - id: eqeq-bad
+        pattern: $X == $X
+        message: "useless comparison"
+        languages: [python]
+        severity: ERROR
+      - id: supply-chain1
+        message: "found a dependency"
+        languages: [python]
+        severity: ERROR
+        r2c-internal-project-depends-on:
+          namespace: pypi
+          package: badlib
+          version: == 99.99.99
+        metadata:
+          dev.semgrep.actions: [block]
+          sca-kind: upgrade-only
+    """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.parametrize("enable_dependency_query", [True])
+@pytest.mark.osemfail
+def test_query_dependency(
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "output.txt",
+    )
+
+    results_json = upload_results_mock.last_request.json()
+    snapshot.assert_match(
+        json.dumps(results_json["dependencies"], indent=2), "dependencies.json"
+    )
+
+    complete_json = complete_scan_mock.last_request.json()
+    complete_json["stats"]["total_time"] = 0.5  # Sanitize time for comparison
+    # TODO: flaky tests (on Linux at least)
+    # see https://linear.app/r2c/issue/PA-2461/restore-flaky-e2e-tests for more info
+    complete_json["stats"]["lockfile_scan_info"] = {}
+    snapshot.assert_match(json.dumps(complete_json, indent=2), "complete.json")
+
+
+@pytest.mark.osemfail
+def test_metrics_enabled(
+    run_semgrep: RunSemgrep,
+    mocker,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    mock_send = mocker.patch.object(Metrics, "_post_metrics")
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    run_semgrep(
+        subcommand="ci",
+        options=["--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=1,
+        force_metrics_off=False,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        use_click_runner=True,
+    )
+    mock_send.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+            rules:
+              - id: supply-chain1
+                message: "found a dependency"
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: python-dateutil
+                    version: == 2.8.2
+                metadata:
+                    dev.semgrep.actions: [block]
+                    sca-kind: upgrade-only
+            """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.osemfail
+def test_existing_supply_chain_finding(
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    repo_copy_base, base_commit, head_commit = git_tmp_path_with_commit
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+                head_commit[:7],
+                base_commit,
+            ]
+        ),
+        "base_output.txt",
+    )
+
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 1
+
+    lockfile1 = repo_copy_base / "poetry.lock"
+    lockfile1.write_text(
+        dedent(
+            """\
+        [[package]]
+        name = "badlib"
+        version = "99.99.99"
+        description = "it's bad"
+        category = "dev"
+        optional = false
+        python-versions = ">=3.7"
+
+        [[package]]
+        name = "some-other-lib"
+        version = "1.1.1"
+        description = "it's bad"
+        category = "dev"
+        optional = false
+        python-versions = ">=3.7"
+
+        [[package]]
+        name = "mypy"
+        version = "0.950"
+        description = "Optional static typing for Python"
+        category = "dev"
+        optional = false
+        python-versions = ">=3.6"
+
+        [[package]]
+        name = "python-dateutil"
+        version = "2.8.2"
+        description = "Extensions to the standard Python datetime module"
+        category = "main"
+        optional = false
+        python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
+        """
+        )
+    )
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add lockfile"], check=True, capture_output=True
+    )
+    new_head_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            head_commit,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                new_head_commit,
+                new_head_commit[:7],
+                head_commit,
+            ]
+        ),
+        "new_output.txt",
+    )
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("subdir", "succeeds"),
+    [
+        ("org/examples", True),
+        ("test/../org/examples/", True),
+        ("org/", True),
+        ("../org", False),
+        ("..", False),
+        ("/checkout_project_name/org/examples", False),
+    ],
+)
+@pytest.mark.osemfail
+def test_subdir(
+    subdir,
+    succeeds,
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    scan_config,
+    requests_mock,
+):
+    repo_copy_base, base_commit, head_commit = git_tmp_path_with_commit
+
+    requests_mock.get("https://semgrep.dev/c/p/something", text=scan_config)
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    dir1 = repo_copy_base / "org"
+    dir1.mkdir()
+    dir2 = repo_copy_base / "test"
+    dir2.mkdir()
+    codedir = dir1 / "examples"
+    codedir.mkdir()
+    pyfile1 = codedir / "foo.py"
+    pyfile1.write_text(f"x == 5\n")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--subdir",
+            subdir,
+            "--oss-only",
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+            ]
+        ),
+        "output.txt",
+    )
+    if succeeds:
+        findings_json = upload_results_mock.last_request.json()
+        assert len(findings_json["findings"]) == 1
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+            rules:
+              - id: supply-chain-parity-1
+                message: "found a dependency"
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: python-dateutil
+                    version: == 2.8.2
+                metadata:
+                    dev.semgrep.actions: [block]
+                    sca-kind: upgrade-only
+              - id: supply-chain-parity-2
+                message: "found another dependency without a pattern"
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: mypy
+                    version: == 0.950
+                metadata:
+                    dev.semgrep.actions: [block]
+                    sca-kind: upgrade-only
+              - id: supply-chain-reachable-1
+                message: "found a reachable vulnerability from a dependency"
+                pattern: $X = 2
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: mypy
+                    version: == 0.950
+                metadata:
+                    dev.semgrep.actions: [block]
+            """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.osemfail
+def test_reachable_and_unreachable_diff_scan_findings(
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    repo_copy_base, base_commit, head_commit = git_tmp_path_with_commit
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                head_commit,
+                head_commit[:7],
+                base_commit,
+            ]
+        ),
+        "base_output.txt",
+    )
+
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 3
+    # Field should be absent when not in a diff scan
+    assert "changed_dependency_sources" not in findings_json
+
+    pyfile1 = repo_copy_base / "foo.py"
+    pyfile1.write_text(f"x = 2\n")
+
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add lockfile"], check=True, capture_output=True
+    )
+    new_head_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            head_commit,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                new_head_commit,
+                new_head_commit[:7],
+                head_commit,
+            ]
+        ),
+        "new_output.txt",
+    )
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 1
+    # A diff scan that touched only a code file: dependencies are still
+    # resolved and uploaded, but no lockfile or manifest changed.
+    assert findings_json["changed_dependency_sources"] == []
+
+
+_REQUESTS_LOCKFILE_ENTRY = dedent(
+    """\
+
+    [[package]]
+    name = "requests"
+    version = "2.28.1"
+    description = "Python HTTP for Humans."
+    category = "main"
+    optional = false
+    python-versions = ">=3.7, <4"
+    """
+)
+
+# Shaped after the lodash entry the git fixture already writes to yarn.lock.
+_UNDERSCORE_YARN_ENTRY = dedent(
+    """\
+
+    underscore@1.13.6:
+      version "1.13.6"
+      resolved "https://registry.yarnpkg.com/underscore/-/underscore-1.13.6.tgz#5c5f072c5c02f386378dd3f6325b529376210427"
+      integrity sha512-au4L1q0HKcaaa37qOdpWWhwzDnB/taYJfRiKULnaT+Ml9UaBIjJ2SOJMeLtSeeLT+zUdyFMm0+ts+j4eeuUpIA==
+    """
+)
+
+# A dependency-aware rule is required for the CLI to resolve subprojects at all,
+# and enable_dependency_query is what puts the resolved dependencies on the
+# /results payload. Without both, `dependencies` would be empty and the
+# assertions about it would be vacuous.
+_SCA_SCAN_CONFIG = dedent(
+    """
+    rules:
+      - id: eqeq-bad
+        pattern: $X == $X
+        message: "useless comparison"
+        languages: [python]
+        severity: ERROR
+      - id: supply-chain1
+        message: "found a dependency"
+        languages: [python]
+        severity: ERROR
+        r2c-internal-project-depends-on:
+          namespace: pypi
+          package: badlib
+          version: == 99.99.99
+        metadata:
+          dev.semgrep.actions: [block]
+          sca-kind: upgrade-only
+    """
+).lstrip()
+
+
+@pytest.mark.parametrize("scan_config", [_SCA_SCAN_CONFIG], ids=["config"])
+@pytest.mark.parametrize("enable_dependency_query", [True])
+@pytest.mark.osemfail
+class TestChangedDependencySources:
+    """`changed_dependency_sources` is relative to each scan's own merge base.
+
+    It is used to communicate to the app which dependency sources were edited in
+    the diff scan. Subproject dependencies are resolved and uploaded regardless
+    so an empty list means no dependency sources were edited.
+    """
+
+    @staticmethod
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], check=True, capture_output=True)
+
+    @staticmethod
+    def _head_sha() -> str:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], encoding="utf-8"
+        ).strip()
+
+    @classmethod
+    def _commit_new_poetry_dependency(cls, repo_base: Path) -> None:
+        lockfile = repo_base / "poetry.lock"
+        lockfile.write_text(lockfile.read_text() + _REQUESTS_LOCKFILE_ENTRY)
+        cls._git("add", ".")
+        cls._git("commit", "-m", "add requests to poetry.lock")
+
+    @classmethod
+    def _commit_new_yarn_dependency(cls, repo_base: Path) -> None:
+        lockfile = repo_base / "yarn.lock"
+        lockfile.write_text(lockfile.read_text() + _UNDERSCORE_YARN_ENTRY)
+        cls._git("add", ".")
+        cls._git("commit", "-m", "add underscore to yarn.lock")
+
+    @classmethod
+    def _commit_deleted_poetry_lockfile(cls, repo_base: Path) -> None:
+        (repo_base / "poetry.lock").unlink()
+        cls._git("add", "-A")
+        cls._git("commit", "-m", "delete poetry.lock")
+
+    @classmethod
+    def _commit_removed_poetry_dependency(cls, repo_base: Path) -> None:
+        """Undo `_commit_new_poetry_dependency`. Fails loudly if there is nothing to undo,
+        since `git commit` refuses an empty commit."""
+        lockfile = repo_base / "poetry.lock"
+        lockfile.write_text(lockfile.read_text().replace(_REQUESTS_LOCKFILE_ENTRY, ""))
+        cls._git("add", ".")
+        cls._git("commit", "-m", "remove requests from poetry.lock")
+
+    @classmethod
+    def _commit_code_edit(cls, repo_base: Path) -> None:
+        (repo_base / "foo.py").write_text("x == x\n")
+        cls._git("add", ".")
+        cls._git("commit", "-m", "edit code only")
+
+    @pytest.fixture
+    def upload_results_mock(
+        self, start_scan_mock_maker, complete_scan_mock_maker, upload_results_mock_maker
+    ):
+        start_scan_mock_maker("https://semgrep.dev")
+        complete_scan_mock_maker("https://semgrep.dev")
+        return upload_results_mock_maker("https://semgrep.dev")
+
+    @staticmethod
+    def _scan(
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+        baseline: Optional[str] = None,
+    ) -> Any:
+        """Run `semgrep ci`; return the uploaded /results body.
+
+        Passing `baseline` makes it a diff scan against that commit; omitting it
+        makes it a full scan.
+        """
+        options = ["--no-suppress-errors", "--oss-only"]
+        if baseline is not None:
+            options += ["--baseline-commit", baseline]
+        run_semgrep(
+            subcommand="ci",
+            options=options,
+            target_name=None,
+            strict=False,
+            assert_exit_code=None,
+            env={"SEMGREP_APP_TOKEN": "fake_key"},
+            use_click_runner=True,
+        )
+        return upload_results_mock.last_request.json()
+
+    @pytest.mark.slow
+    def test_lockfile_edit_reports_the_lockfile(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """A branch that edits a lockfile reports that lockfile."""
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        self._git("checkout", "-B", "branch-a", main_commit)
+        self._commit_new_poetry_dependency(repo_copy_base)
+
+        results = self._scan(run_semgrep, upload_results_mock, baseline=main_commit)
+        assert results["changed_dependency_sources"] == ["poetry.lock"]
+        assert results["dependencies"]
+
+    @pytest.mark.slow
+    def test_multiple_lockfile_edits_report_every_lockfile(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """Every edited dependency source is reported, in alphabetical order."""
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        self._git("checkout", "-B", "branch-a", main_commit)
+        self._commit_new_yarn_dependency(repo_copy_base)
+        self._commit_new_poetry_dependency(repo_copy_base)
+
+        results = self._scan(run_semgrep, upload_results_mock, baseline=main_commit)
+        assert results["changed_dependency_sources"] == ["poetry.lock", "yarn.lock"]
+        assert results["dependencies"]
+
+    @pytest.mark.slow
+    def test_deleted_lockfile_is_not_reported(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """Deleting a lockfile outright is not reported as a changed source.
+
+        The field is derived from scan targets, and a deleted file is not a
+        target at HEAD, so its removal is invisible here even though it plainly
+        changes the project's dependencies. Pinned so the gap is deliberate: an
+        empty list means "no dependency source was added or modified", not
+        "the dependencies are unchanged".
+        """
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        self._git("checkout", "-B", "branch-a", main_commit)
+        self._commit_deleted_poetry_lockfile(repo_copy_base)
+
+        results = self._scan(run_semgrep, upload_results_mock, baseline=main_commit)
+        assert results["changed_dependency_sources"] == []
+
+    @pytest.mark.slow
+    def test_stacked_no_change_branch_reports_no_changes(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """A branch stacked on a dependency-adding branch reports no changes."""
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        self._git("checkout", "-B", "branch-a", main_commit)
+        self._commit_new_poetry_dependency(repo_copy_base)
+        commit_a = self._head_sha()
+
+        results_a = self._scan(run_semgrep, upload_results_mock, baseline=main_commit)
+        assert results_a["changed_dependency_sources"] == ["poetry.lock"]
+
+        self._git("checkout", "-b", "branch-b")
+        self._commit_code_edit(repo_copy_base)
+
+        results_b = self._scan(run_semgrep, upload_results_mock, baseline=commit_a)
+        assert results_b["changed_dependency_sources"] == []
+        assert results_b["dependencies"]
+
+    @pytest.mark.slow
+    def test_dependency_already_merged_to_main_reports_no_changes(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """A dependency already merged to main is not reported by later branches."""
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        # Full scan of main, before the dependency exists.
+        self._git("checkout", "-B", MAIN_BRANCH_NAME, main_commit)
+        results_main = self._scan(run_semgrep, upload_results_mock)
+        assert "changed_dependency_sources" not in results_main
+
+        # Branch A adds the dependency, so its diff scan reports the lockfile.
+        self._git("checkout", "-b", "branch-a")
+        self._commit_new_poetry_dependency(repo_copy_base)
+
+        results_a = self._scan(run_semgrep, upload_results_mock, baseline=main_commit)
+        assert results_a["changed_dependency_sources"] == ["poetry.lock"]
+
+        # A merges into main. Main's own diff scan still sees the lockfile edit.
+        self._git("checkout", MAIN_BRANCH_NAME)
+        self._git("merge", "--ff-only", "branch-a")
+        main_with_dependency = self._head_sha()
+
+        results_merge = self._scan(
+            run_semgrep, upload_results_mock, baseline=main_commit
+        )
+        assert results_merge["changed_dependency_sources"] == ["poetry.lock"]
+
+        # Branch B is cut from the updated main and edits only code. No changes are reported.
+        self._git("checkout", "-b", "branch-b")
+        self._commit_code_edit(repo_copy_base)
+
+        results_b = self._scan(
+            run_semgrep, upload_results_mock, baseline=main_with_dependency
+        )
+        assert results_b["changed_dependency_sources"] == []
+        assert results_b["dependencies"]
+
+    @pytest.mark.slow
+    def test_stale_lockfile_not_reported_when_branch_did_not_edit_it(
+        self,
+        git_tmp_path_with_commit,
+        run_semgrep: RunSemgrep,
+        upload_results_mock,
+    ):
+        """A stale lockfile is not reported as changed if there were no edits to the dependency source."""
+
+        repo_copy_base, main_commit, _branch_commit = git_tmp_path_with_commit
+
+        # Main carries the dependency to begin with.
+        self._git("checkout", "-B", MAIN_BRANCH_NAME, main_commit)
+        self._commit_new_poetry_dependency(repo_copy_base)
+        main_with_dependency = self._head_sha()
+
+        # Branch A edits code only, leaving the lockfile untouched.
+        self._git("checkout", "-b", "branch-a", main_with_dependency)
+        self._commit_code_edit(repo_copy_base)
+
+        # Branch B drops the dependency and merges into main, so branch A now has a stale lockfile compared to main.
+        self._git("checkout", "-b", "branch-b", main_with_dependency)
+        self._commit_removed_poetry_dependency(repo_copy_base)
+        self._git("checkout", MAIN_BRANCH_NAME)
+        self._git("merge", "--ff-only", "branch-b")
+        main_without_dependency = self._head_sha()
+
+        self._git("checkout", "branch-a")
+
+        # A has a stale lockfile with the old dependency.
+        assert _REQUESTS_LOCKFILE_ENTRY in (repo_copy_base / "poetry.lock").read_text()
+
+        results_a = self._scan(
+            run_semgrep, upload_results_mock, baseline=main_without_dependency
+        )
+        assert results_a["changed_dependency_sources"] == []
+        assert results_a["dependencies"]
+
+
+@pytest.mark.parametrize(
+    "enabled_products",
+    [[], ["product"]],
+    ids=["empty-products", "non-empty-products"],
+)
+@pytest.mark.osemfail
+def test_enabled_products(
+    enabled_products: List[str],
+    run_semgrep: RunSemgrep,
+    mocker,
+    git_tmp_path_with_commit,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """
+    Verify that for any given product, there is a valid output
+    """
+    mocker.patch.object(ScanHandler, "enabled_products", enabled_products)
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        options=["ci", "--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    if not enabled_products:
+        assert "Enabled products: None" in result.stderr
+        assert "No products are enabled for this organization" in result.stderr
+    else:
+        assert f"Enabled products: {enabled_products[0]}" in result.stderr
+        assert "No products are enabled for this organization" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {  # ci run with app token alice
+            "SEMGREP_APP_TOKEN": DUMMY_APP_TOKEN_ALICE,
+            "SEMGREP_SETTINGS_FILE": tempfile.NamedTemporaryFile().name,
+            "EXISTING_SEMGREP_SETTINGS": False,
+        },
+        {  # ci run with app token bob
+            "SEMGREP_APP_TOKEN": DUMMY_APP_TOKEN_BOB,
+            "SEMGREP_SETTINGS_FILE": tempfile.NamedTemporaryFile().name,
+            "EXISTING_SEMGREP_SETTINGS": False,
+        },
+        {  # ci run with app token but existing settings file
+            "SEMGREP_APP_TOKEN": DUMMY_APP_TOKEN_BOB,
+            "SEMGREP_SETTINGS_FILE": tempfile.NamedTemporaryFile().name,
+            "EXISTING_SEMGREP_SETTINGS": True,
+        },
+    ],
+    ids=["token-alice", "token-bob", "existing-settings"],
+)
+@pytest.mark.osemfail
+def test_ci_uuid(
+    env,
+    run_semgrep: RunSemgrep,
+    mocker,
+):
+    """
+    Verify that the expected UUID is generated for a fresh CI run.
+    When we don't have an existing settings file, we should generate a fixed UUID
+    Otherwise, we should continue using the same UUID.
+    """
+
+    settings_file = env.get("SEMGREP_SETTINGS_FILE")
+    # Check if we should mimic an existing settings file via simulation
+    existing_settings = env.get("EXISTING_SEMGREP_SETTINGS")
+    del env["EXISTING_SEMGREP_SETTINGS"]
+
+    generated_uuid = generate_anonymous_user_id(env.get("SEMGREP_APP_TOKEN"))
+    # Assume we will generate a new UUID from app_token
+    expected_uuid: Optional[str] = generated_uuid
+
+    # Simulate the case where we have an existing settings file
+    if existing_settings:
+        make_settings_file(settings_file)
+        # Update the expected UUID to be the one in the settings file
+        expected_uuid = load_anonymous_user_id(settings_file)
+
+    # We don't actually need to run a full scan here: just need to mock out the
+    # first few steps of the scan process (1 sec vs 30 sec for this test suite)
+    mocker.patch.object(ScanHandler, "start_scan", side_effect=Exception("Timeout"))
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--dry-run", "--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env=env,
+        use_click_runner=True,
+    )
+
+    # Check that the UUID in the settings file matches the expected UUID
+    found_uuid = load_anonymous_user_id(settings_file)
+
+    assert found_uuid is not None, "Expected UUID to be generated in settings"
+    assert (
+        found_uuid == expected_uuid
+    ), f"Expected {expected_uuid} but found {found_uuid}"
+
+
+@pytest.mark.osemfail
+def test_fail_on_historical_scan_without_secrets(
+    run_semgrep: RunSemgrep,
+    snapshot,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--historical-secrets", "--no-suppress-errors", "--oss-only"],
+        strict=False,
+        env={"SEMGREP_APP_TOKEN": "fake-key-from-tests"},
+        assert_exit_code=2,
+        target_name=None,
+        use_click_runner=True,
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "output.txt",
+    )
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+            rules:
+              - id: supply-chain-parity-1
+                message: "found a dependency"
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: python-dateutil
+                    version: == 2.8.2
+                metadata:
+                    dev.semgrep.actions: [block]
+                    sca-kind: upgrade-only
+              - id: supply-chain-parity-2
+                message: "found another dependency without a pattern"
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: mypy
+                    version: == 0.950
+                metadata:
+                    dev.semgrep.actions: [block]
+                    sca-kind: upgrade-only
+              - id: supply-chain-reachable-1
+                message: "found a reachable vulnerability from a dependency"
+                pattern: $X = 2
+                languages: [python]
+                severity: ERROR
+                r2c-internal-project-depends-on:
+                    namespace: pypi
+                    package: mypy
+                    version: == 0.950
+                metadata:
+                    dev.semgrep.actions: [block]
+            """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.osemfail
+def test_existing_reachable_finding_deduplication(
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    repo_copy_base, _, base_commit = git_tmp_path_with_commit
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    # Add vulnerability here so that it's already existing when we run a scan later
+    pyfile1 = repo_copy_base / "foo.py"
+    pyfile1.write_text(f"x = 2\n")
+
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add reachable vulnerability"],
+        check=True,
+        capture_output=True,
+    )
+    vulnerable_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            base_commit,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    # This scan should have a reachable finding which we added earlier
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                vulnerable_commit,
+                vulnerable_commit[:7],
+                base_commit,
+            ]
+        ),
+        "base_output.txt",
+    )
+
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 1
+
+    # Since we want to ensure that reachability works on git tracked files, we modify the
+    # same file with a safe change (but do not fix the vulnerability) so that the reachablity
+    # check can be done on the same file by the baseline scanner
+    pyfile1 = repo_copy_base / "foo.py"
+    pyfile1.write_text(f"x = 2\nprint('hello')\n")
+
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add another thing"], check=True, capture_output=True
+    )
+    non_vulnerable_head_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            vulnerable_commit,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,  # TODO: probably because rely on some mocking
+    )
+
+    # This scan should have no findings since reachability analysis in the baseline
+    # should also raise the same finding (leading to deduplication downstream)
+    snapshot.assert_match(
+        result.as_snapshot(
+            mask=[
+                non_vulnerable_head_commit,
+                non_vulnerable_head_commit[:7],
+                vulnerable_commit,
+            ]
+        ),
+        "new_output.txt",
+    )
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 0
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+            rules:
+              - id: x-equals-two
+                pattern: $X = 2
+                message: "x is 2"
+                languages: [python]
+                severity: ERROR
+                metadata:
+                  source: https://semgrep.dev/r/x-equals-two
+            """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail
+def test_finding_suppressed_when_baseline_scan_fails(
+    git_tmp_path_with_commit,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """When the baseline scan fails on a file (per-rule timeout, OOM, ...),
+    tip findings on that file must not be classified as new.
+    """
+    repo_copy_base, _, base_commit = git_tmp_path_with_commit
+
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    # base_commit's foo.py is `x = 1` (from git_tmp_path_with_commit). We
+    # commit a change that introduces a tip-only match for our rule.
+    pyfile = repo_copy_base / "foo.py"
+    pyfile.write_text("x = 2\n")
+    subprocess.run(["git", "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "introduce finding"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Simulate a baseline-only per-file timeout on foo.py (same ``SemgrepCoreError``
+    # shape as a real ``--timeout=`` miss). Head and baseline both call ``run_rules``;
+    # only ``baseline_run`` passes ``DependencyResolutionConfig`` with
+    # ``is_baseline_scan=True`` (see ``run_scan.baseline_run``). We run the real engine
+    # first, then append the synthetic error only for that baseline call so the head
+    # scan is unchanged.
+    real_run_rules = semgrep.run_scan.run_rules
+
+    def run_rules_except_append_baseline_timeout_on_foo(
+        filtered_rules: List[Rule],
+        target_manager: TargetManager,
+        target_mode_config: TargetModeConfig,
+        core_runner: CoreRunner,
+        output_handler: OutputHandler,
+        dump_command_for_core: bool,
+        time_flag: bool,
+        matching_explanations: bool,
+        engine_type: EngineType,
+        strict: bool,
+        dependency_resolution_config: DependencyResolutionConfig,
+        run_secrets: bool = False,
+        disable_secrets_validation: bool = False,
+        *,
+        with_code_rules: bool = True,
+        with_supply_chain: bool = False,
+        code_enabled: Optional[bool] = None,
+        write_to_tr_cache: bool = True,
+        fips_mode: bool,
+        enable_transitive_reachability: Optional[bool] = None,
+        x_dependency_paths: bool = False,
+        x_parmap: bool = False,
+        run_symbol_analysis: bool = False,
+        rpc_session: Optional[RpcSession] = None,
+    ) -> Tuple[
+        RuleMatchMap,
+        List[SemgrepError],
+        OutputExtra,
+        Dict[str, List[out.FoundDependency]],
+        List[DependencyParserError],
+        int,
+        List[Union[out.UnresolvedSubproject, out.ResolvedSubproject]],
+        Optional[Sequence[SubprojectSymbolAnalysis]],
+    ]:
+        result = real_run_rules(
+            filtered_rules,
+            target_manager,
+            target_mode_config,
+            core_runner,
+            output_handler,
+            dump_command_for_core,
+            time_flag,
+            matching_explanations,
+            engine_type,
+            strict,
+            dependency_resolution_config,
+            run_secrets,
+            disable_secrets_validation,
+            with_code_rules=with_code_rules,
+            with_supply_chain=with_supply_chain,
+            code_enabled=code_enabled,
+            write_to_tr_cache=write_to_tr_cache,
+            fips_mode=fips_mode,
+            enable_transitive_reachability=enable_transitive_reachability,
+            x_dependency_paths=x_dependency_paths,
+            x_parmap=x_parmap,
+            run_symbol_analysis=run_symbol_analysis,
+            rpc_session=rpc_session,
+        )
+        # Head scan and any other caller: leave the return value alone.
+        if not dependency_resolution_config.is_baseline_scan:
+            return result
+        (
+            matches,
+            errors,
+            output_extra,
+            deps,
+            dep_parser_errors,
+            executed_rule_count,
+            all_subprojects,
+            sca_symbol_analysis,
+        ) = result
+        baseline_err = SemgrepCoreError(
+            code=2,
+            level=out.ErrorSeverity(out.Error_()),
+            spans=None,
+            core=out.CoreError(
+                error_type=out.ErrorType(out.Timeout()),
+                severity=out.ErrorSeverity(out.Error_()),
+                location=out.Location(
+                    path=out.Fpath("foo.py"),
+                    start=out.Position(line=1, col=1, offset=0),
+                    end=out.Position(line=1, col=1, offset=0),
+                ),
+                message="timeout (test)",
+                details=None,
+            ),
+        )
+        return (
+            matches,
+            list(errors) + [baseline_err],
+            output_extra,
+            deps,
+            dep_parser_errors,
+            executed_rule_count,
+            all_subprojects,
+            sca_symbol_analysis,
+        )
+
+    mocker.patch(
+        "semgrep.run_scan.run_rules",
+        side_effect=run_rules_except_append_baseline_timeout_on_foo,
+    )
+
+    run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            base_commit,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    findings_json = upload_results_mock.last_request.json()
+    assert len(findings_json["findings"]) == 0
+
+
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+            rules:
+              - id: rule-a
+                pattern: $X = 2
+                message: "a"
+                languages: [python]
+                severity: ERROR
+                metadata:
+                  source: https://semgrep.dev/r/rule-a
+              - id: rule-b
+                pattern: $X = 3
+                message: "b"
+                languages: [python]
+                severity: ERROR
+                metadata:
+                  source: https://semgrep.dev/r/rule-b
+            """
+        ).lstrip()
+    ],
+    ids=["config"],
+)
+@pytest.mark.kinda_slow
+@pytest.mark.osemfail
+def test_baseline_scan_failures_suppress_per_rule_and_whole_file(
+    git_tmp_path_with_commit,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """Baseline scan failures suppress new-findings classification selectively.
+
+    - ``Timeout`` for **rule-a** on ``f1.py`` only → suppress **rule-a** on ``f1.py``.
+    - Scan failure on ``f2.py`` without ``rule_id`` → suppress **all** rules on ``f2``.
+    - **rule-b** on ``f1.py`` remains: no baseline error for rule-b on that path.
+    """
+    repo_copy_base, _, _ = git_tmp_path_with_commit
+
+    start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    f1 = repo_copy_base / "f1.py"
+    f2 = repo_copy_base / "f2.py"
+    f1.write_text("# clean\n")
+    f2.write_text("# clean\n")
+    subprocess.run(["git", "add", "f1.py", "f2.py"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add f1 f2"],
+        check=True,
+        capture_output=True,
+    )
+    baseline_before_violations = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], encoding="utf-8"
+    ).strip()
+
+    f1.write_text("x = 2\nx = 3\n")
+    f2.write_text("y = 2\ny = 3\n")
+    subprocess.run(["git", "add", "f1.py", "f2.py"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "violations on f1 and f2"],
+        check=True,
+        capture_output=True,
+    )
+
+    real_run_rules = semgrep.run_scan.run_rules
+
+    def run_rules_append_synthetic_baseline_failures(
+        filtered_rules: List[Rule],
+        target_manager: TargetManager,
+        target_mode_config: TargetModeConfig,
+        core_runner: CoreRunner,
+        output_handler: OutputHandler,
+        dump_command_for_core: bool,
+        time_flag: bool,
+        matching_explanations: bool,
+        engine_type: EngineType,
+        strict: bool,
+        dependency_resolution_config: DependencyResolutionConfig,
+        run_secrets: bool = False,
+        disable_secrets_validation: bool = False,
+        *,
+        with_code_rules: bool = True,
+        with_supply_chain: bool = False,
+        code_enabled: Optional[bool] = None,
+        write_to_tr_cache: bool = True,
+        fips_mode: bool,
+        enable_transitive_reachability: Optional[bool] = None,
+        x_dependency_paths: bool = False,
+        x_parmap: bool = False,
+        run_symbol_analysis: bool = False,
+        rpc_session: Optional[RpcSession] = None,
+    ) -> Tuple[
+        RuleMatchMap,
+        List[SemgrepError],
+        OutputExtra,
+        Dict[str, List[out.FoundDependency]],
+        List[DependencyParserError],
+        int,
+        List[Union[out.UnresolvedSubproject, out.ResolvedSubproject]],
+        Optional[Sequence[SubprojectSymbolAnalysis]],
+    ]:
+        result = real_run_rules(
+            filtered_rules,
+            target_manager,
+            target_mode_config,
+            core_runner,
+            output_handler,
+            dump_command_for_core,
+            time_flag,
+            matching_explanations,
+            engine_type,
+            strict,
+            dependency_resolution_config,
+            run_secrets,
+            disable_secrets_validation,
+            with_code_rules=with_code_rules,
+            with_supply_chain=with_supply_chain,
+            code_enabled=code_enabled,
+            write_to_tr_cache=write_to_tr_cache,
+            fips_mode=fips_mode,
+            enable_transitive_reachability=enable_transitive_reachability,
+            x_dependency_paths=x_dependency_paths,
+            x_parmap=x_parmap,
+            run_symbol_analysis=run_symbol_analysis,
+            rpc_session=rpc_session,
+        )
+        if not dependency_resolution_config.is_baseline_scan:
+            return result
+        (
+            matches,
+            errors,
+            output_extra,
+            deps,
+            dep_parser_errors,
+            executed_rule_count,
+            all_subprojects,
+            sca_symbol_analysis,
+        ) = result
+        loc_f1 = out.Location(
+            path=out.Fpath("f1.py"),
+            start=out.Position(line=1, col=1, offset=0),
+            end=out.Position(line=1, col=1, offset=0),
+        )
+        loc_f2 = out.Location(
+            path=out.Fpath("f2.py"),
+            start=out.Position(line=1, col=1, offset=0),
+            end=out.Position(line=1, col=1, offset=0),
+        )
+        err_rule_a_on_f1 = SemgrepCoreError(
+            code=2,
+            level=out.ErrorSeverity(out.Error_()),
+            spans=None,
+            core=out.CoreError(
+                error_type=out.ErrorType(out.Timeout()),
+                severity=out.ErrorSeverity(out.Error_()),
+                location=loc_f1,
+                message="timeout rule-a on f1 (test)",
+                details=None,
+                rule_id=out.RuleId("rule-a"),
+            ),
+        )
+        err_unscoped_on_f2 = SemgrepCoreError(
+            code=2,
+            level=out.ErrorSeverity(out.Error_()),
+            spans=None,
+            core=out.CoreError(
+                error_type=out.ErrorType(out.Timeout()),
+                severity=out.ErrorSeverity(out.Error_()),
+                location=loc_f2,
+                message="timeout file f2 no rule (test)",
+                details=None,
+                rule_id=None,
+            ),
+        )
+        extra: List[SemgrepError] = [err_rule_a_on_f1, err_unscoped_on_f2]
+        return (
+            matches,
+            list(errors) + extra,
+            output_extra,
+            deps,
+            dep_parser_errors,
+            executed_rule_count,
+            all_subprojects,
+            sca_symbol_analysis,
+        )
+
+    mocker.patch(
+        "semgrep.run_scan.run_rules",
+        side_effect=run_rules_append_synthetic_baseline_failures,
+    )
+
+    run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            "--baseline-commit",
+            baseline_before_violations,
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    findings = upload_results_mock.last_request.json()["findings"]
+    rule_ids = {f["check_id"] for f in findings}
+    # rule-a on f1 and everything on f2 should be suppressed; rule-b on f1 should stay.
+    assert rule_ids == {"rule-b"}
+    assert len(findings) == 1
+
+
+@pytest.mark.parametrize("always_suppress_errors", [True, False], indirect=True)
+@pytest.mark.parametrize(
+    "scan_config",
+    [
+        dedent(
+            """
+        rules:
+        - id: eqeq-bad
+          pattern: $X == $X
+          message: "useless comparison"
+          languages: [python]
+          severity: ERROR
+          metadata:
+            source: https://semgrep.dev/r/eqeq-bad
+        - id: pattern-parse-error
+          pattern: $X ==
+          message: "useless comparison to 5"
+          languages: [python]
+          severity: ERROR
+     """
+        )
+    ],
+)
+@pytest.mark.osemfail
+def test_always_suppress_errors(
+    run_semgrep_on_copied_files: RunSemgrep,
+    snapshot,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+    always_suppress_errors,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep_on_copied_files(
+        options=["ci", "--oss-only", "--no-suppress-errors"],
+        strict=False,
+        assert_exit_code=0 if always_suppress_errors else 2,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "mocked_complete_response",
+    [
+        # Should produce output showing all findings as blocking
+        out.CiScanCompleteResponse(
+            success=True,
+            app_block_override=True,
+            app_block_reason="",
+            app_blocking_match_based_ids=[
+                out.MatchBasedId(
+                    "186b96f64aca90b7f5a9c75f2e44538885d0e727ed3161ef7b6d46c40b3d078acfc8859b290e118cb8ca42f5b41e61afe73b0f416f47a2f16abce67b1be307d3_0"
+                ),
+                out.MatchBasedId(
+                    "2c4ff12fcdf80ef1c00dd0f566ae102d792c7ba68e560d70f111aae3b3216c0b1b943e74d2ce29c0361f1fbc37bd4e9aafd32c3435a36c61b8bd3963efe0d7a1_0"
+                ),
+            ],
+        ),
+        # Should produce output showing all findings as blocking, and also mention the 'Test reason'
+        out.CiScanCompleteResponse(
+            success=True,
+            app_block_override=True,
+            app_block_reason="Test reason",
+            app_blocking_match_based_ids=[
+                out.MatchBasedId(
+                    "186b96f64aca90b7f5a9c75f2e44538885d0e727ed3161ef7b6d46c40b3d078acfc8859b290e118cb8ca42f5b41e61afe73b0f416f47a2f16abce67b1be307d3_0"
+                ),
+                out.MatchBasedId(
+                    "2c4ff12fcdf80ef1c00dd0f566ae102d792c7ba68e560d70f111aae3b3216c0b1b943e74d2ce29c0361f1fbc37bd4e9aafd32c3435a36c61b8bd3963efe0d7a1_0"
+                ),
+            ],
+        ),
+    ],
+)
+@pytest.mark.osemfail
+def test_app_blocked_findings(
+    git_tmp_path_with_commit,
+    snapshot,
+    mocker,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=["--no-suppress-errors", "--oss-only"],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+    snapshot.assert_match(
+        result.as_snapshot(),
+        "output.txt",
+    )
+
+
+@pytest.mark.parametrize(
+    "autofix",
+    [
+        pytest.param(True, id="autofix"),
+        pytest.param(False, id="noautofix"),
+    ],
+)
+@pytest.mark.parametrize(
+    "autofix_cli_option",
+    [
+        pytest.param(True, id="with-autofix-flag"),
+        pytest.param(False, id="without-autofix-flag"),
+    ],
+)
+@pytest.mark.osemfail
+def test_autofix_never_applies_changes(
+    git_tmp_path_with_commit,
+    mock_autofix,
+    autofix: bool,
+    autofix_cli_option: bool,
+    run_semgrep: RunSemgrep,
+    start_scan_mock_maker,
+    complete_scan_mock_maker,
+    upload_results_mock_maker,
+):
+    """
+    Test that `semgrep ci` never applies autofix changes to disk, regardless of
+    the autofix setting from the app.
+
+    When autofix is enabled from the app, the fixed_lines should be included in
+    the response to the app but NOT applied on disk.
+
+    When autofix is disabled from the app, no fixed_lines should be in the
+    response and files should remain unchanged.
+
+    The --autofix CLI flag should have no effect on `semgrep ci` behavior;
+    autofix behavior is controlled solely by the app setting.
+    """
+    repo_copy_base, base_commit, head_commit = git_tmp_path_with_commit
+
+    start_scan_mock = start_scan_mock_maker("https://semgrep.dev")
+    complete_scan_mock = complete_scan_mock_maker("https://semgrep.dev")
+    upload_results_mock = upload_results_mock_maker("https://semgrep.dev")
+
+    # Read the original file content before running semgrep ci
+    foo_py = repo_copy_base / "foo.py"
+    original_content = foo_py.read_text()
+
+    # Verify that the file contains the unfixed code (x == 5)
+    assert (
+        "x == 5" in original_content
+    ), "Test setup error: foo.py should contain 'x == 5'"
+
+    result = run_semgrep(
+        subcommand="ci",
+        options=[
+            "--no-suppress-errors",
+            "--oss-only",
+            *(["--autofix"] if autofix_cli_option else []),
+        ],
+        target_name=None,
+        strict=False,
+        assert_exit_code=None,
+        env={"SEMGREP_APP_TOKEN": "fake_key"},
+        use_click_runner=True,
+    )
+
+    # Verify the file was NOT modified on disk (autofix should never apply in ci)
+    current_content = foo_py.read_text()
+    assert current_content == original_content, (
+        f"semgrep ci should never modify files on disk, but foo.py was changed.\n"
+        f"autofix={autofix}, autofix_cli_option={autofix_cli_option}\n"
+        f"Expected 'x == 5' to still be in the file."
+    )
+
+    # Check the findings uploaded to the app
+    findings_json = upload_results_mock.last_request.json()
+    findings = findings_json["findings"]
+
+    # Find the finding for the eqeq-five rule (which has a fix defined)
+    eqeq_five_findings = [f for f in findings if f["check_id"] == "eqeq-five"]
+    assert len(eqeq_five_findings) == 1, "Expected exactly one eqeq-five finding"
+
+    eqeq_five_finding = eqeq_five_findings[0]
+
+    if autofix:
+        # When autofix is enabled, fixed_lines should be in the response
+        assert (
+            "fixed_lines" in eqeq_five_finding
+        ), "When autofix is enabled from app, fixed_lines should be included in findings"
+        # Verify the fix content is what we expect
+        assert eqeq_five_finding["fixed_lines"] == [
+            "    (x == 2)"
+        ], f"Expected fixed_lines to be ['    (x == 2)'], got {eqeq_five_finding['fixed_lines']}"
+    else:
+        # When autofix is disabled, fixed_lines should NOT be in the response
+        assert (
+            "fixed_lines" not in eqeq_five_finding
+        ), "When autofix is disabled from app, fixed_lines should NOT be in findings"

@@ -1,0 +1,282 @@
+(* Martin Jambon
+ *
+ * Copyright (C) 2022-2024 Semgrep Inc.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation, with the
+ * special exception on linking described in file license.txt.
+ *
+ * This library is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the file
+ * license.txt for more details.
+ *)
+open Fpath_.Operators
+open Common
+
+(*****************************************************************************)
+(* Prelude *)
+(*****************************************************************************)
+(*
+   Utilities for creating, scanning, and deleting a hierarchy
+   of test files.
+*)
+
+(*****************************************************************************)
+(* Types *)
+(*****************************************************************************)
+
+type t =
+  | Dir of string * t list
+  | File of string * string
+  | Symlink of string * string
+
+let file ?(contents = "") name : t = File (name, contents)
+let dir name entries : t = Dir (name, entries)
+let symlink name dest : t = Symlink (name, dest)
+
+(*****************************************************************************)
+(* Helpers *)
+(*****************************************************************************)
+
+let get_name = function
+  | Dir (name, _)
+  | File (name, _)
+  | Symlink (name, _) ->
+      name
+
+let rec sort xs =
+  List.map sort_one xs
+  |> List.sort (fun a b -> String.compare (get_name a) (get_name b))
+
+and sort_one x =
+  match x with
+  | Dir (name, xs) -> Dir (name, sort xs)
+  | File _
+  | Symlink _ ->
+      x
+
+(*****************************************************************************)
+(* Helpers independent of 't' but useful when working on file trees *)
+(*****************************************************************************)
+(* TODO move all those functions in UFile.ml *)
+
+let is_dir path =
+  match UUnix.lstat path with
+  | Ok { st_kind = S_DIR; _ } -> true
+  | _ -> false
+
+let is_file path =
+  match UUnix.lstat path with
+  | Ok { st_kind = S_REG; _ } -> true
+  | _ -> false
+
+let is_symlink path =
+  match UUnix.lstat path with
+  | Ok { st_kind = S_LNK; _ } -> true
+  | _ -> false
+
+let mkdir ?(root = Sys.getcwd () |> Fpath.v) path =
+  if Fpath.is_rel root then
+    invalid_arg
+      (spf "Testutil_files.mkdir: root must be an absolute path: %s" !!root);
+  let rec mkdir path =
+    let abs_path = root // path in
+    if not (Sys_.Fpath.exists abs_path) then (
+      let parent = Fpath.parent path in
+      mkdir parent;
+      Unix.mkdir !!abs_path 0o777)
+  in
+  if not (Sys_.Fpath.exists root) then
+    failwith ("Testutil_files.mkdir: root folder doesn't exist: " ^ !!root);
+  mkdir path
+
+let get_dir_entries path =
+  let dir = Unix.opendir !!path in
+  Common.protect
+    ~finally:(fun () -> Unix.closedir dir)
+    (fun () ->
+      let acc = ref [] in
+      try
+        while true do
+          acc := Unix.readdir dir :: !acc
+        done;
+        assert false
+      with
+      | End_of_file ->
+          List.rev !acc
+          |> List.filter (function
+            | ".."
+            | "." ->
+                false
+            | _ -> true))
+
+let remove path =
+  let rec remove path =
+    match UUnix.lstat path with
+    | Ok { st_kind = S_DIR; _ } ->
+        let names = get_dir_entries path in
+        List.iter (fun name -> remove (path / name)) names;
+        Unix.rmdir !!path
+    | Ok { st_kind = S_REG; _ } ->
+        (* On Unix, Sys.remove can remove write-protected files, but it
+           cannot on Windows, so preemptively make the file writable. *)
+        Unix.chmod !!path 0o600;
+        Sys.remove !!path
+    | _ -> Sys.remove !!path
+  in
+  if Sys_.Fpath.exists path then remove path
+
+let with_chdir dir f =
+  let dir_s = Fpath.to_string dir in
+  let orig = Unix.getcwd () in
+  Common.protect
+    ~finally:(fun () -> Unix.chdir orig)
+    (fun () ->
+      Unix.chdir dir_s;
+      f ())
+
+let create_tempdir () =
+  let path = UTmp.get_unique_temp_name ~prefix:"test" () in
+  Unix.mkdir !!path 0o777;
+  path
+
+let with_tempdir ?(persist = false) ?(chdir = false) func =
+  let dir = create_tempdir () in
+  Common.protect
+    ~finally:(fun () -> if not persist then remove dir)
+    (fun () -> if chdir then with_chdir dir (fun () -> func dir) else func dir)
+
+(*****************************************************************************)
+(* API *)
+(*****************************************************************************)
+
+(* List the paths of regular files.
+   Sorry, the implementation below with fold_left is a little tricky. *)
+let flatten ?(root = Fpath.v ".") ?(include_dirs = false) files =
+  let rec flatten acc files = List.fold_left flatten_one acc files
+  and flatten_one (acc, dir) file =
+    match file with
+    | Dir (name, entries) ->
+        let path = dir / name in
+        let acc = if include_dirs then path :: acc else acc in
+        let acc, _last_dir = flatten (acc, path) entries in
+        (acc, dir)
+    | File (name, _contents) ->
+        let file = dir / name in
+        (file :: acc, dir)
+    | Symlink (name, _dest) ->
+        let file = dir / name in
+        (file :: acc, dir)
+  in
+  let acc, _dir = flatten ([], root) files in
+  List.rev acc
+  |>
+  (* remove the leading "./" *)
+  List.map Fpath.normalize
+
+let print_files files =
+  flatten files |> List.iter (fun path -> Printf.printf "%s\n" !!path)
+
+let rec write_dir dst_dir files = List.iter (write dst_dir) files
+
+and write dst_dir file =
+  match file with
+  | Dir (name, entries) ->
+      let dir = dst_dir / name in
+      if not (Sys_.Fpath.exists dir) then Unix.mkdir !!dir 0o777;
+      write_dir dir entries
+  | File (name, contents) ->
+      let path = dst_dir / name in
+      UFile.write_file ~file:path contents
+  | Symlink (name, dest) ->
+      let path = !!(dst_dir / name) in
+      Unix.symlink dest path
+
+let rec read path =
+  let name = Fpath.basename path in
+  match UUnix.lstat path with
+  | Ok { st_kind = S_DIR; _ } ->
+      let names = get_dir_entries path in
+      Dir (name, List.map (fun name -> read (path / name)) names)
+  | Ok { st_kind = S_REG; _ } -> File (name, UFile.read_file path)
+  | Ok { st_kind = S_LNK; _ } -> Symlink (name, Unix.readlink !!path)
+  | Ok _ -> failwith ("Testutil_files.read: unsupported file type: " ^ !!path)
+  | Error (err, _, _) ->
+      failwith (spf "Cannot read %s: %s" !!path (Unix.error_message err))
+
+let read_dir root =
+  match UUnix.stat root with
+  | Ok { st_kind = S_DIR; _ } ->
+      let names = get_dir_entries root in
+      List.map (fun name -> read (root / name)) names
+  | _other ->
+      failwith ("Testutil_files.read: root must be a directory: " ^ !!root)
+
+let with_tempfiles ?chdir ?persist ?(verbose = false) files func =
+  with_tempdir ?persist ?chdir (fun root ->
+      (* files are automatically deleted as part of the cleanup done by
+         'with_tempdir'. *)
+      let files = sort files in
+      if verbose then (
+        Printf.printf "--- begin input files ---\n";
+        print_files files;
+        Printf.printf "--- end input files ---\n";
+        flush stdout);
+      write_dir root files;
+      func root)
+
+(*****************************************************************************)
+(* Inline tests *)
+(*****************************************************************************)
+
+let () =
+  Testo.test ?skipped:Testutil.skip_on_windows "Testutil_files" (fun () ->
+      with_tempdir ~chdir:true (fun root ->
+          assert (read_dir root =*= []);
+          assert (read_dir (Fpath.v ".") =*= []);
+          let tree =
+            [
+              File ("a", "hello");
+              File ("b", "yo");
+              Symlink ("c", "a");
+              Dir ("d", [ File ("e", "42"); Dir ("empty", []) ]);
+            ]
+          in
+          write_dir root tree;
+          let tree2 = read_dir root in
+          assert (sort tree2 =*= sort tree);
+
+          let paths = flatten tree |> Fpath_.to_strings in
+          List.iter Stdlib.print_endline paths;
+          assert (paths =*= [ "a"; "b"; "c"; "d/e" ])))
+
+(* Copy a file potentially to a new name.
+   Assume dst doesn't exist but its parent exists. *)
+let rec copy_file src dst =
+  match UUnix.stat src with
+  | Ok { st_kind = S_DIR; _ } ->
+      mkdir dst;
+      let names = get_dir_entries src in
+      List.iter (fun name -> copy_file (src / name) (dst / name)) names
+  | Ok { st_kind = S_REG; _ } ->
+      let data = UFile.read_file src in
+      UFile.write_file ~file:dst data
+  | Ok { st_kind = S_LNK; _ } ->
+      (* Unix.stat dereferences symlinks recursively *)
+      assert false
+  | Ok _ -> (* ignored exotic file kind *) ()
+  | Error (err, _, _) ->
+      failwith (spf "Cannot read %s: %s" !!src (Unix.error_message err))
+
+let copy ~src ~dst =
+  if Sys_.Fpath.exists dst then
+    failwith (spf "Destination file or folder already exists: %s" !!dst)
+  else copy_file src dst
+
+let with_temp_copy ~src func =
+  with_tempdir (fun tempdir ->
+      let dst = Fpath.add_seg tempdir (Fpath.basename src) in
+      copy src dst;
+      func ~dst)

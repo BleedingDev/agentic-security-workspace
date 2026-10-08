@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# This has been isolated into a separate testing script because we want to
+# be able to test the output of running the src/osemgrep tests. We also want
+# to run the osemgrep tests separately, because otherwise the output tends to
+# get drowned in our other tests.
+
+# fail on any failure
+set -e
+
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Main tests.
+#
+# This script must run from the project root, not in a temporary folder
+# such as _build because it checks the files containing the expected test
+# output.
+# Checking the status of the tests and approving the output is done with
+# './test status' and './test approve'. See './test --help' for options.
+# This uses our community project Testo.
+#
+testo_options='--max-inline-log-bytes=100_000'
+if [[ $(uname -o) = "Cygwin" ]]; then
+  # TODO: Remove when https://github.com/semgrep/testo/issues/124 is fixed
+  # Don't run tests in parallel on Windows, to prevent deadlocks
+  ./test -j 0 $testo_options
+else
+  ./test $testo_options
+fi
+
+# run inline tests
+# TODO: make them part of the testo test program above.
+dune runtest -f --no-buffer "libs/commons"
+dune runtest -f --no-buffer "libs/lib_parsing"
+dune runtest -f --no-buffer "src/engine"
+dune runtest -f --no-buffer "src/fixing"
+
+# osemgrep expect tests
+# TODO: migrate to testo
+if ! dune runtest -f --no-buffer src/osemgrep; then
+  echo -e "\n${RED}If expectation tests have failed, run \`dune promote\` to apply the corresponding diff.${NC}\n\n"
+  exit 1
+fi

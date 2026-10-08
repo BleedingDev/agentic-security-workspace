@@ -1,0 +1,73 @@
+{
+  "dependencies": {
+    "DeterminateSystems": {
+      "flake-checker-action": "de924abd783455e8429c858962b9e43062d19da1",
+      "nix-installer-action": "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
+    },
+    "EndBug": {
+      "add-and-commit": "cc9c08ba6c8df3b93a8f2db63e89b98368ae2ae8"
+    },
+    "actions": {
+      "cache": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "checkout": "df4cb1c069e1874edd31b4311f1884172cec0e10",
+      "create-github-app-token": "bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "download-artifact": "37930b1c2abaa49bbe596cd826c3c89aef350131",
+      "setup-go": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+      "setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    },
+    "anthropics": {
+      "claude-code-action": "11ba60486e4aec9ddfeafcf4bb3f00b028ac2c16"
+    },
+    "astral-sh": {
+      "setup-uv": "37802adc94f370d6bfd71619e3f0bf239e1f3b78"
+    },
+    "aws-actions": {
+      "amazon-ecr-login": "fa648b43de3d4d023bcb3f89ed6940096949c419",
+      "configure-aws-credentials": "cbe3b392738ccf3f987d68400dafcf4b0624a56c"
+    },
+    "cachix": {
+      "cachix-action": "38b082610b782e7e93e209c35fd730d399dee866"
+    },
+    "christian-draeger": {
+      "increment-semantic-version": "4ac542a8ebf91f4edc224cbe3a19cc086826ae77"
+    },
+    "depot": {
+      "bake-action": "1d58c2668346981089b088b7ef36755b206b20e9",
+      "build-push-action": "98e78adca7817480b8185f474a400b451d74e287",
+      "setup-action": "15c09a5f77a0840ad4bce955686522a257853461"
+    },
+    "docker": {
+      "login-action": "dbcb813823bdd20940b903addbd779551569679f",
+      "metadata-action": "dc802804100637a589fabce1cb79ff13a1411302",
+      "setup-buildx-action": "37fe631027851001ddb9b187196cc803df7f5f0e",
+      "setup-qemu-action": "1f40c72289eff860ee54a304f1438e3cff362e0a"
+    },
+    "jtmullen": {
+      "submodule-branch-check-action": "ab0d3a69278e3fa0a2d4f3be3199d2514b676e13"
+    },
+    "marocchino": {
+      "sticky-pull-request-comment": "5770ad5eb8f42dd2c4f34da00c94c5381e49af88"
+    },
+    "peter-evans": {
+      "create-pull-request": "5f6978faf089d4d20b00c7766989d076bb2fc7f1"
+    },
+    "pre-commit": {
+      "action": "646c83fcd040023954eafda54b4db0192ce70507"
+    },
+    "pypa": {
+      "gh-action-pypi-publish": "cef221092ed1bacb1cc03d23a2d87d1d172e277b"
+    },
+    "semgrep": {
+      "claude-taskmaster": "e65485b0defbd6ef6c59adcdc91a1c3d9893c215",
+      "github-api-commit-action": "455b1aaa1455b8c1d7ef123c4cb918a1a4709a5d",
+      "setup-ocaml": "a739c5405d73c42ef15a9dc995efc0f87396cc36"
+    },
+    "slackapi": {
+      "slack-github-action": "dcb1066f776dd043e64d0e8ba94ca15cc7e1875d"
+    },
+    "softprops": {
+      "action-gh-release": "efb35369e0ad2afab669f228072c1b0d510eae64"
+    }
+  }
+}

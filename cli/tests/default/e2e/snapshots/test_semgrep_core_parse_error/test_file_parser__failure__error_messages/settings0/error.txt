@@ -1,0 +1,69 @@
+running 1 rules from 1 config rules/eqeq-basic.yaml_0
+Rules:
+- rules.eqeq-bad
+
+
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 1 file tracked by git with 1 Code rule:
+  Scanning 1 file.
+SCA findings adjustment: No SCA rules to adjust
+
+========================================
+Files skipped:
+========================================
+
+  [1m[24mAlways skipped by Semgrep:[0m
+
+   • <none>
+
+  [1m[24mSkipped by .gitignore:[0m
+  [1m[24m(Disable by passing --no-git-ignore)[0m
+
+   • <all files not listed by `git ls-files` were skipped>
+
+  [1m[24mSkipped by .semgrepignore:[0m
+  [1m[24m- https://semgrep.dev/docs/ignoring-files-folders-code/#understand-semgrep-defaults[0m
+
+   • <none>
+
+  [1m[24mSkipped by --include patterns:[0m
+
+   • <none>
+
+  [1m[24mSkipped by --exclude patterns:[0m
+
+   • <none>
+
+  [1m[24mFiles that couldn't be accessed:[0m
+
+   • <none>
+
+  [1m[24mSkipped by limiting to files smaller than 1000000 bytes:[0m
+  [1m[24m(Adjust with the --max-target-bytes flag)[0m
+
+   • <none>
+
+  [1m[24mPartially analyzed due to parsing or internal Semgrep errors[0m
+
+   • [36m[22m[24mtargets/bad/invalid_go.go (~18.2% of lines always skipped)[0m
+
+     [38;5;7m[22m[24mThe following lines were skipped for all analysis:[0m
+
+     • [36m[22m[24mlines 9-9[0m[33m[22m[24m due to exception "PartialParsing" raised during analysis[0m
+     • [36m[22m[24mlines 10-10[0m[33m[22m[24m due to exception "PartialParsing" raised during analysis[0m
+
+
+
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 0 (0 blocking)
+ • Rules run: 1
+ • Targets scanned: 1
+ • Parsed lines: ~81.8%
+ • No ignore information available
+Ran 1 rule on 1 file: 0 findings.
+Not sending pseudonymous metrics since metrics are configured to OFF, registry usage is False, and login status is False
