@@ -1,0 +1,9 @@
+---
+platform: android
+title: Missing Permission Rationale
+id: MASTG-TEST-0256
+maswe: [MASWE-0066]
+status: placeholder
+note: This test checks if the app does not provide a rationale for requesting permissions. See https://developer.android.com/training/permissions/requesting#explain and https://developer.android.com/training/permissions/explaining-access#privacy-dashboard-show-rationale
+knowledge: [MASTG-KNOW-0017]
+---

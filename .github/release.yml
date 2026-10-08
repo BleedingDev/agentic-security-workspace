@@ -1,0 +1,42 @@
+changelog:
+  exclude:
+    labels:
+      - "ignore-for-release"
+  categories:
+    - title: 📢 News
+      labels:
+        - "news"
+    - title: 🧪 MASTG Tests
+      labels:
+        - "tests"
+    - title: 📖 MASTG Knowledge
+      labels:
+        - "knowledge"
+    - title: 🎬 MASTG Demos
+      labels:
+        - "demos"
+    - title: ✨ MASTG Techniques
+      labels:
+        - "techniques"
+    - title: 🛡️ MASTG Best Practices
+      labels:
+        - "best practices"
+    - title: 🪄 MASTG Tools
+      labels:
+        - "tools"
+    - title: ⚡ Automation
+      labels:
+        - "automation"
+    - title: 📜 Mobile Security Checklists
+      labels:
+        - "checklists"
+    - title: 🎉 New Donators
+      labels:
+        - "donation"
+    - title: 🐞 Errata Corrections
+      labels:
+        - "errata"
+    - title: Other Changes
+      labels:
+        - "*"
+   

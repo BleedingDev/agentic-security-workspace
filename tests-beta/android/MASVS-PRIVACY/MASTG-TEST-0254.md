@@ -1,0 +1,33 @@
+---
+title: Dangerous App Permissions
+platform: android
+id: MASTG-TEST-0254
+type: [static, code]
+maswe: [MASWE-0066]
+knowledge: [MASTG-KNOW-0017]
+---
+
+## Overview
+
+In Android apps, permissions are acquired through different methods to access information and system functionalities, including the camera, location, or storage. The necessary permissions are specified in the `AndroidManifest.xml` file with `<uses-permission>` tags.
+
+## Steps
+
+1. Use @MASTG-TECH-0117 to obtain the AndroidManifest.xml.
+2. Use @MASTG-TECH-0126 to obtain the list of declared permissions.
+
+## Observation
+
+The output should contain the list of permissions declared by the app.
+
+## Evaluation
+
+The test case fails if there are any dangerous permissions in the app.
+
+Compare the list of declared permissions with the list of [dangerous permissions](https://android.googlesource.com/platform/frameworks/base/%2B/master/core/res/AndroidManifest.xml) defined by Android. You can find more details in the [Android documentation](https://developer.android.com/reference/android/Manifest.permission).
+
+**Context Consideration**:
+
+Context is essential when evaluating permissions. For example, an app that uses the camera to scan QR codes should have the `CAMERA` permission. However, if the app does not have a camera feature, the permission is unnecessary and should be removed.
+
+Also, consider if there are any privacy-preserving alternatives to the permissions used by the app. For example, instead of using the `CAMERA` permission, the app could [use the device's built-in camera app](https://developer.android.com/privacy-and-security/minimize-permission-requests#take-photo) to capture photos or videos by invoking the `ACTION_IMAGE_CAPTURE` or `ACTION_VIDEO_CAPTURE` intent actions. This approach allows the app to access the camera functionality without directly requesting the `CAMERA` permission, thereby enhancing user privacy.

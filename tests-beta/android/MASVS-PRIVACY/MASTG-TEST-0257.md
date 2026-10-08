@@ -1,0 +1,9 @@
+---
+platform: android
+title: Not Resetting Unused Permissions
+id: MASTG-TEST-0257
+maswe: [MASWE-0066]
+status: placeholder
+note: This test checks if the app does not remove unnecessary access to granted permissions. See https://developer.android.com/training/permissions/requesting#remove-access
+knowledge: [MASTG-KNOW-0017]
+---

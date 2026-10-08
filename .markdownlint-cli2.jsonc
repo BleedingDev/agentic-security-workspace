@@ -1,0 +1,11 @@
+{
+  "config": {
+    "extends": "./.markdownlint.jsonc"
+  },
+  "globs": [
+    "**/*.md"
+  ],
+  "customRules": ["markdownlint-rule-search-replace"],
+  "ignores": ["node_modules", ".git", ".github/instructions/markdown.instructions.md", ".github/workflows", ".github/scripts", ".github/ISSUE_TEMPLATE", "src", "Crackmes", "Samples", "venv"],
+  "gitignore": true
+}
