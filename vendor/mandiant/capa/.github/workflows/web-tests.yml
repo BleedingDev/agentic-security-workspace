@@ -1,0 +1,45 @@
+name: capa Explorer Web tests 
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'web/explorer/**'
+  workflow_call:  # this allows the workflow to be called by other workflows
+
+permissions: read-all
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: 'recursive'
+        fetch-depth: 1
+        show-progress: true
+
+    - name: Set up Node
+      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version: 24
+        cache: 'npm'
+        cache-dependency-path: 'web/explorer/package-lock.json'
+
+    - name: Install dependencies
+      run: npm ci
+      working-directory: web/explorer
+
+    - name: Lint
+      run: npm run lint
+      working-directory: web/explorer
+
+    - name: Format
+      run: npm run format:check
+      working-directory: web/explorer
+
+    - name: Run unit tests
+      run: npm run test
+      working-directory: web/explorer

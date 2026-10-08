@@ -1,0 +1,46 @@
+name: changelog
+
+on:
+  # We need pull_request_target instead of pull_request because a write
+  # repository token is needed to add a review to a PR. DO NOT BUILD
+  # OR RUN UNTRUSTED CODE FROM PRs IN THIS ACTION
+  pull_request_target:
+    types: [opened, edited, synchronize]
+
+jobs:
+  check_changelog:
+    permissions:
+      pull-requests: write
+    # no need to check for dependency updates via dependabot
+    # github.event.pull_request.user.login refers to PR author
+    if: |
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot-preview[bot]'
+    runs-on: ubuntu-latest
+    env:
+      NO_CHANGELOG: '[x] No CHANGELOG update needed'
+    steps:
+    - name: Get changed files
+      id: files
+      uses: Ana06/get-changed-files@25f79e676e7ea1868813e21465014798211fad8c # v2.3.0
+    - name: check changelog updated
+      id: changelog_updated
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        FILES: ${{ steps.files.outputs.modified }}
+      run: |
+        echo $FILES | grep -qF 'CHANGELOG.md' || echo $PR_BODY | grep -qiF "$NO_CHANGELOG"
+    - name: Reject pull request if no CHANGELOG update
+      if: ${{ always() && steps.changelog_updated.outcome == 'failure' }}
+      uses: Ana06/automatic-pull-request-review@76aaf9b15b116a54e1da7a28a46f91fe089600bf # v0.2.0
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        event: REQUEST_CHANGES
+        body: "Please add bug fixes, new features, breaking changes and anything else you think is worthwhile mentioning to the `master (unreleased)` section of CHANGELOG.md. If no CHANGELOG update is needed add the following to the PR description: `${{ env.NO_CHANGELOG }}`"
+        allow_duplicate: false
+    - name: Dismiss previous review if CHANGELOG update
+      uses: Ana06/automatic-pull-request-review@76aaf9b15b116a54e1da7a28a46f91fe089600bf # v0.2.0
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        event: DISMISS
+        body: "CHANGELOG updated or no update needed, thanks! :smile:"

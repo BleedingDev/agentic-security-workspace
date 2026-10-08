@@ -1,0 +1,270 @@
+name: CI
+
+# tests.yml workflow will run for all changes except:
+# any file or directory under web/ or doc/
+# any Markdown (.md) file anywhere in the repository
+
+on:
+  push:
+    branches: [ master ]
+    paths-ignore:
+      - 'web/**'
+      - 'doc/**'
+      - '**.md'
+  pull_request:
+    branches: [ master ]
+    paths-ignore:
+      - 'web/**'
+      - 'doc/**'
+      - '**.md'
+
+permissions:
+  contents: read
+
+# save workspaces to speed up testing
+env:
+  CAPA_SAVE_WORKSPACE: "True"
+
+jobs:
+  changelog_format:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout capa
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    # The sync GH action in capa-rules relies on a single '- *$' in the CHANGELOG file
+    - name: Ensure CHANGELOG has '- *$'
+      run: |
+        number=$(grep '\- *$' CHANGELOG.md | wc -l)
+        if [ $number != 1 ]; then exit 1; fi
+
+  code_style:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout capa
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    # use latest available python to take advantage of best performance
+    - name: Set up Python 3.13
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.13"
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install -e .[dev,scripts]
+    - name: Lint with ruff
+      run: pre-commit run ruff
+    - name: Check formatting with ruff
+      run: pre-commit run ruff-format --show-diff-on-failure
+    - name: Check types with mypy
+      run: pre-commit run mypy --hook-stage manual
+    - name: Check imports against dependencies
+      run: pre-commit run deptry --hook-stage manual
+
+  rule_linter:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout capa with submodules
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: recursive
+        persist-credentials: false
+    - name: Set up Python 3.13
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.13"
+    - name: Install capa
+      run: |
+        pip install -r requirements.txt
+        pip install -e .[dev,scripts]
+    - name: Run rule linter
+      run: python scripts/lint.py rules/
+
+  tests:
+    name: Tests in ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: [code_style, rule_linter]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, windows-2022, macos-15-intel, macos-14]
+        # across all operating systems
+        python-version: ["3.10", "3.13"]
+        include:
+          # on Ubuntu run these as well
+          - os: ubuntu-22.04
+            python-version: "3.11"
+          - os: ubuntu-22.04
+            python-version: "3.12"
+    steps:
+    - name: Checkout capa with submodules
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: recursive
+        persist-credentials: false
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install pyyaml
+      if: matrix.os == 'ubuntu-22.04'
+      run: sudo apt-get install -y libyaml-dev
+    - name: Install capa
+      run: |
+        pip install -r requirements.txt
+        pip install -e .[dev,scripts]
+    - name: Cache vivisect workspaces
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: tests/data/**/*.viv
+        key: viv-${{ runner.os }}-${{ runner.arch }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+    - name: Run tests (fast)
+      # this set of tests runs about 80% of the cases in 20% of the time,
+      # and should catch most errors quickly.
+      run:  pre-commit run pytest-fast --all-files --hook-stage manual
+    - name: Run tests
+      run: pytest -v tests/
+
+  binja-tests:
+    name: Binary Ninja tests for ${{ matrix.python-version }}
+    env:
+      BN_SERIAL: ${{ secrets.BN_SERIAL }}
+    runs-on: ubuntu-22.04
+    needs: [tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+    - name: Checkout capa with submodules
+      # do only run if BN_SERIAL is available, have to do this in every step, see https://github.com/orgs/community/discussions/26726#discussioncomment-3253118
+      if: ${{ env.BN_SERIAL != 0 }}
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: recursive
+        persist-credentials: false
+    - name: Set up Python ${{ matrix.python-version }}
+      if: ${{ env.BN_SERIAL != 0 }}
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install pyyaml
+      if: ${{ env.BN_SERIAL != 0 }}
+      run: sudo apt-get install -y libyaml-dev
+    - name: Install capa
+      if: ${{ env.BN_SERIAL != 0 }}
+      run: |
+        pip install -r requirements.txt
+        pip install -e .[dev,scripts]
+    - name: install Binary Ninja
+      if: ${{ env.BN_SERIAL != 0 }}
+      run: |
+        mkdir ./.github/binja
+        curl "https://raw.githubusercontent.com/Vector35/binaryninja-api/6812c97/scripts/download_headless.py" -o ./.github/binja/download_headless.py
+        python ./.github/binja/download_headless.py --serial ${BN_SERIAL} --output .github/binja/BinaryNinja-headless.zip
+        unzip .github/binja/BinaryNinja-headless.zip -d .github/binja/
+        python .github/binja/binaryninja/scripts/install_api.py --install-on-root --silent
+    - name: Run tests
+      if: ${{ env.BN_SERIAL != 0 }}
+      env:
+        BN_LICENSE: ${{ secrets.BN_LICENSE }}
+      run: pytest -v tests/test_binja_features.py  # explicitly refer to the binja tests for performance. other tests run above.
+
+  ghidra-tests:
+    name: Ghidra tests for ${{ matrix.python-version }}
+    runs-on: ubuntu-22.04
+    needs: [tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+        java-version: ["21"]
+        ghidra-version: ["12.0"]
+        public-version: ["PUBLIC_20251205"] # for ghidra releases
+        ghidra-sha256: ['af43e8cfb2fa4490cf6020c3a2bde25c159d83f45236a0542688a024e8fc1941']
+    steps:
+    - name: Checkout capa with submodules
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: true
+        persist-credentials: false
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Set up Java ${{ matrix.java-version }}
+      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+      with:
+        distribution: 'temurin'
+        java-version: ${{ matrix.java-version }}
+    - name: Install Ghidra ${{ matrix.ghidra-version }} 
+      run: |
+        mkdir ./.github/ghidra
+        wget "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ matrix.ghidra-version }}_build/ghidra_${{ matrix.ghidra-version }}_${{ matrix.public-version }}.zip" -O ./.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip
+        echo "${{ matrix.ghidra-sha256 }} ./.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip" | sha256sum -c -
+        unzip .github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC.zip -d .github/ghidra/
+    - name: Install pyyaml
+      run: sudo apt-get install -y libyaml-dev
+    - name: Install capa with Ghidra extra
+      run: |
+        pip install -e .[dev,ghidra]
+    - name: Run tests
+      env:
+        GHIDRA_INSTALL_DIR: ${{ github.workspace }}/.github/ghidra/ghidra_${{ matrix.ghidra-version }}_PUBLIC
+      run: pytest -v tests/test_ghidra_features.py
+ 
+  idalib-tests:
+    name: IDA ${{ matrix.ida-version }} tests for ${{ matrix.python-version }}
+    runs-on: ubuntu-22.04
+    needs: [tests]
+    env:
+      IDA_LICENSE_ID: ${{ secrets.IDA_LICENSE_ID }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+        ida-version: ["9.2", "9.3", "9.4", "latest"]
+    steps:
+    - name: Checkout capa with submodules
+      # do only run if IDA_LICENSE_ID is available, have to do this in every step, see https://github.com/orgs/community/discussions/26726#discussioncomment-3253118
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: recursive
+        persist-credentials: false
+    - name: Setup uv
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+        version: "0.12.6"
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      run: sudo apt-get install -y libyaml-dev
+    - name: Install capa
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      run: |
+        uv sync --extra dev --extra scripts
+        uv pip install idapro
+    - name: Install IDA ${{ matrix.ida-version }}
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      run: |
+        uv run --with ida-hcli hcli \
+          ida install \
+          --download-id "ida-pro:${{ matrix.ida-version }}" \
+          --license-id "${IDA_LICENSE_ID}" \
+          --install-dir="${{ runner.temp }}/app/ida" \
+          --accept-eula \
+          --set-default \
+          --yes
+      env:
+        HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
+        IDA_LICENSE_ID: ${{ secrets.IDA_LICENSE_ID }}
+    - name: Run tests
+      if: ${{ env.IDA_LICENSE_ID != 0 }}
+      run: uv run pytest -v tests/test_idalib_features.py  # explicitly refer to the idalib tests for performance. other tests run above.
