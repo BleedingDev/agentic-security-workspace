@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'upstreams.json'
+ATTRIBUTE_MARKER = b'# Preserved snapshot: retain raw bytes and embedded LFS payloads.\n** -text -filter\n'
 
 
 def git(*args, env=None, input=None):
@@ -111,6 +112,33 @@ def materialize_lfs(url, tree, records):
         return git('write-tree', env=env)
 
 
+def preserve_attributes(tree):
+    """Keep exact fixture bytes even when upstream enables text normalization."""
+    listing = subprocess.check_output(['git', 'ls-tree', '-rz', tree], cwd=ROOT)
+    entries = {}
+    for item in listing.split(b'\0'):
+        if item:
+            metadata, path = item.split(b'\t', 1)
+            entries[path.decode(errors='surrogateescape')] = metadata.split()[0].decode()
+    paths = [p for p in entries if p.rsplit('/', 1)[-1] == '.gitattributes']
+    if '.gitattributes' not in paths:
+        paths.append('.gitattributes')
+    with tempfile.TemporaryDirectory(prefix='vendor-attributes-', dir=git('rev-parse', '--git-dir')) as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp).resolve() / 'index'))
+        git('read-tree', tree, env=env)
+        for path in paths:
+            original = subprocess.check_output(['git', 'show', f'{tree}:{path}'], cwd=ROOT) if path in entries else b''
+            if original.endswith(ATTRIBUTE_MARKER):
+                continue
+            if original and path + '.upstream' not in entries:
+                oid = git('hash-object', '-w', '--stdin', input=original)
+                git('update-index', '--add', '--cacheinfo', '100644', oid, path + '.upstream', env=env)
+            changed = original.rstrip(b'\n') + b'\n' + ATTRIBUTE_MARKER
+            oid = git('hash-object', '-w', '--stdin', input=changed)
+            git('update-index', '--add', '--cacheinfo', '100644', oid, path, env=env)
+        return git('write-tree', env=env)
+
+
 def fetch(url, revision):
     subprocess.run(['git', '-c', 'gc.auto=0', '-c', 'submodule.recurse=false',
                     'fetch', '--no-tags', '--depth=1', url, revision], cwd=ROOT, check=True)
@@ -133,7 +161,7 @@ def flatten(url, commit, records, lfs, trail=()):
         if mode == '160000':
             links.append((path, oid))
     if not links:
-        return materialize_lfs(url, git('rev-parse', f'{commit}^{{tree}}'), lfs)
+        return preserve_attributes(materialize_lfs(url, git('rev-parse', f'{commit}^{{tree}}'), lfs))
     config = configparser.ConfigParser(interpolation=None)
     config.read_string(git('show', f'{commit}:.gitmodules'))
     urls = {config[s]['path']: config[s]['url'] for s in config.sections()}
@@ -156,7 +184,7 @@ def flatten(url, commit, records, lfs, trail=()):
                             'tree': child_tree, 'submodules': child_records, 'lfs': child_lfs})
             git('update-index', '--force-remove', '--', path, env=env)
             git('read-tree', f'--prefix={path}/', child_tree, env=env)
-        return materialize_lfs(url, git('write-tree', env=env), lfs)
+        return preserve_attributes(materialize_lfs(url, git('write-tree', env=env), lfs))
 
 
 def verify(entry):
