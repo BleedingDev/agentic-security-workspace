@@ -1,0 +1,60 @@
+{
+ "Q6_K": {
+  "file": "glm53/tests/data/Q6_K_blk_0_attn_k_weight.bin",
+  "tensor": "blk.0.attn_k.weight",
+  "dims": [
+   4096,
+   8192
+  ],
+  "rows": 2,
+  "ne0": 4096,
+  "nbytes": 6720
+ },
+ "Q8_0": {
+  "file": "glm53/tests/data/Q8_0_blk_0_hc_attn_fn_weight.bin",
+  "tensor": "blk.0.hc_attn_fn.weight",
+  "dims": [
+   16384,
+   24
+  ],
+  "rows": 1,
+  "ne0": 16384,
+  "nbytes": 17408
+ },
+ "IQ3_S": {
+  "file": "glm53/tests/data/IQ3_S_blk_3_ffn_down_exps_weight.bin",
+  "tensor": "blk.3.ffn_down_exps.weight",
+  "dims": [
+   2048,
+   4096,
+   288
+  ],
+  "rows": 4,
+  "ne0": 2048,
+  "nbytes": 3520
+ },
+ "IQ2_S": {
+  "file": "glm53/tests/data/IQ2_S_blk_3_ffn_gate_exps_weight.bin",
+  "tensor": "blk.3.ffn_gate_exps.weight",
+  "dims": [
+   4096,
+   2048,
+   288
+  ],
+  "rows": 2,
+  "ne0": 4096,
+  "nbytes": 2624
+ },
+ "IQ4_XS": {
+  "file": "glm53/tests/data/IQ4_XS_blk_11_ffn_down_exps_weight.bin",
+  "tensor": "blk.11.ffn_down_exps.weight",
+  "dims": [
+   2048,
+   4096,
+   288
+  ],
+  "rows": 4,
+  "ne0": 2048,
+  "nbytes": 4352
+ }
+}
