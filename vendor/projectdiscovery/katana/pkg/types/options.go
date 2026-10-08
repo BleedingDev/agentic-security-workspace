@@ -1,0 +1,318 @@
+package types
+
+import (
+	"context"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/projectdiscovery/goflags"
+	"github.com/projectdiscovery/gologger"
+	"github.com/projectdiscovery/gologger/levels"
+	"github.com/projectdiscovery/katana/pkg/output"
+	fileutil "github.com/projectdiscovery/utils/file"
+	logutil "github.com/projectdiscovery/utils/log"
+)
+
+// OnResultCallback (output.Result)
+type OnResultCallback func(output.Result)
+
+// OnSkipURLCallback (string)
+type OnSkipURLCallback func(string)
+
+type Options struct {
+	// URLs contains a list of URLs for crawling
+	URLs goflags.StringSlice
+	// Resume the scan from the state stored in the resume config file
+	Resume string
+	// Exclude host matching specified filter ('cdn', 'private-ips', cidr, ip, regex)
+	Exclude goflags.StringSlice
+	// Scope contains a list of regexes for in-scope URLS
+	Scope goflags.StringSlice
+	// OutOfScope contains a list of regexes for out-scope URLS
+	OutOfScope goflags.StringSlice
+	// NoScope disables host based default scope
+	NoScope bool
+	// DisplayOutScope displays out of scope items in results
+	DisplayOutScope bool
+	// ExtensionsMatch contains extensions to match explicitly
+	ExtensionsMatch goflags.StringSlice
+	// ExtensionFilter contains additional items for filter list
+	ExtensionFilter goflags.StringSlice
+	// NoDefaultExtFilter removes the default extensions from the filter list
+	NoDefaultExtFilter bool
+	// OutputMatchCondition is the condition to match output
+	OutputMatchCondition string
+	// OutputFilterCondition is the condition to filter output
+	OutputFilterCondition string
+	// MaxDepth is the maximum depth to crawl
+	MaxDepth int
+	// BodyReadSize is the maximum size of response body to read
+	BodyReadSize int
+	// Timeout is the time to wait for request in seconds
+	Timeout int
+	// TimeStable is the time to wait until the page is stable
+	TimeStable int
+	// CrawlDuration is the duration in seconds to crawl target from
+	CrawlDuration time.Duration
+	// MaxFailureCount is the maximum number of consecutive failures before stopping
+	MaxFailureCount int
+	// Delay is the delay between each crawl requests in seconds
+	Delay int
+	// RateLimit is the maximum number of requests to send per second
+	RateLimit int
+	// Retries is the number of retries to do for request
+	Retries int
+	// RateLimitMinute is the maximum number of requests to send per minute
+	RateLimitMinute int
+	// HostRateLimit is the maximum number of requests to send per second per host
+	HostRateLimit int
+	// HostRateLimitMinute is the maximum number of requests to send per minute per host
+	HostRateLimitMinute int
+	// Concurrency is the number of concurrent crawling goroutines
+	Concurrency int
+	// Parallelism is the number of urls processing goroutines
+	Parallelism int
+	// FormConfig is the path to the form configuration file
+	FormConfig string
+	// Proxy is the URL for the proxy server
+	Proxy string
+	// Strategy is the crawling strategy. depth-first or breadth-first
+	Strategy string
+	// FieldScope is the scope field for default DNS scope
+	FieldScope string
+	// OutputFile is the file to write output to
+	OutputFile string
+	// KnownFiles enables crawling of knows files like robots.txt, sitemap.xml, etc
+	KnownFiles string
+	// Fields is the fields to format in output
+	Fields string
+	// StoreFields is the fields to store in separate per-host files
+	StoreFields string
+	// FieldConfig is the path to the custom field configuration file
+	FieldConfig string
+	// NoColors disables coloring of response output
+	NoColors bool
+	// JSON enables writing output in JSON format
+	JSON bool
+	// ExcludeOutputFields is the list of fields to exclude from the output
+	ExcludeOutputFields goflags.StringSlice
+	// ListOutputFields is the list of fields
+	ListOutputFields bool
+	// Silent shows only output
+	Silent bool
+	// Verbose specifies showing verbose output
+	Verbose bool
+	// TechDetect enables technology detection
+	TechDetect bool
+	// EnableDiagnostics enables diagnostics
+	EnableDiagnostics bool
+	// Version enables showing of crawler version
+	Version bool
+	// ScrapeJSResponses enables scraping of relative endpoints from javascript
+	ScrapeJSResponses bool
+	// ScrapeJSLuiceResponses enables scraping of endpoints from javascript using jsluice
+	ScrapeJSLuiceResponses bool
+	// CustomHeaders is a list of custom headers to add to request
+	CustomHeaders goflags.StringSlice
+	// Headless enables headless scraping
+	Headless bool
+	// HeadlessHybrid enables headless hybrid scraping
+	HeadlessHybrid bool
+	// AutomaticFormFill enables optional automatic form filling and submission
+	AutomaticFormFill bool
+	// FormExtraction enables extraction of form, input, textarea & select elements
+	FormExtraction bool
+	// UseInstalledChrome skips chrome install and use local instance
+	UseInstalledChrome bool
+	// ShowBrowser specifies whether the show the browser in headless mode
+	ShowBrowser bool
+	// HeadlessOptionalArguments specifies optional arguments to pass to Chrome
+	HeadlessOptionalArguments goflags.StringSlice
+	// HeadlessNoSandbox specifies if chrome should be start in --no-sandbox mode
+	HeadlessNoSandbox bool
+	// SystemChromePath : Specify the chrome binary path for headless crawling
+	SystemChromePath string
+	// ChromeWSUrl : Specify the Chrome debugger websocket url for a running Chrome instance to attach to
+	ChromeWSUrl string
+	// OnResult allows callback function on a result
+	OnResult OnResultCallback
+	// OnSkipURL allows callback function on a skipped url
+	OnSkipURL OnSkipURLCallback
+	// Context is an optional parent context for the crawl lifecycle.
+	// When set, cancelling this context stops the rate limiter, crawl session,
+	// queue, known-files requests, and headless browser.
+	// Defaults to context.Background() if nil.
+	Context context.Context `json:"-" yaml:"-"`
+	// StoreResponse specifies if katana should store http requests/responses
+	StoreResponse bool
+	// StoreResponseDir specifies if katana should use a custom directory to store http requests/responses
+	StoreResponseDir string
+	// NoClobber specifies if katana should overwrite existing output files
+	NoClobber bool
+	// StoreFieldDir specifies if katana should use a custom directory to store fields
+	StoreFieldDir string
+	// OmitRaw omits raw requests/responses from the output
+	OmitRaw bool
+	// OmitBody omits the response body from the output
+	OmitBody bool
+	// ChromeDataDir : 	Specify the --user-data-dir to chrome binary to preserve sessions
+	ChromeDataDir string
+	// HeadlessNoIncognito specifies if chrome should be started without incognito mode
+	HeadlessNoIncognito bool
+	// XhrExtraction extract xhr requests
+	XhrExtraction bool
+	// HealthCheck determines if a self-healthcheck should be performed
+	HealthCheck bool
+	// PprofServer enables pprof server
+	PprofServer bool
+	// ErrorLogFile specifies a file to write with the errors of all requests
+	ErrorLogFile string
+	// Resolvers contains custom resolvers
+	Resolvers goflags.StringSlice
+	// OutputTemplate enables custom output template
+	OutputTemplate string
+	// OutputMatchRegex is the regex to match output url
+	OutputMatchRegex goflags.StringSlice
+	// OutputFilterRegex is the regex to filter output url
+	OutputFilterRegex goflags.StringSlice
+	// FilterRegex is the slice regex to filter url
+	FilterRegex []*regexp.Regexp
+	// MatchRegex is the slice regex to match url
+	MatchRegex []*regexp.Regexp
+	//DisableUpdateCheck disables automatic update check
+	DisableUpdateCheck bool
+	//IgnoreQueryParams ignore crawling same path with different query-param values
+	IgnoreQueryParams bool
+	// FilterSimilar filters crawling of similar looking URLs
+	// by normalizing variable path segments (IDs, UUIDs, hashes, dates)
+	FilterSimilar bool
+	// FilterSimilarThreshold is the number of distinct values at a path position
+	// before it is treated as a parameter (default 10, lower = more aggressive)
+	FilterSimilarThreshold int
+	// Debug
+	Debug bool
+	// TlsImpersonate enables experimental tls ClientHello randomization for standard crawler
+	TlsImpersonate bool
+	// DisableRedirects disables the following of redirects
+	DisableRedirects bool
+	// PageContentSimilar enables optional Layer-2 content similarity filtering
+	PageContentSimilar bool
+	// SimilarityDeduplication is a deprecated alias for PageContentSimilar (-sdd)
+	SimilarityDeduplication bool
+	// PageContentSimilarMode is simhash, tfidf, or bm25 (default simhash)
+	PageContentSimilarMode string
+	// PageContentSimilarDistance is the max SimHash Hamming distance (default 3)
+	PageContentSimilarDistance int
+	// PageContentSimilarThresholdStr is the min TF-IDF/BM25 score string (default 0.85)
+	PageContentSimilarThresholdStr string
+	// PageContentSimilarBudget is how many pages per similarity cluster to fully process (default 1)
+	PageContentSimilarBudget int
+	// PathClimb enables path expansion (auto crawl discovered paths)
+	PathClimb bool
+	// DisableUniqueFilter disables duplicate content filtering
+	DisableUniqueFilter bool
+	// MaxOnclickLinks is the maximum number of onclick links to process per page (default: 10)
+	MaxOnclickLinks int
+	// PageLoadStrategy specifies how to wait for pages to load (heuristic, load, domcontentloaded, networkidle, none)
+	PageLoadStrategy string
+	// DOMWaitTime is the time in seconds to wait after domcontentloaded strategy (default: 5)
+	DOMWaitTime           int
+	CaptchaSolverProvider string
+	CaptchaSolverAPIKey   string
+	// KnowledgeBase enables knowledge base classification using dit
+	KnowledgeBase bool
+	// Secrets enables the knowledgebase secrets extractor (Titus-backed)
+	Secrets bool
+	// ValidateSecrets enables live API validation of detected secrets.
+	// Validation sends a real request to the credential's provider, which logs
+	// against the credential owner, so it is opt-in.
+	ValidateSecrets bool
+	// Endpoints enables the knowledgebase endpoints extractor (classifies REST,
+	// GraphQL, SOAP, AJAX/XHR requests).
+	Endpoints bool
+	// FilterPageType filters results by page type
+	FilterPageType goflags.StringSlice
+	// AuthCredentials holds username:password for automatic login
+	AuthCredentials string
+	// RecordedFlow is the path to a Chrome DevTools Recorder JSON (or an explicit
+	// LoginStep list) replayed once in headless mode before crawling starts.
+	RecordedFlow string
+	// MaxDomainPages is the maximum number of pages to crawl per domain (0 = unlimited)
+	MaxDomainPages int
+}
+
+func (options *Options) ParseCustomHeaders() map[string]string {
+	customHeaders := make(map[string]string)
+	for _, v := range options.CustomHeaders {
+		if headerParts := strings.SplitN(v, ":", 2); len(headerParts) >= 2 {
+			customHeaders[strings.Trim(headerParts[0], " ")] = strings.Trim(headerParts[1], " ")
+		}
+	}
+	return customHeaders
+}
+
+func (options *Options) ParseHeadlessOptionalArguments() map[string]string {
+	var (
+		lastKey           string
+		optionalArguments = make(map[string]string)
+	)
+	for _, v := range options.HeadlessOptionalArguments {
+		if v == "" {
+			continue
+		}
+		if argParts := strings.SplitN(v, "=", 2); len(argParts) >= 2 {
+			key := strings.TrimSpace(argParts[0])
+			value := strings.TrimSpace(argParts[1])
+			if key != "" && value != "" {
+				optionalArguments[key] = value
+				lastKey = key
+			}
+		} else if !strings.HasPrefix(v, "--") {
+			optionalArguments[lastKey] += "," + v
+		} else {
+			optionalArguments[v] = ""
+		}
+	}
+	return optionalArguments
+}
+
+func (options *Options) ShouldResume() bool {
+	return options.Resume != "" && fileutil.FileExists(options.Resume)
+}
+
+// ConfigureOutput configures the output logging levels to be displayed on the screen
+func (options *Options) ConfigureOutput() {
+	if options.Silent {
+		gologger.DefaultLogger.SetMaxLevel(levels.LevelSilent)
+	} else if options.Verbose {
+		gologger.DefaultLogger.SetMaxLevel(levels.LevelWarning)
+	} else if options.Debug {
+		gologger.DefaultLogger.SetMaxLevel(levels.LevelDebug)
+	} else {
+		gologger.DefaultLogger.SetMaxLevel(levels.LevelInfo)
+	}
+
+	logutil.DisableDefaultLogger()
+}
+
+// ContentSimilarityEnabled reports whether Layer-2 page content similarity is on.
+func (options *Options) ContentSimilarityEnabled() bool {
+	return options.PageContentSimilar || options.SimilarityDeduplication
+}
+
+// PageContentSimilarThreshold parses the TF-IDF/BM25 score threshold.
+func (options *Options) PageContentSimilarThreshold() float64 {
+	if options.PageContentSimilarThresholdStr == "" {
+		return similarityDefaultScore
+	}
+	v, err := strconv.ParseFloat(options.PageContentSimilarThresholdStr, 64)
+	if err != nil || v <= 0 || v > 1 {
+		gologger.Warning().Msgf("Invalid page-content-similar-threshold %q, using %.2f", options.PageContentSimilarThresholdStr, similarityDefaultScore)
+		return similarityDefaultScore
+	}
+	return v
+}
+
+const similarityDefaultScore = 0.85
