@@ -1,0 +1,35 @@
+---
+---
+
+{% capture screen %}
+/*                *\
+ * $normalize.css *
+\*                */
+{% include css/normalize.css %}
+/*                *\
+ * $gridism.css   *
+\*                */
+{% include css/gridism.css %}
+/*                *\
+ * $fonts.css   *
+\*                */
+{% include css/fonts.css %}
+/*                *\
+ * $font-awesome.css   *
+\*                */
+{% include css/font-awesome.css %}
+/*                *\
+ * $style.css     *
+\*                */
+{% include css/style.css %}
+/*                *\
+ * $pygments.css  *
+\*                */
+{% include css/pygments.css %}
+{% endcapture %}
+
+{% if site.GH_ENV %}
+  {{ screen | strip_newlines | remove: '  ' }}
+{% else %}
+  {{ screen }}
+{% endif %}
