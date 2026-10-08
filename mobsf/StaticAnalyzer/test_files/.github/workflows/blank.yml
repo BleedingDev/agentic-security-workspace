@@ -1,0 +1,25 @@
+name: 'Get Release'
+
+on:
+  release:
+    types: [created]
+
+jobs:
+    buildx:
+        runs-on: ubuntu-latest
+        steps:
+        -
+            name: Prepare
+            id: prepare
+            run: |
+              DOCKER_IMAGE=opensecurity/mobile-security-framework-mobsf
+              if [[ $GITHUB_REF == refs/tags/* ]]; then
+                VERSION=${GITHUB_REF#refs/tags/v}
+                TAGS="${DOCKER_IMAGE}:v${VERSION}"
+              fi
+              echo ::set-output name=tag::${TAGS}
+        -
+            name: Inspect image
+            run: |
+              echo ${{ steps.prepare.outputs.tag }}
+              ls ${{ steps.prepare.outputs.tag }}
