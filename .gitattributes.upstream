@@ -79,5 +79,3 @@
 *.tgz binary
 *.war binary
 *.zip binary
-# Preserved snapshot: retain raw bytes and embedded LFS payloads.
-** -text -filter
