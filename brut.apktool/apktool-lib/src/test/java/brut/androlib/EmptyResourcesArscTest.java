@@ -1,0 +1,47 @@
+/*
+ *  Copyright (C) 2010 Ryszard Wiśniewski <brut.alll@gmail.com>
+ *  Copyright (C) 2010 Connor Tumbleson <connor.tumbleson@gmail.com>
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *       https://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+package brut.androlib;
+
+import java.io.File;
+
+import org.junit.*;
+import static org.junit.Assert.*;
+
+public class EmptyResourcesArscTest extends BaseTest {
+
+    @BeforeClass
+    public static void beforeClass() throws Exception {
+        sTestOrigDir = new File(sTmpDir, "issue1730-orig");
+        sTestNewDir = new File(sTmpDir, "issue1730-new");
+
+        log("Unpacking issue1730.apk...");
+        copyResourceDir(EmptyResourcesArscTest.class, "issue1730", sTestOrigDir);
+
+        log("Decoding issue1730.apk...");
+        File testApk = new File(sTestOrigDir, "issue1730.apk");
+        new ApkDecoder(testApk, sConfig).decode(sTestNewDir);
+
+        log("Building issue1730.apk...");
+        new ApkBuilder(sTestNewDir, sConfig).build(testApk);
+    }
+
+    @Test
+    public void buildAndDecodeTest() {
+        assertTrue(sTestNewDir.isDirectory());
+        assertTrue(sTestOrigDir.isDirectory());
+    }
+}
