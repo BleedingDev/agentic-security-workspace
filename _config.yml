@@ -1,0 +1,37 @@
+markdown: kramdown
+highlighter: rouge
+permalink: /news/:year/:month/:day/:title/
+excerpt_separator: ""
+
+google_analytics_id: UA-46880695-1
+
+organization_url: https://github.com/frida
+repository: https://github.com/frida/frida
+
+timezone: Europe/Oslo
+
+collections:
+  docs:
+    output: true
+
+name: Frida • A world-class dynamic instrumentation toolkit
+description: Observe and reprogram running programs on Windows, macOS, GNU/Linux, iOS, watchOS, tvOS, Android, FreeBSD, and QNX
+url: https://frida.re
+
+twitter:
+  username: fridadotre
+
+languages: ["en", "ja"]
+
+exclude: ["COPYING", "Gemfile", "Gemfile.lock", "README.md"]
+exclude_from_localizations: ["fonts", "img", "js", "news", "slides", "favicon.ico", "keybase.txt"]
+
+plugins:
+  - jekyll-feed
+  - jekyll-redirect-from
+  - jemoji
+  - jekyll-sitemap
+  - jekyll-seo-tag
+  - jekyll-avatar
+  - jekyll-gist
+  - jekyll-multiple-languages-plugin
