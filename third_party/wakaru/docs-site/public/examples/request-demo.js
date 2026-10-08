@@ -1,0 +1,1 @@
+(()=>{var o=(r,e)=>()=>(e||r((e={exports:{}}).exports,e),e.exports);var n=o((f,t)=>{t.exports=function(){return localStorage.getItem("demo-token")}});var a=o((l,i)=>{var u=n();i.exports=function(e){return fetch(e,{headers:{Authorization:"Bearer "+u()}})}});var c=o(()=>{var s=a();window.loadProfile=()=>s("/api/profile")});c();})();

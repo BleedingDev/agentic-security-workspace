@@ -1,0 +1,2742 @@
+use crate::collections::{HashMap, HashSet};
+
+use swc_core::atoms::Atom;
+use swc_core::common::{sync::Lrc, Mark, SourceMap, GLOBALS};
+use swc_core::common::{SyntaxContext, DUMMY_SP};
+use swc_core::ecma::ast::{
+    ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, AutoAccessor, BinExpr,
+    BinaryOp, BindingIdent, CallExpr, Callee, ClassProp, CondExpr, Constructor, Decl, Expr,
+    ExprOrSpread, ExprStmt, FnExpr, Function, FunctionBody, GetterProp, Id, Ident, IdentName, Lit,
+    MemberExpr, MemberProp, MetaPropExpr, MetaPropKind, Module, ModuleItem, Number, ObjectLit,
+    ParamOrTsParamProp, Pat, PrivateProp, Prop, PropName, PropOrSpread, SetterProp,
+    SimpleAssignTarget, StaticBlock, Stmt, Str, ThisExpr, UnaryExpr, UnaryOp, VarDecl, VarDeclKind,
+    VarDeclarator,
+};
+use swc_core::ecma::codegen::Config;
+#[cfg(test)]
+use swc_core::ecma::codegen::{text_writer::JsWriter, Emitter};
+
+use swc_core::ecma::transforms::base::resolver;
+use swc_core::ecma::utils::replace_ident;
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+use crate::module_path::relative_import_specifier;
+use crate::rules::eval_utils::DirectEvalAnalyzer;
+use crate::rules::rename_utils::BindingRename;
+use crate::unpacker::webpack_common::FactoryNormalizationError;
+use crate::unpacker::{
+    deconflict_runtime_binding_renames, emit_module_with_positions, source_slice_for_stmts,
+    span_byte_range, BundleFormat, DetectedBundle, DetectedModuleFailure, MappedCode,
+    SourcePositions, UnpackResult, UnpackedModule,
+};
+use crate::utils::paren::strip_parens;
+use crate::utils::swc_safety::apply_fixer;
+
+/// Identifies a webpack module by either its numeric index (array-form) or
+/// its string path (object-form, e.g. `"./src/index.js"`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ModuleId {
+    Numeric(usize),
+    Named(String),
+}
+
+/// Splits sequence expression statements in extracted module code so that
+/// `n.r(t), n.d(t, "x", fn)` in a single ExprStmt becomes separate statements
+/// before rule matching.
+///
+/// ESM marker/getter helpers stay in the module for the rule pipeline. Lowering
+/// `require.d(exports, ...)` here would turn live getters into eager assignments
+/// before `UnEsm` can recover ESM export bindings, and deleting
+/// `require.r(exports)` would remove the marker `UnEsm` uses to prove that
+/// those getters are ESM exports.
+struct WebpackRuntimeNormalizer;
+
+impl VisitMut for WebpackRuntimeNormalizer {
+    fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
+        items.visit_mut_children_with(self);
+
+        let mut new_items: Vec<ModuleItem> = Vec::with_capacity(items.len());
+        for item in items.drain(..) {
+            if let ModuleItem::Stmt(stmt) = item {
+                new_items.extend(expand_seq_stmt(stmt).into_iter().map(ModuleItem::Stmt));
+            } else {
+                new_items.push(item);
+            }
+        }
+        *items = new_items;
+    }
+
+    fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
+        stmts.visit_mut_children_with(self);
+
+        let mut new_stmts: Vec<Stmt> = Vec::with_capacity(stmts.len());
+        for stmt in stmts.drain(..) {
+            new_stmts.extend(expand_seq_stmt(stmt));
+        }
+        *stmts = new_stmts;
+    }
+}
+
+/// Expand a sequence ExprStmt into individual ExprStmts.
+fn expand_seq_stmt(stmt: Stmt) -> Vec<Stmt> {
+    if let Stmt::Expr(ExprStmt { expr, span }) = &stmt {
+        if let Expr::Seq(seq) = &**expr {
+            return seq
+                .exprs
+                .iter()
+                .map(|e| {
+                    Stmt::Expr(ExprStmt {
+                        span: *span,
+                        expr: e.clone(),
+                    })
+                })
+                .collect();
+        }
+    }
+    vec![stmt]
+}
+
+/// Which argument of `call` carries a module id for the require binding:
+/// a direct `require(id)` call (argument 0), or the bound loader webpack
+/// emits for eager `import()` — `require.bind(require, id)` (webpack 5) /
+/// `require.bind(null, id)` (webpack 4) — where the id is argument 1.
+fn require_id_arg_index(
+    call: &CallExpr,
+    require_sym: &Atom,
+    unresolved_mark: Mark,
+) -> Option<usize> {
+    let is_require_ident = |expr: &Expr| {
+        matches!(expr, Expr::Ident(ident)
+            if ident.sym == *require_sym && ident.ctxt.outer() == unresolved_mark)
+    };
+    let Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    if is_require_ident(callee_expr) {
+        return (call.args.len() == 1 && call.args[0].spread.is_none()).then_some(0);
+    }
+    let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr else {
+        return None;
+    };
+    if !matches!(prop, MemberProp::Ident(ident) if ident.sym.as_ref() == "bind")
+        || !is_require_ident(obj)
+    {
+        return None;
+    }
+    if call.args.len() != 2 || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return None;
+    }
+    let this_arg = &*call.args[0].expr;
+    (is_require_ident(this_arg) || matches!(this_arg, Expr::Lit(Lit::Null(_)))).then_some(1)
+}
+
+/// Rewrites `require(N)` calls (where N is a numeric literal) to `require("./filename.js")`.
+/// This lets un-esm convert them to proper ES import statements. The bound
+/// eager-import form (`require.bind(require, N)`) gets the same id rewrite so
+/// a recovered entry never invokes the host require with a bare module id.
+pub(crate) struct RequireIdRewriter<'a> {
+    pub(crate) require_sym: Atom,
+    pub(crate) unresolved_mark: Mark,
+    pub(crate) from_filename: &'a str,
+    pub(crate) id_to_filename: &'a crate::collections::HashMap<usize, String>,
+}
+
+impl VisitMut for RequireIdRewriter<'_> {
+    fn visit_mut_call_expr(&mut self, call: &mut CallExpr) {
+        // Recurse first
+        call.visit_mut_children_with(self);
+
+        let Some(arg_idx) = require_id_arg_index(call, &self.require_sym, self.unresolved_mark)
+        else {
+            return;
+        };
+        let Expr::Lit(Lit::Num(Number { value, .. })) = &*call.args[arg_idx].expr else {
+            return;
+        };
+
+        let id = *value as usize;
+        // Only rewrite if value is a non-negative integer
+        if (*value) < 0.0 || (*value).fract() != 0.0 {
+            return;
+        }
+
+        if let Some(filename) = self.id_to_filename.get(&id) {
+            let path = relative_import_specifier(self.from_filename, filename);
+            *call.args[arg_idx].expr = Expr::Lit(Lit::Str(Str {
+                span: Default::default(),
+                value: path.into(),
+                raw: None,
+            }));
+        }
+    }
+}
+
+/// Rewrites `require("./src/greet.js")` calls (where the string arg is an original module key)
+/// to `require("./<sanitized_filename>")`. Used for object-form webpack4 bundles where modules
+/// are keyed by string paths instead of numeric indices.
+pub(crate) struct RequireStringIdRewriter<'a> {
+    pub(crate) require_sym: Atom,
+    pub(crate) unresolved_mark: Mark,
+    pub(crate) from_filename: &'a str,
+    pub(crate) id_to_filename: &'a HashMap<String, String>,
+}
+
+impl VisitMut for RequireStringIdRewriter<'_> {
+    fn visit_mut_call_expr(&mut self, call: &mut CallExpr) {
+        // Recurse first
+        call.visit_mut_children_with(self);
+
+        // Match: require("./src/foo.js") (or the bound eager-import form)
+        // where the loader is the require ident.
+        let Some(arg_idx) = require_id_arg_index(call, &self.require_sym, self.unresolved_mark)
+        else {
+            return;
+        };
+        let Expr::Lit(Lit::Str(s)) = &*call.args[arg_idx].expr else {
+            return;
+        };
+        let Some(key) = s.value.as_str() else {
+            return;
+        };
+
+        if let Some(filename) = self.id_to_filename.get(key) {
+            let path = relative_import_specifier(self.from_filename, filename);
+            *call.args[arg_idx].expr = Expr::Lit(Lit::Str(Str {
+                span: Default::default(),
+                value: path.into(),
+                raw: None,
+            }));
+        }
+    }
+}
+
+/// Rewrites `require.n(expr)` to `() => expr`.
+/// webpack's `__webpack_require__.n` wraps a module in a default-export getter.
+/// After ESM conversion, `require.n(r)` is equivalent to `() => r`.
+/// The call sites `o()` are later simplified by UnIife's expression-body IIFE handling.
+struct RequireNRewriter {
+    require_sym: Atom,
+    unresolved_mark: Mark,
+    getter_ids: crate::collections::HashSet<(Atom, SyntaxContext)>,
+}
+
+impl VisitMut for RequireNRewriter {
+    fn visit_mut_var_declarator(&mut self, decl: &mut VarDeclarator) {
+        let Some(init) = &mut decl.init else {
+            return;
+        };
+
+        if let Some(rewritten) = self.rewrite_require_n_expr(init.as_ref()) {
+            if let Pat::Ident(binding) = &decl.name {
+                self.getter_ids
+                    .insert((binding.id.sym.clone(), binding.id.ctxt));
+            }
+            **init = rewritten;
+            return;
+        }
+
+        init.visit_mut_with(self);
+    }
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        if let Some(rewritten) = self.rewrite_require_n_expr(expr) {
+            *expr = rewritten;
+        }
+    }
+}
+
+impl RequireNRewriter {
+    fn rewrite_require_n_expr(&self, expr: &Expr) -> Option<Expr> {
+        // Match: require.n(single_arg)
+        let Expr::Call(call) = expr else { return None };
+        if call.args.len() != 1 || call.args[0].spread.is_some() {
+            return None;
+        }
+        let Callee::Expr(callee_expr) = &call.callee else {
+            return None;
+        };
+        let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr else {
+            return None;
+        };
+        let Expr::Ident(obj_ident) = &**obj else {
+            return None;
+        };
+        if obj_ident.sym != self.require_sym || obj_ident.ctxt.outer() != self.unresolved_mark {
+            return None;
+        }
+        let MemberProp::Ident(prop_ident) = prop else {
+            return None;
+        };
+        if prop_ident.sym.as_ref() != "n" {
+            return None;
+        }
+
+        let arg = call.args[0].expr.clone();
+        let esmodule_check = Expr::Bin(BinExpr {
+            span: Default::default(),
+            op: BinaryOp::LogicalAnd,
+            left: arg.clone(),
+            right: Box::new(Expr::Member(MemberExpr {
+                span: Default::default(),
+                obj: arg.clone(),
+                prop: MemberProp::Ident(IdentName::new("__esModule".into(), Default::default())),
+            })),
+        });
+        let default_value = Expr::Member(MemberExpr {
+            span: Default::default(),
+            obj: arg.clone(),
+            prop: MemberProp::Ident(IdentName::new("default".into(), Default::default())),
+        });
+
+        Some(Expr::Arrow(swc_core::ecma::ast::ArrowExpr {
+            span: Default::default(),
+            ctxt: Default::default(),
+            params: vec![],
+            body: Box::new(swc_core::ecma::ast::ArrowFunctionBody::Expr(Box::new(
+                Expr::Cond(CondExpr {
+                    span: Default::default(),
+                    test: Box::new(esmodule_check),
+                    cons: Box::new(default_value),
+                    alt: arg,
+                }),
+            ))),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+        }))
+    }
+}
+
+/// Rewrites accesses like `getter.a` to `getter()`, where `getter` came from `require.n(...)`.
+struct RequireNAccessRewriter {
+    getter_ids: crate::collections::HashSet<(Atom, SyntaxContext)>,
+}
+
+impl VisitMut for RequireNAccessRewriter {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Member(member) = expr else {
+            return;
+        };
+        let Expr::Ident(obj_ident) = &*member.obj else {
+            return;
+        };
+        if !self
+            .getter_ids
+            .contains(&(obj_ident.sym.clone(), obj_ident.ctxt))
+        {
+            return;
+        }
+
+        let is_accessor = match &member.prop {
+            MemberProp::Ident(prop) => prop.sym.as_ref() == "a",
+            MemberProp::Computed(prop) => matches!(
+                &*prop.expr,
+                Expr::Lit(Lit::Str(value)) if value.value.as_str() == Some("a")
+            ),
+            _ => false,
+        };
+        if !is_accessor {
+            return;
+        }
+
+        *expr = Expr::Call(CallExpr {
+            span: Default::default(),
+            ctxt: Default::default(),
+            callee: Callee::Expr(Box::new(Expr::Ident(obj_ident.clone()))),
+            args: vec![],
+            type_args: None,
+        });
+    }
+}
+
+pub(crate) fn rewrite_require_n_accesses(
+    module: &mut Module,
+    require_sym: Atom,
+    unresolved_mark: Mark,
+) {
+    let mut n_rewriter = RequireNRewriter {
+        require_sym,
+        unresolved_mark,
+        getter_ids: HashSet::default(),
+    };
+    module.visit_mut_with(&mut n_rewriter);
+    if !n_rewriter.getter_ids.is_empty() {
+        let mut access_rewriter = RequireNAccessRewriter {
+            getter_ids: n_rewriter.getter_ids,
+        };
+        module.visit_mut_with(&mut access_rewriter);
+    }
+}
+
+/// Detects whether the parsed module is a webpack4 bundle and extracts modules.
+pub fn detect_and_extract_raw(source: &str) -> Option<UnpackResult> {
+    detect_and_extract(source)
+}
+
+/// Detects whether the parsed module is a webpack4 bundle and extracts modules.
+pub fn detect_and_extract(source: &str) -> Option<UnpackResult> {
+    GLOBALS.set(&Default::default(), || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let module = super::parse_es_module(source, "webpack4.js", cm.clone()).ok()?;
+        detect_from_module(&module, cm, SourcePositions::Discard)?
+            .materialize()
+            .ok()
+    })
+}
+
+pub(super) fn detect_from_module(
+    module: &Module,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    for item in &module.body {
+        let ModuleItem::Stmt(stmt) = item else {
+            continue;
+        };
+        if let Some(result) = try_extract_from_stmt(stmt, cm.clone(), positions) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Try to extract from a top-level statement that might be a webpack4 IIFE.
+fn try_extract_from_stmt(
+    stmt: &Stmt,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    let call = match stmt {
+        // `!function(...){...}([...])` — UnaryExpr with !
+        Stmt::Expr(ExprStmt { expr, .. }) => match &**expr {
+            Expr::Unary(u) if u.op == UnaryOp::Bang => extract_call_from_expr(&u.arg)?,
+            other => extract_call_from_expr(other)?,
+        },
+        _ => return None,
+    };
+
+    extract_webpack4_modules(call, cm, positions)
+}
+
+fn extract_call_from_expr(expr: &Expr) -> Option<&CallExpr> {
+    match expr {
+        Expr::Call(call) => Some(call),
+        _ => None,
+    }
+}
+
+/// Given a CallExpr that should be `bootstrapFn([...])` or `bootstrapFn({...})`, extract modules.
+fn extract_webpack4_modules(
+    call: &CallExpr,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    // Callee must be a FnExpr (the bootstrap function), possibly wrapped in parens
+    let Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let unwrapped_callee = strip_parens(callee_expr);
+    let Expr::Fn(bootstrap_fn) = unwrapped_callee else {
+        return None;
+    };
+
+    // Must have exactly one argument
+    if call.args.len() != 1 {
+        return None;
+    }
+
+    // Branch on argument type: Array (numeric IDs) or Object (string IDs).
+    // Dense numeric ids starting above zero render as `Array(n).concat([...])`
+    // with element indices offset by n.
+    match &*call.args[0].expr {
+        Expr::Array(array_lit) => {
+            extract_webpack4_array_modules(array_lit, 0, bootstrap_fn, cm, positions)
+        }
+        Expr::Object(object_lit) => {
+            extract_webpack4_object_modules(object_lit, bootstrap_fn, cm, positions)
+        }
+        Expr::Call(concat_call) => {
+            let (array_lit, id_offset) =
+                crate::unpacker::webpack_common::split_array_concat(concat_call)?;
+            extract_webpack4_array_modules(array_lit, id_offset, bootstrap_fn, cm, positions)
+        }
+        _ => None,
+    }
+}
+
+/// Extract modules from the array-form: `bootstrapFn([fn0, fn1, fn2])`
+/// or `bootstrapFn(Array(n).concat([fnN, fnN1, ...]))`.
+struct Webpack4ModuleDescriptor<'a> {
+    id: String,
+    numeric_id: Option<f64>,
+    filename: String,
+    is_entry: bool,
+    factory: &'a FnExpr,
+}
+
+fn prepare_webpack4_modules(
+    descriptors: &[Webpack4ModuleDescriptor<'_>],
+    all_numeric: bool,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    let mut opaque_filenames = HashSet::default();
+
+    loop {
+        let num_id_to_filename: HashMap<usize, String> = if all_numeric {
+            descriptors
+                .iter()
+                .filter(|descriptor| !opaque_filenames.contains(&descriptor.filename))
+                .filter_map(|descriptor| {
+                    descriptor
+                        .id
+                        .parse::<usize>()
+                        .ok()
+                        .map(|id| (id, descriptor.filename.clone()))
+                })
+                .collect()
+        } else {
+            HashMap::default()
+        };
+        let str_id_to_filename: HashMap<String, String> = if all_numeric {
+            HashMap::default()
+        } else {
+            descriptors
+                .iter()
+                .filter(|descriptor| !opaque_filenames.contains(&descriptor.filename))
+                .map(|descriptor| (descriptor.id.clone(), descriptor.filename.clone()))
+                .collect()
+        };
+
+        let mut emitted = Vec::with_capacity(descriptors.len());
+        let mut newly_opaque = HashSet::default();
+        for descriptor in descriptors {
+            if opaque_filenames.contains(&descriptor.filename) {
+                emitted.push(None);
+                continue;
+            }
+            let normalized = normalize_extracted_webpack_module(
+                descriptor.factory,
+                super::webpack_common::ReusedLoaderModuleIds {
+                    from_filename: &descriptor.filename,
+                    numeric: &num_id_to_filename,
+                    string: &str_id_to_filename,
+                    normalizes_conditional_runtime_members: false,
+                },
+                |post_rename_require_sym, unresolv_mark, module| {
+                    if all_numeric {
+                        let mut id_rewriter = RequireIdRewriter {
+                            require_sym: post_rename_require_sym.clone(),
+                            unresolved_mark: unresolv_mark,
+                            from_filename: &descriptor.filename,
+                            id_to_filename: &num_id_to_filename,
+                        };
+                        module.visit_mut_with(&mut id_rewriter);
+                    } else {
+                        let mut string_rewriter = RequireStringIdRewriter {
+                            require_sym: post_rename_require_sym.clone(),
+                            unresolved_mark: unresolv_mark,
+                            from_filename: &descriptor.filename,
+                            id_to_filename: &str_id_to_filename,
+                        };
+                        module.visit_mut_with(&mut string_rewriter);
+                    }
+                },
+            );
+            let (mut module, _) = match normalized {
+                Ok(normalized) => normalized,
+                Err(FactoryNormalizationError::RuntimeParameterReuse) => {
+                    // A retained numeric call cannot be mistaken for an ESM
+                    // import. Named IDs can be path-like strings, so keep the
+                    // historical whole-container fallback for that shape.
+                    if !all_numeric {
+                        return None;
+                    }
+                    newly_opaque.insert(descriptor.filename.clone());
+                    emitted.push(None);
+                    continue;
+                }
+                Err(FactoryNormalizationError::Fatal) => return None,
+            };
+            // Runtime-parameter reuse is the only factory-local failure. A
+            // fixer or emitter failure still invalidates the whole container;
+            // skipping that module would leave rewritten callers pointing at
+            // an output file that was never emitted.
+            apply_fixer(&mut module).ok()?;
+            emitted.push(Some(
+                emit_module_with_positions(
+                    &module,
+                    cm.clone(),
+                    Config::default().with_minify(false),
+                    positions,
+                )
+                .ok()?,
+            ));
+        }
+
+        if !newly_opaque.is_empty() {
+            opaque_filenames.extend(newly_opaque);
+            continue;
+        }
+        if !emitted.iter().any(Option::is_some) {
+            return None;
+        }
+
+        let failures = opaque_filenames
+            .iter()
+            .cloned()
+            .map(|filename| {
+                (
+                    filename,
+                    DetectedModuleFailure::WebpackRuntimeParameterReuse,
+                )
+            })
+            .collect();
+        let mut modules = Vec::with_capacity(descriptors.len());
+        for (descriptor, emitted) in descriptors.iter().zip(emitted) {
+            let (code, generated_source_map, verbatim_source_offset) =
+                if opaque_filenames.contains(&descriptor.filename) {
+                    let body = descriptor.factory.function.body.as_ref()?;
+                    let (code, start) = source_slice_for_stmts(&cm, &body.stmts);
+                    (code, Vec::new(), start)
+                } else {
+                    let Some(MappedCode { code, points }) = emitted else {
+                        continue;
+                    };
+                    (code, points, None)
+                };
+            modules.push(UnpackedModule {
+                id: descriptor.id.clone(),
+                is_entry: descriptor.is_entry,
+                code,
+                filename: descriptor.filename.clone(),
+                source_ranges: span_byte_range(&cm, descriptor.factory.function.span)
+                    .into_iter()
+                    .collect(),
+                inspection_context_ranges: Vec::new(),
+                source_input: String::new(),
+                generated_source_map,
+                verbatim_source_offset,
+                mapped_in_every_mode: false,
+            });
+        }
+        if modules.is_empty() {
+            return None;
+        }
+        return Some(
+            DetectedBundle::from_result(UnpackResult::new(modules, BundleFormat::Webpack4))
+                .with_module_failures(failures)
+                .with_webpack_numeric_module_ids(
+                    descriptors
+                        .iter()
+                        .filter_map(|descriptor| {
+                            descriptor
+                                .numeric_id
+                                .map(|id| (descriptor.filename.clone(), id))
+                        })
+                        .collect(),
+                )
+                .with_webpack_legacy_module_i(
+                    descriptors
+                        .iter()
+                        .filter(|descriptor| descriptor.numeric_id.is_some())
+                        .map(|descriptor| descriptor.filename.clone())
+                        .collect(),
+                ),
+        );
+    }
+}
+
+fn extract_webpack4_array_modules(
+    array_lit: &swc_core::ecma::ast::ArrayLit,
+    id_offset: usize,
+    bootstrap_fn: &FnExpr,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    // Array must have at least one element
+    if array_lit.elems.is_empty() {
+        return None;
+    }
+
+    // Each element should be a FnExpr (or null for holes); unminified output
+    // wraps every factory in parens: `/***/ (function(...) {...})`.
+    let module_fns: Vec<Option<&FnExpr>> = array_lit
+        .elems
+        .iter()
+        .map(|elem| {
+            match elem {
+                Some(ExprOrSpread { expr, .. }) => {
+                    if let Expr::Fn(fn_expr) = strip_parens(expr) {
+                        Some(fn_expr)
+                    } else {
+                        None
+                    }
+                }
+                None => None, // array hole
+            }
+        })
+        .collect();
+
+    // Validate: at least one function with at least 1 param
+    let has_module_fn = module_fns.iter().any(|f| {
+        f.map(|fn_expr| !fn_expr.function.params.is_empty())
+            .unwrap_or(false)
+    });
+    if !has_module_fn {
+        return None;
+    }
+
+    // Find entry module IDs by scanning the bootstrap function body
+    let entry_ids = find_entry_ids(bootstrap_fn);
+
+    let descriptors = module_fns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, factory)| {
+            let factory = factory.as_ref()?;
+            let id = id_offset + index;
+            let is_entry = entry_ids.contains(&ModuleId::Numeric(id));
+            let filename = if is_entry {
+                if entry_ids.len() == 1 {
+                    "entry.js".to_string()
+                } else {
+                    format!("entry-{id}.js")
+                }
+            } else {
+                format!("module-{id}.js")
+            };
+            Some(Webpack4ModuleDescriptor {
+                id: id.to_string(),
+                numeric_id: Some(id as f64),
+                filename,
+                is_entry,
+                factory,
+            })
+        })
+        .collect::<Vec<_>>();
+    prepare_webpack4_modules(&descriptors, true, cm, positions)
+}
+
+/// Extract modules from the object-form: `bootstrapFn({"./src/index.js": fn, ...})`
+fn extract_webpack4_object_modules(
+    object_lit: &ObjectLit,
+    bootstrap_fn: &FnExpr,
+    cm: Lrc<SourceMap>,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    if object_lit.props.is_empty() {
+        return None;
+    }
+
+    // Collect module keys and their factory FnExprs from the object properties
+    let mut module_entries: Vec<(String, Option<f64>, &FnExpr)> = Vec::new();
+    for prop in &object_lit.props {
+        let PropOrSpread::Prop(prop_box) = prop else {
+            return None;
+        };
+        match &**prop_box {
+            Prop::KeyValue(kv) => {
+                let (key, numeric_id) = extract_module_id(&kv.key)?;
+                let Expr::Fn(fn_expr) = strip_parens(&kv.value) else {
+                    return None;
+                };
+                module_entries.push((key, numeric_id, fn_expr));
+            }
+            Prop::Method(method) => {
+                let (key, _) = extract_module_id(&method.key)?;
+                // Method shorthand doesn't give us a &FnExpr directly,
+                // so we skip it for wp4 object-form (wp4 dev bundles use KeyValue).
+                // Fall through to None if we encounter methods.
+                let _ = key;
+                return None;
+            }
+            _ => return None,
+        }
+    }
+
+    // Validate: at least one function with at least 1 param
+    let has_module_fn = module_entries
+        .iter()
+        .any(|(_, _, fn_expr)| !fn_expr.function.params.is_empty());
+    if !has_module_fn {
+        return None;
+    }
+
+    // Find entry module IDs by scanning the bootstrap function body
+    let entry_ids = find_entry_ids(bootstrap_fn);
+
+    // Detect whether all keys are numeric (e.g. {0: fn, 1: fn}) vs string paths
+    let all_numeric = module_entries
+        .iter()
+        .all(|(key, _, _)| key.parse::<usize>().is_ok());
+
+    // Build filename maps — numeric keys need a usize→String map for RequireIdRewriter,
+    // string keys need a String→String map for RequireStringIdRewriter. String
+    // filenames are made unique before edge synthesis so queried resources or
+    // `a.less` / `a.less.js` pairs retain distinct ownership.
+    let string_filenames = (!all_numeric).then(|| {
+        super::webpack_common::unique_webpack_module_filenames(
+            module_entries.iter().map(|(key, _, _)| key.as_str()),
+        )
+    });
+    let descriptors = module_entries
+        .iter()
+        .enumerate()
+        .map(|(entry_index, (key, numeric_id, factory))| {
+            let is_entry = if all_numeric {
+                let idx = key.parse::<usize>().unwrap_or(usize::MAX);
+                entry_ids.contains(&ModuleId::Numeric(idx))
+            } else {
+                entry_ids.contains(&ModuleId::Named(key.clone()))
+            };
+            let filename = if all_numeric {
+                let idx = key.parse::<usize>().unwrap_or(usize::MAX);
+                if is_entry {
+                    if entry_ids.len() == 1 {
+                        "entry.js".to_string()
+                    } else {
+                        format!("entry-{idx}.js")
+                    }
+                } else {
+                    format!("module-{idx}.js")
+                }
+            } else {
+                string_filenames
+                    .as_ref()
+                    .and_then(|filenames| filenames.get(entry_index))
+                    .cloned()
+                    .unwrap_or_else(|| super::webpack_common::webpack_module_filename(key))
+            };
+            Webpack4ModuleDescriptor {
+                id: key.clone(),
+                numeric_id: *numeric_id,
+                is_entry,
+                filename,
+                factory,
+            }
+        })
+        .collect::<Vec<_>>();
+    prepare_webpack4_modules(&descriptors, all_numeric, cm, positions)
+}
+
+/// Extract the public string id plus its runtime number when the object key is
+/// genuinely numeric. Quoted numeric keys do not prove the runtime ID type.
+fn extract_module_id(key: &PropName) -> Option<(String, Option<f64>)> {
+    match key {
+        PropName::Str(s) => Some((s.value.as_str().unwrap_or("unknown").to_string(), None)),
+        PropName::Num(n) => Some((
+            format!("{}", n.value as i64),
+            (n.value.is_finite() && n.value.fract() == 0.0).then_some(n.value),
+        )),
+        PropName::Ident(i) => Some((i.sym.to_string(), None)),
+        _ => None,
+    }
+}
+
+/// Normalize a webpack4 factory body into a standalone module.
+///
+/// This is extraction normalization, not decompiler cleanup: it only renames
+/// webpack factory parameters, rewrites require references to extracted
+/// filenames, removes webpack runtime wrapper noise, and leaves general
+/// readability/ESM recovery to the driver pipeline.
+///
+/// The `require_rewrite` callback is invoked after param renaming and resolver
+/// to apply the appropriate require rewriter (numeric for array-form, string for
+/// object-form).
+/// Returns `(module, unresolved_mark)`.
+fn normalize_extracted_webpack_module(
+    fn_expr: &FnExpr,
+    loader_module_ids: super::webpack_common::ReusedLoaderModuleIds<'_>,
+    require_rewrite: impl FnOnce(&Atom, Mark, &mut Module),
+) -> Result<(Module, Mark), FactoryNormalizationError> {
+    // Extract param names (up to 3: module, exports, require)
+    let params = &fn_expr.function.params;
+    let param_syms: Vec<Atom> = params
+        .iter()
+        .filter_map(|p| {
+            if let Pat::Ident(bi) = &p.pat {
+                Some(bi.sym.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Get the module's body statements
+    let body_stmts = match &fn_expr.function.body {
+        Some(body) => body.stmts.clone(),
+        None => vec![],
+    };
+
+    let mut synthetic_module = build_module_from_stmts(body_stmts);
+
+    // Step 0: run resolver()
+    let unresolved_mark = Mark::new();
+    let top_level_mark = Mark::new();
+    synthetic_module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+
+    let reused_parameters = super::webpack_common::reused_runtime_parameters(
+        &synthetic_module,
+        &param_syms,
+        unresolved_mark,
+        false,
+    );
+
+    // Build renaming map: param[0] -> "module", param[1] -> "exports",
+    // param[2] -> "require". Reused parameters keep their original binding
+    // identity until the lifetime split below.
+    let standard_names = ["module", "exports", "require"];
+    let rename_symbols: Vec<(Atom, Atom)> = param_syms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, sym)| {
+            let target = *standard_names.get(i)?;
+            if reused_parameters
+                .iter()
+                .any(|parameter| parameter.source == *sym)
+                || sym.as_ref() == target
+            {
+                None
+            } else {
+                Some((sym.clone(), Atom::from(target)))
+            }
+        })
+        .collect();
+
+    // Step 1: rename factory params to standard names
+    let unresolved_ctxt = SyntaxContext::empty().apply_mark(unresolved_mark);
+    let renames = rename_symbols
+        .iter()
+        .map(|(old_sym, new_sym)| BindingRename {
+            old: (old_sym.clone(), unresolved_ctxt),
+            new: new_sym.clone(),
+        })
+        .collect::<Vec<_>>();
+    if !deconflict_runtime_binding_renames(&mut synthetic_module, &renames) {
+        return Err(FactoryNormalizationError::Fatal);
+    }
+    for rename in &renames {
+        let to_ident = Ident::new(rename.new.clone(), Default::default(), unresolved_ctxt);
+        replace_ident(&mut synthetic_module, rename.old.clone(), &to_ident);
+    }
+
+    // Step 1b: separate reused factory runtime lifetimes before any
+    // position-insensitive webpack normalizer runs. Calls after the loader's
+    // first write must retain their localized binding even when their numeric
+    // ID is also present in the module table.
+    for parameter in reused_parameters {
+        if !super::webpack_common::localize_reused_runtime_parameter(
+            &mut synthetic_module,
+            parameter.kind,
+            &parameter.source,
+            &parameter.binding,
+            unresolved_mark,
+            &loader_module_ids,
+        ) {
+            return Err(FactoryNormalizationError::RuntimeParameterReuse);
+        }
+    }
+
+    let post_rename_require_sym = Atom::from("require");
+    require_rewrite(
+        &post_rename_require_sym,
+        unresolved_mark,
+        &mut synthetic_module,
+    );
+
+    // Step 1c: rewrite require.n(expr) to an explicit getter and normalize `.a` accesses.
+    rewrite_require_n_accesses(
+        &mut synthetic_module,
+        post_rename_require_sym,
+        unresolved_mark,
+    );
+
+    // Step 2: split top-level sequence statements while preserving ESM markers/getters
+    synthetic_module.visit_mut_with(&mut WebpackRuntimeNormalizer);
+
+    // Step 2b: strip webpack's global-polyfill envelope
+    unwrap_webpack_global_envelopes(&mut synthetic_module, unresolved_mark);
+
+    Ok((synthetic_module, unresolved_mark))
+}
+
+/// Sanitize a webpack module path string into a safe filename.
+/// Strips leading `./`, removes path traversal (`../`, `..\`), and falls back
+/// to `"unknown.js"` when the result would be empty.
+#[cfg(test)]
+fn sanitize_filename(module_id: &str) -> String {
+    super::webpack_common::webpack_module_filename(module_id)
+}
+
+/// Scan the bootstrap function body for `n.s = <number>` or `n(n.s = <number>)` patterns
+/// to identify the entry module ID(s).
+fn find_entry_ids(bootstrap_fn: &FnExpr) -> Vec<ModuleId> {
+    let body = match &bootstrap_fn.function.body {
+        Some(b) => b,
+        None => return vec![],
+    };
+
+    let declared_idents = collect_declared_idents(&body.stmts);
+    let called_idents = collect_called_idents(&body.stmts);
+    let allowed_entry_objects: HashSet<Atom> = declared_idents
+        .intersection(&called_idents)
+        .cloned()
+        .collect();
+
+    let mut entries = Vec::new();
+    for stmt in &body.stmts {
+        collect_entry_ids_from_stmt(stmt, &allowed_entry_objects, &mut entries);
+    }
+    entries
+}
+
+fn collect_entry_ids_from_stmt(
+    stmt: &Stmt,
+    allowed_entry_objects: &HashSet<Atom>,
+    entries: &mut Vec<ModuleId>,
+) {
+    match stmt {
+        Stmt::Expr(ExprStmt { expr, .. }) => {
+            collect_entry_ids_from_expr(expr, allowed_entry_objects, entries);
+        }
+        // `return __webpack_require__(__webpack_require__.s = "./src/index.js")`
+        Stmt::Return(ret) => {
+            if let Some(arg) = &ret.arg {
+                collect_entry_ids_from_expr(arg, allowed_entry_objects, entries);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_entry_ids_from_expr(
+    expr: &Expr,
+    allowed_entry_objects: &HashSet<Atom>,
+    entries: &mut Vec<ModuleId>,
+) {
+    match expr {
+        // `n(n.s = 51)` — call where arg is assignment to <fn>.s
+        Expr::Call(call) => {
+            for arg in &call.args {
+                collect_entry_ids_from_expr(&arg.expr, allowed_entry_objects, entries);
+            }
+        }
+        // `n.s = 51` or `n.s = "./src/index.js"` at statement level
+        Expr::Assign(assign) => {
+            if let Some(id) = extract_entry_id_from_assign(assign, allowed_entry_objects) {
+                entries.push(id);
+            }
+        }
+        // Sequences like `n.m=e, n.c=t, ..., n(n.s=51)`
+        Expr::Seq(seq) => {
+            for e in &seq.exprs {
+                collect_entry_ids_from_expr(e, allowed_entry_objects, entries);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_entry_id_from_assign(
+    assign: &AssignExpr,
+    allowed_entry_objects: &HashSet<Atom>,
+) -> Option<ModuleId> {
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    // Left must be MemberExpr with prop "s"
+    let AssignTarget::Simple(SimpleAssignTarget::Member(m)) = &assign.left else {
+        return None;
+    };
+    let Expr::Ident(obj_ident) = &*m.obj else {
+        return None;
+    };
+    if !allowed_entry_objects.contains(&obj_ident.sym) {
+        return None;
+    };
+    let MemberProp::Ident(prop) = &m.prop else {
+        return None;
+    };
+    if prop.sym.as_ref() != "s" {
+        return None;
+    }
+    // Right must be a numeric literal or a string literal
+    match &*assign.right {
+        Expr::Lit(Lit::Num(n)) => {
+            let id = n.value as usize;
+            Some(ModuleId::Numeric(id))
+        }
+        Expr::Lit(Lit::Str(s)) => {
+            let value = s.value.as_str().unwrap_or("").to_string();
+            Some(ModuleId::Named(value))
+        }
+        _ => None,
+    }
+}
+
+fn collect_declared_idents(stmts: &[Stmt]) -> HashSet<Atom> {
+    let mut names = HashSet::default();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Decl(swc_core::ecma::ast::Decl::Fn(fn_decl)) => {
+                names.insert(fn_decl.ident.sym.clone());
+            }
+            Stmt::Decl(swc_core::ecma::ast::Decl::Var(var_decl)) => {
+                for decl in &var_decl.decls {
+                    if let Pat::Ident(binding) = &decl.name {
+                        names.insert(binding.id.sym.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn collect_called_idents(stmts: &[Stmt]) -> HashSet<Atom> {
+    let mut names = HashSet::default();
+    for stmt in stmts {
+        collect_called_idents_from_stmt(stmt, &mut names);
+    }
+    names
+}
+
+fn collect_called_idents_from_stmt(stmt: &Stmt, names: &mut HashSet<Atom>) {
+    match stmt {
+        Stmt::Expr(ExprStmt { expr, .. }) => {
+            collect_called_idents_from_expr(expr, names);
+        }
+        // `return __webpack_require__(...)` — the ident is called
+        Stmt::Return(ret) => {
+            if let Some(arg) = &ret.arg {
+                collect_called_idents_from_expr(arg, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_called_idents_from_expr(expr: &Expr, names: &mut HashSet<Atom>) {
+    match expr {
+        Expr::Call(call) => {
+            if let Callee::Expr(callee_expr) = &call.callee {
+                if let Expr::Ident(id) = &**callee_expr {
+                    names.insert(id.sym.clone());
+                }
+            }
+            for arg in &call.args {
+                collect_called_idents_from_expr(&arg.expr, names);
+            }
+        }
+        Expr::Assign(assign) => collect_called_idents_from_expr(&assign.right, names),
+        Expr::Seq(seq) => {
+            for expr in &seq.exprs {
+                collect_called_idents_from_expr(expr, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build a synthetic Module from a list of statements.
+fn build_module_from_stmts(stmts: Vec<Stmt>) -> Module {
+    use swc_core::ecma::ast::Module;
+    Module {
+        span: Default::default(),
+        body: stmts.into_iter().map(ModuleItem::Stmt).collect(),
+        shebang: None,
+    }
+}
+
+// ============================================================
+// webpack4 "global polyfill" wrapper unwrapping
+// ============================================================
+//
+// webpack4 emits global-detecting modules with a distinctive envelope:
+//
+//     (function(e, r) {
+//         // ... uses `e` and `r` only as fallback globals ...
+//         o = typeof self !== "undefined"
+//             ? self
+//             : typeof window !== "undefined"
+//                 ? window
+//                 : e !== undefined ? e : r;
+//         // ... rest of body ...
+//     }).call(this, require("./module-42.js"), require("./module-41.js")(module));
+//
+// This is recognizable without a bundle-wide helper-module registry because:
+// - `.call(this, ...)` at top-level with a fn/arrow IIFE base is narrow
+// - `require(X)(<Ident "module">)` as an arg is essentially never user code
+//   — the raw `module` binding only exists inside a CommonJS wrapper, and
+//   the AMD-define polyfill is the one thing that consumes it
+// - the `typeof self → typeof window → param → param` ternary is webpack's
+//   own global-detection template, referenced only via the IIFE's params
+//
+// When all three tells line up, the wrapper is dead weight: the ternary
+// resolves to `globalThis` in any post-ES2020 runtime, and the `e`/`r`
+// arguments are only consumed as fallback arms of that same ternary. We
+// hoist the body to module scope and replace the ternary with `globalThis`.
+
+/// Strip webpack4's global-polyfill IIFE wrapper on matching top-level
+/// statements. Called once per extracted module, after the webpack runtime
+/// normalizer and before the driver decompile pipeline.
+pub(crate) fn unwrap_webpack_global_envelopes(module: &mut Module, unresolved_mark: Mark) {
+    // A general webpack variable-injection envelope changes function scope
+    // into module scope when lifted. Restrict that recovery to the sole
+    // executable item in a factory; the older AMD-polyfill fingerprint below
+    // is independently strong enough to keep its existing per-item behavior.
+    let can_lift_injected_wrapper = module
+        .body
+        .iter()
+        .filter(|item| !is_use_strict_item(item))
+        .count()
+        == 1;
+    let mut new_body: Vec<ModuleItem> = Vec::with_capacity(module.body.len());
+    for item in module.body.drain(..) {
+        match try_unwrap_global_envelope_item(&item, unresolved_mark, can_lift_injected_wrapper) {
+            Some(replacement) => new_body.extend(replacement),
+            None => new_body.push(item),
+        }
+    }
+    module.body = new_body;
+}
+
+fn is_use_strict_item(item: &ModuleItem) -> bool {
+    matches!(
+        item,
+        ModuleItem::Stmt(Stmt::Expr(ExprStmt { expr, .. }))
+            if matches!(expr.as_ref(), Expr::Lit(Lit::Str(value))
+                if value.value.as_str() == Some("use strict"))
+    )
+}
+
+fn try_unwrap_global_envelope_item(
+    item: &ModuleItem,
+    unresolved_mark: Mark,
+    can_lift_injected_wrapper: bool,
+) -> Option<Vec<ModuleItem>> {
+    let ModuleItem::Stmt(stmt) = item else {
+        return None;
+    };
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Call(call) = strip_parens(expr) else {
+        return None;
+    };
+
+    // Callee must be `<fn|arrow>.call`.
+    let Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let Expr::Member(member) = callee_expr.as_ref() else {
+        return None;
+    };
+    let MemberProp::Ident(prop) = &member.prop else {
+        return None;
+    };
+    if prop.sym.as_ref() != "call" {
+        return None;
+    }
+
+    let (param_ids, body_stmts) = extract_inner_callee(&member.obj)?;
+    // Can't verify param usage on a paramless wrapper — not our pattern anyway.
+    if param_ids.is_empty() {
+        return None;
+    }
+
+    // Arg list: first must be literal `this`, none may be spreads.
+    if call.args.is_empty() || call.args[0].spread.is_some() {
+        return None;
+    }
+    if !matches!(&*call.args[0].expr, Expr::This(_)) {
+        return None;
+    }
+    if call.args.iter().skip(1).any(|a| a.spread.is_some()) {
+        return None;
+    }
+
+    // The defining fingerprint: at least one arg is `require(<str>)(module)`.
+    // User code essentially never invokes a `require()` result with the raw
+    // `module` binding — this shape is the webpack AMD-define polyfill.
+    if call
+        .args
+        .iter()
+        .skip(1)
+        .any(|a| is_require_invoked_with_module(&a.expr, unresolved_mark))
+    {
+        // Rewrite a clone: replace the global-detect ternary with `globalThis`.
+        // If no ternary matches our signature, bail — we don't want to strip the
+        // wrapper without also neutralizing the param references inside it.
+        let mut candidate = body_stmts.clone();
+        let mut replacer = TernaryReplacer {
+            param_ids: &param_ids,
+            unresolved_mark,
+            replacements: 0,
+        };
+        for stmt in &mut candidate {
+            stmt.visit_mut_with(&mut replacer);
+        }
+        if replacer.replacements == 0 {
+            return None;
+        }
+
+        // After replacing the ternary(s), no param reference may remain — if
+        // anything survives, the wrapper was carrying real data and we can't
+        // safely drop its arguments.
+        if count_param_refs(&candidate, &param_ids) > 0 || !body_is_safe_to_lift(&candidate) {
+            return None;
+        }
+
+        return Some(candidate.into_iter().map(ModuleItem::Stmt).collect());
+    }
+
+    if !can_lift_injected_wrapper || param_ids.len() != 1 || call.args.len() != 2 {
+        return None;
+    }
+    let injected_arg = &call.args[1];
+    if !is_direct_literal_require(&injected_arg.expr, unresolved_mark) {
+        return None;
+    }
+    let is_known_webpack_global =
+        is_webpack_global_builtin_require(&injected_arg.expr, unresolved_mark);
+
+    // Some core-js global-object modules use webpack's injected `global`
+    // value only as the final guarded fallback after `globalThis`, `self`, and
+    // `window`. In post-ES2020 output that injected fallback is obsolete. Drop
+    // the wrapper only when every reference to the parameter belongs to an
+    // exact guarded candidate later in the same short-circuit chain as an
+    // equivalent guarded `globalThis` candidate. Nested logical chains are
+    // deliberately independent: broadening that relation would make a nearby
+    // `globalThis` guard look like proof for deferred or unrelated code.
+    let mut candidate = body_stmts.clone();
+    let mut guard_replacer = GuardedGlobalFallbackReplacer {
+        param_id: &param_ids[0],
+        global_this_id: (
+            Atom::from("globalThis"),
+            SyntaxContext::empty().apply_mark(unresolved_mark),
+        ),
+        replacements: 0,
+    };
+    for stmt in &mut candidate {
+        stmt.visit_mut_with(&mut guard_replacer);
+    }
+    if guard_replacer.replacements > 0
+        && count_param_refs(&candidate, &param_ids) == 0
+        && body_is_safe_to_lift(&candidate)
+    {
+        let mut replacement = Vec::with_capacity(candidate.len() + 1);
+        if !is_known_webpack_global {
+            // Require-ID rewriting runs before this unwrap pass. Clone the
+            // already-normalized call instead of synthesizing an import here;
+            // UnEsm will recover it as a side-effect import later. An unknown
+            // or missing provider must remain observable (`require(99)` stays
+            // unresolved when the module table cannot prove a target).
+            replacement.push(side_effect_expr_item(injected_arg.expr.clone()));
+        }
+        replacement.extend(candidate.into_iter().map(ModuleItem::Stmt));
+        return Some(replacement);
+    }
+
+    // Webpack 4's generated `global` injection passes its own
+    // `webpack/buildin/global.js` module into a wrapper around the authored
+    // CommonJS body. Preserve the call-time snapshot as a `var` initializer at
+    // the same statement position, then expose the body to UnEsm. The provider
+    // identity is deliberately required; a user-authored `.call(this,
+    // require(...))` remains untouched.
+    if !is_known_webpack_global || !body_is_safe_to_lift(&body_stmts) {
+        return None;
+    }
+    let mut replacement = Vec::with_capacity(body_stmts.len() + 1);
+    replacement.push(param_capture_item(&param_ids[0], injected_arg.expr.clone()));
+    replacement.extend(body_stmts.into_iter().map(ModuleItem::Stmt));
+    Some(replacement)
+}
+
+/// Extract `(param_ids, body_stmts)` from an expression that is expected to
+/// be a fn/arrow IIFE callee. Skips a surrounding paren wrapper. Arrow
+/// expression-bodies are rejected — the wrapper pattern always has a block.
+fn extract_inner_callee(expr: &Expr) -> Option<(Vec<Id>, Vec<Stmt>)> {
+    let mut unwrapped = expr;
+    while let Expr::Paren(p) = unwrapped {
+        unwrapped = p.expr.as_ref();
+    }
+    match unwrapped {
+        Expr::Fn(FnExpr { ident, function }) => {
+            if ident.is_some() || function.is_async || function.is_generator {
+                return None;
+            }
+            let params = collect_param_ids(function.params.iter().map(|p| &p.pat))?;
+            let body = function.body.as_ref()?.stmts.clone();
+            Some((params, body))
+        }
+        Expr::Arrow(arrow) => {
+            if arrow.is_async || arrow.is_generator {
+                return None;
+            }
+            let param_ids = collect_param_ids(arrow.params.iter())?;
+            let ArrowFunctionBody::FunctionBody(FunctionBody { stmts, .. }) = arrow.body.as_ref()
+            else {
+                return None;
+            };
+            Some((param_ids, stmts.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn collect_param_ids<'a, I: Iterator<Item = &'a Pat>>(pats: I) -> Option<Vec<Id>> {
+    let mut out = Vec::new();
+    for pat in pats {
+        let Pat::Ident(bi) = pat else {
+            return None;
+        };
+        out.push((bi.id.sym.clone(), bi.id.ctxt));
+    }
+    Some(out)
+}
+
+/// `require(<string literal>)(module)` — the AMD-define polyfill call site.
+/// The tail arg must be the raw `module` identifier; `module.exports` or any
+/// other shape doesn't qualify.
+fn is_require_invoked_with_module(expr: &Expr, unresolved_mark: Mark) -> bool {
+    let Expr::Call(outer) = expr else {
+        return false;
+    };
+    if outer.args.len() != 1 || outer.args[0].spread.is_some() {
+        return false;
+    }
+    let Expr::Ident(arg_ident) = &*outer.args[0].expr else {
+        return false;
+    };
+    if arg_ident.sym.as_ref() != "module" {
+        return false;
+    }
+
+    // Inner: require("./…")
+    let Callee::Expr(outer_callee) = &outer.callee else {
+        return false;
+    };
+    let Expr::Call(inner) = outer_callee.as_ref() else {
+        return false;
+    };
+    let Callee::Expr(inner_callee) = &inner.callee else {
+        return false;
+    };
+    let Expr::Ident(id) = inner_callee.as_ref() else {
+        return false;
+    };
+    if id.sym.as_ref() != "require" || id.ctxt.outer() != unresolved_mark {
+        return false;
+    }
+    inner.args.len() == 1
+        && inner.args[0].spread.is_none()
+        && matches!(&*inner.args[0].expr, Expr::Lit(Lit::Str(_)))
+}
+
+fn direct_literal_require_source(expr: &Expr, unresolved_mark: Mark) -> Option<&Lit> {
+    let Expr::Call(call) = strip_parens(expr) else {
+        return None;
+    };
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let Expr::Ident(require) = strip_parens(callee) else {
+        return None;
+    };
+    if require.sym.as_ref() != "require" || require.ctxt.outer() != unresolved_mark {
+        return None;
+    }
+    let Expr::Lit(lit @ (Lit::Str(_) | Lit::Num(_))) = strip_parens(&call.args[0].expr) else {
+        return None;
+    };
+    Some(lit)
+}
+
+fn is_direct_literal_require(expr: &Expr, unresolved_mark: Mark) -> bool {
+    direct_literal_require_source(expr, unresolved_mark).is_some()
+}
+
+fn is_webpack_global_builtin_require(expr: &Expr, unresolved_mark: Mark) -> bool {
+    let Some(Lit::Str(source)) = direct_literal_require_source(expr, unresolved_mark) else {
+        return false;
+    };
+    let normalized = source.value.to_string_lossy().replace('\\', "/");
+    normalized == "webpack/buildin/global.js" || normalized.ends_with("/webpack/buildin/global.js")
+}
+
+fn param_capture_item(param_id: &Id, init: Box<Expr>) -> ModuleItem {
+    ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        span: DUMMY_SP,
+        ctxt: SyntaxContext::empty(),
+        kind: VarDeclKind::Var,
+        declare: false,
+        decls: vec![VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent::from(Ident::new(
+                param_id.0.clone(),
+                DUMMY_SP,
+                param_id.1,
+            ))),
+            init: Some(init),
+            definite: false,
+        }],
+    }))))
+}
+
+fn side_effect_expr_item(expr: Box<Expr>) -> ModuleItem {
+    ModuleItem::Stmt(Stmt::Expr(ExprStmt {
+        span: DUMMY_SP,
+        expr,
+    }))
+}
+
+fn body_is_safe_to_lift(stmts: &[Stmt]) -> bool {
+    let mut scope_hazards = LiftedWrapperScopeHazards::default();
+    let mut eval = DirectEvalAnalyzer::default();
+    for stmt in stmts {
+        stmt.visit_with(&mut scope_hazards);
+        stmt.visit_with(&mut eval);
+    }
+    !scope_hazards.found && eval.known_direct_eval_sources.is_empty() && !eval.unknown_direct_eval
+}
+
+#[derive(Default)]
+struct LiftedWrapperScopeHazards {
+    found: bool,
+    arrow_depth: usize,
+}
+
+impl Visit for LiftedWrapperScopeHazards {
+    // Ordinary nested functions keep their own function-only bindings after
+    // the outer wrapper is lifted. Arrows deliberately recurse because they
+    // capture `this`, `arguments`, and `new.target` from that wrapper.
+    fn visit_function(&mut self, _: &Function) {}
+
+    // SWC models constructors and object accessors directly rather than
+    // wrapping their bodies in `Function`. Their bodies still have their own
+    // `this`, `arguments`, `new.target`, and `return` semantics, so only visit
+    // parts evaluated while the surrounding class/object is created.
+    fn visit_constructor(&mut self, constructor: &Constructor) {
+        constructor.key.visit_with(self);
+        for param in &constructor.params {
+            match param {
+                ParamOrTsParamProp::Param(param) => param.decorators.visit_with(self),
+                ParamOrTsParamProp::TsParamProp(param) => param.decorators.visit_with(self),
+            }
+        }
+    }
+
+    fn visit_getter_prop(&mut self, getter: &GetterProp) {
+        getter.key.visit_with(self);
+    }
+
+    fn visit_setter_prop(&mut self, setter: &SetterProp) {
+        setter.key.visit_with(self);
+    }
+
+    // A computed field/accessor key and its decorators run in the enclosing
+    // context. Initializers instead receive the class instance (or class for
+    // static elements) as `this`; static blocks use the same class context.
+    // Direct eval remains independently scanned by `DirectEvalAnalyzer`.
+    fn visit_class_prop(&mut self, prop: &ClassProp) {
+        prop.key.visit_with(self);
+        prop.decorators.visit_with(self);
+    }
+
+    fn visit_private_prop(&mut self, prop: &PrivateProp) {
+        prop.decorators.visit_with(self);
+    }
+
+    fn visit_auto_accessor(&mut self, accessor: &AutoAccessor) {
+        accessor.key.visit_with(self);
+        accessor.decorators.visit_with(self);
+    }
+
+    fn visit_static_block(&mut self, _: &StaticBlock) {}
+
+    fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+        self.arrow_depth += 1;
+        arrow.visit_children_with(self);
+        self.arrow_depth -= 1;
+    }
+
+    fn visit_return_stmt(&mut self, stmt: &swc_core::ecma::ast::ReturnStmt) {
+        if self.arrow_depth == 0 {
+            self.found = true;
+            return;
+        }
+        stmt.visit_children_with(self);
+    }
+
+    fn visit_this_expr(&mut self, _: &ThisExpr) {
+        self.found = true;
+    }
+
+    fn visit_ident(&mut self, ident: &Ident) {
+        if ident.sym.as_ref() == "arguments" {
+            self.found = true;
+        }
+    }
+
+    fn visit_meta_prop_expr(&mut self, meta: &MetaPropExpr) {
+        if meta.kind == MetaPropKind::NewTarget {
+            self.found = true;
+        }
+    }
+
+    fn visit_with_stmt(&mut self, _: &swc_core::ecma::ast::WithStmt) {
+        self.found = true;
+    }
+}
+
+// ---- ternary matching ----
+
+/// Matches the inner `<param> !== undefined ? <param> : <param>` arm and
+/// returns whether both leaf idents are among `param_ids`.
+fn is_param_fallback_cond(cond: &CondExpr, param_ids: &[Id]) -> bool {
+    // Test: `P !== undefined` (either order, with `void 0` accepted as undefined).
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = cond.test.as_ref()
+    else {
+        return false;
+    };
+    if !matches!(op, BinaryOp::NotEq | BinaryOp::NotEqEq) {
+        return false;
+    }
+    let test_ident = match (is_undefined_expr(left), is_undefined_expr(right)) {
+        (true, false) => right.as_ref(),
+        (false, true) => left.as_ref(),
+        _ => return false,
+    };
+    let Expr::Ident(test_id) = test_ident else {
+        return false;
+    };
+    if !id_in(param_ids, test_id) {
+        return false;
+    }
+
+    // `cons` should reference the same param as the test.
+    let Expr::Ident(cons_id) = cond.cons.as_ref() else {
+        return false;
+    };
+    if (cons_id.sym.clone(), cons_id.ctxt) != (test_id.sym.clone(), test_id.ctxt) {
+        return false;
+    }
+
+    // `alt` should be another param (the second fallback).
+    let Expr::Ident(alt_id) = cond.alt.as_ref() else {
+        return false;
+    };
+    id_in(param_ids, alt_id)
+}
+
+fn is_undefined_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Unary(UnaryExpr {
+            op: UnaryOp::Void,
+            arg,
+            ..
+        }) if matches!(arg.as_ref(), Expr::Lit(Lit::Num(_)))
+    ) || matches!(expr, Expr::Ident(id) if id.sym.as_ref() == "undefined")
+}
+
+/// `typeof <Ident> != "undefined"` — accepts either operand order and both
+/// `!=` / `!==` forms (`===` is webpack's actual emission for the outer
+/// arms, but raw output can normalize to `==` depending on what ran before).
+fn matches_typeof_defined(expr: &Expr, expected: &str) -> bool {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return false;
+    };
+    if !matches!(op, BinaryOp::NotEq | BinaryOp::NotEqEq) {
+        return false;
+    }
+    let (typeof_side, lit_side) = match (
+        is_string_lit(left, "undefined"),
+        is_string_lit(right, "undefined"),
+    ) {
+        (true, false) => (right.as_ref(), left.as_ref()),
+        (false, true) => (left.as_ref(), right.as_ref()),
+        _ => return false,
+    };
+    let _ = lit_side;
+    let Expr::Unary(UnaryExpr {
+        op: UnaryOp::TypeOf,
+        arg,
+        ..
+    }) = typeof_side
+    else {
+        return false;
+    };
+    matches!(arg.as_ref(), Expr::Ident(id) if id.sym.as_ref() == expected)
+}
+
+fn is_string_lit(expr: &Expr, value: &str) -> bool {
+    if let Expr::Lit(Lit::Str(s)) = expr {
+        s.value.as_str().is_some_and(|v| v == value)
+    } else {
+        false
+    }
+}
+
+fn id_in(param_ids: &[Id], ident: &Ident) -> bool {
+    param_ids
+        .iter()
+        .any(|(sym, ctxt)| *sym == ident.sym && *ctxt == ident.ctxt)
+}
+
+/// Matches the full `typeof self → typeof window → param-fallback` ternary.
+fn is_global_detect_ternary(cond: &CondExpr, param_ids: &[Id]) -> bool {
+    // Outer: `typeof self != "undefined" ? self : <inner>`
+    if !matches_typeof_defined(&cond.test, "self") {
+        return false;
+    }
+    if !matches!(cond.cons.as_ref(), Expr::Ident(id) if id.sym.as_ref() == "self") {
+        return false;
+    }
+    let Expr::Cond(inner) = cond.alt.as_ref() else {
+        return false;
+    };
+    // Middle: `typeof window != "undefined" ? window : <param-fallback>`
+    if !matches_typeof_defined(&inner.test, "window") {
+        return false;
+    }
+    if !matches!(inner.cons.as_ref(), Expr::Ident(id) if id.sym.as_ref() == "window") {
+        return false;
+    }
+    let Expr::Cond(fallback) = inner.alt.as_ref() else {
+        return false;
+    };
+    is_param_fallback_cond(fallback, param_ids)
+}
+
+struct TernaryReplacer<'a> {
+    param_ids: &'a [Id],
+    unresolved_mark: Mark,
+    replacements: usize,
+}
+
+impl<'a> VisitMut for TernaryReplacer<'a> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+        if let Expr::Cond(cond) = expr {
+            if is_global_detect_ternary(cond, self.param_ids) {
+                let ctxt = SyntaxContext::empty().apply_mark(self.unresolved_mark);
+                *expr = Expr::Ident(Ident::new(
+                    Atom::from("globalThis"),
+                    Default::default(),
+                    ctxt,
+                ));
+                self.replacements += 1;
+            }
+        }
+    }
+}
+
+fn is_guarded_object_value(expr: &Expr, value_id: &Id) -> bool {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalAnd,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return false;
+    };
+    let Expr::Ident(value) = right.as_ref() else {
+        return false;
+    };
+    if (value.sym.clone(), value.ctxt) != *value_id {
+        return false;
+    }
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = left.as_ref()
+    else {
+        return false;
+    };
+    if !matches!(op, BinaryOp::EqEq | BinaryOp::EqEqEq) {
+        return false;
+    }
+    let typeof_matches = |candidate: &Expr| {
+        matches!(
+            candidate,
+            Expr::Unary(UnaryExpr {
+                op: UnaryOp::TypeOf,
+                arg,
+                ..
+            }) if matches!(arg.as_ref(), Expr::Ident(id)
+                if (id.sym.clone(), id.ctxt) == *value_id)
+        )
+    };
+    (is_string_lit(left, "object") && typeof_matches(right))
+        || (typeof_matches(left) && is_string_lit(right, "object"))
+}
+
+/// Recognize the core-js-style `selectGlobal(guardedValue)` operand. Requiring
+/// the same resolved unary checker on both operands prevents an unrelated
+/// earlier global guard from authorizing the injected fallback.
+fn guarded_candidate_checker(expr: &Expr, value_id: &Id) -> Option<Id> {
+    let expr = strip_parens(expr);
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let Expr::Ident(checker) = strip_parens(callee) else {
+        return None;
+    };
+    is_guarded_object_value(strip_parens(&call.args[0].expr), value_id)
+        .then(|| (checker.sym.clone(), checker.ctxt))
+}
+
+fn replace_guarded_candidate(expr: &mut Expr, value_id: &Id, replacement: Ident) -> bool {
+    match expr {
+        Expr::Paren(paren) => {
+            return replace_guarded_candidate(&mut paren.expr, value_id, replacement)
+        }
+        Expr::Call(call) if call.args.len() == 1 && call.args[0].spread.is_none() => {
+            let Callee::Expr(callee) = &call.callee else {
+                return false;
+            };
+            if !matches!(strip_parens(callee), Expr::Ident(_))
+                || !is_guarded_object_value(strip_parens(&call.args[0].expr), value_id)
+            {
+                return false;
+            }
+            *call.args[0].expr = Expr::Ident(replacement);
+            return true;
+        }
+        _ => {}
+    }
+    false
+}
+
+struct GuardedGlobalFallbackReplacer<'a> {
+    param_id: &'a Id,
+    global_this_id: Id,
+    replacements: usize,
+}
+
+impl GuardedGlobalFallbackReplacer<'_> {
+    fn visit_logical_or_chain(
+        &mut self,
+        expr: &mut Expr,
+        earlier_global_checkers: &mut HashSet<Id>,
+    ) {
+        if let Expr::Bin(BinExpr {
+            op: BinaryOp::LogicalOr,
+            left,
+            right,
+            ..
+        }) = expr
+        {
+            // JavaScript parses `a || b || c` left-associatively. Walking the
+            // direct binary tree in source order gives every later operand the
+            // exact set of earlier candidates from this chain only.
+            self.visit_logical_or_chain(left, earlier_global_checkers);
+            self.visit_logical_or_chain(right, earlier_global_checkers);
+            return;
+        }
+
+        if let Some(checker) = guarded_candidate_checker(expr, &self.global_this_id) {
+            earlier_global_checkers.insert(checker);
+            return;
+        }
+        if let Some(checker) = guarded_candidate_checker(expr, self.param_id) {
+            if earlier_global_checkers.contains(&checker) {
+                let replacement = Ident::new(
+                    self.global_this_id.0.clone(),
+                    DUMMY_SP,
+                    self.global_this_id.1,
+                );
+                if replace_guarded_candidate(expr, self.param_id, replacement) {
+                    self.replacements += 1;
+                }
+            }
+            return;
+        }
+
+        // A nested logical-or expression reached through another operand
+        // starts its own proof context when normal visiting reaches it.
+        expr.visit_mut_children_with(self);
+    }
+}
+
+impl VisitMut for GuardedGlobalFallbackReplacer<'_> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if matches!(
+            expr,
+            Expr::Bin(BinExpr {
+                op: BinaryOp::LogicalOr,
+                ..
+            })
+        ) {
+            let mut earlier_global_checkers = HashSet::default();
+            self.visit_logical_or_chain(expr, &mut earlier_global_checkers);
+            return;
+        }
+        expr.visit_mut_children_with(self);
+    }
+
+    // These bodies run in their own or a deferred execution scope. An outer
+    // short-circuit chain cannot authorize replacing a captured wrapper
+    // parameter inside them; leaving the reference makes the enclosing unwrap
+    // fail closed through `count_param_refs`.
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+
+    fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+
+    fn visit_mut_constructor(&mut self, _: &mut swc_core::ecma::ast::Constructor) {}
+
+    fn visit_mut_getter_prop(&mut self, _: &mut swc_core::ecma::ast::GetterProp) {}
+
+    fn visit_mut_setter_prop(&mut self, _: &mut swc_core::ecma::ast::SetterProp) {}
+}
+
+fn count_param_refs(stmts: &[Stmt], param_ids: &[Id]) -> usize {
+    let mut counter = ParamRefCounter {
+        param_ids,
+        count: 0,
+    };
+    for stmt in stmts {
+        stmt.visit_with(&mut counter);
+    }
+    counter.count
+}
+
+struct ParamRefCounter<'a> {
+    param_ids: &'a [Id],
+    count: usize,
+}
+
+impl<'a> Visit for ParamRefCounter<'a> {
+    fn visit_ident(&mut self, ident: &Ident) {
+        if id_in(self.param_ids, ident) {
+            self.count += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+fn emit_module(module: &Module, cm: Lrc<SourceMap>) -> anyhow::Result<String> {
+    use anyhow::anyhow;
+    let mut output = Vec::new();
+    {
+        let mut emitter = Emitter {
+            cfg: Config::default().with_minify(false),
+            cm: cm.clone(),
+            comments: None,
+            wr: JsWriter::new(cm.clone(), "\n", &mut output, None),
+        };
+        emitter
+            .emit_module(module)
+            .map_err(|e| anyhow!("emit error: {e:?}"))?;
+    }
+    String::from_utf8(output).map_err(|e| anyhow!("utf8 error: {e}"))
+}
+
+#[cfg(test)]
+mod polyfill_tests {
+    use super::*;
+
+    fn run_unwrap(source: &str) -> String {
+        GLOBALS.set(&Default::default(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let mut module =
+                crate::unpacker::parse_es_module(source, "webpack4.js", cm.clone()).expect("parse");
+            let unresolved_mark = Mark::new();
+            let top_level_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+            unwrap_webpack_global_envelopes(&mut module, unresolved_mark);
+            apply_fixer(&mut module).expect("fixer should not panic on fixture");
+            emit_module(&module, cm).expect("emit")
+        })
+    }
+
+    // ---- positive cases ----
+
+    #[test]
+    fn unwraps_module_21_shape_function() {
+        let input = r#"(function(e, r) {
+    var o, i = require("./module-31.js");
+    o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.a = i.a(o);
+}).call(this, require("./module-42.js"), require("./module-41.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(
+            !out.contains(".call(this"),
+            "wrapper should be stripped: {out}"
+        );
+        assert!(
+            out.contains("globalThis"),
+            "ternary should collapse to globalThis: {out}"
+        );
+        assert!(
+            out.contains(r#"require("./module-31.js")"#),
+            "real import preserved: {out}"
+        );
+        assert!(
+            !out.contains(r#"require("./module-41.js")"#),
+            "amd helper arg dropped: {out}"
+        );
+    }
+
+    #[test]
+    fn unwraps_arrow_callee() {
+        let input = r#"((e, r) => {
+    let o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).call(this, globalA, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(!out.contains(".call(this"), "{out}");
+        assert!(out.contains("globalThis"), "{out}");
+    }
+
+    #[test]
+    fn unwraps_paren_wrapped_callee() {
+        let input = r#"((function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+})).call(this, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(
+            !out.contains(".call(this"),
+            "paren-wrapped callee should still match: {out}"
+        );
+    }
+
+    #[test]
+    fn unwraps_strict_equality_typeof_check() {
+        // Webpack can emit `!==` on the typeof arms; our matcher accepts both.
+        let input = r#"(function(e, r) {
+    var o = typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).call(this, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(!out.contains(".call(this"), "{out}");
+    }
+
+    #[test]
+    fn unwraps_webpack_global_injection_with_bound_require() {
+        let input = r#"((function(injectedGlobal) {
+    exports.getGlobal = function() {
+        return injectedGlobal;
+    };
+}).call(this, require("../node_modules/webpack/buildin/global.js")));
+"#;
+        let out = run_unwrap(input);
+        assert!(!out.contains(".call(this"), "{out}");
+        assert!(
+            out.contains(
+                r#"var injectedGlobal = require("../node_modules/webpack/buildin/global.js")"#
+            ),
+            "the call-time snapshot must become a local binding: {out}"
+        );
+        assert!(out.contains("exports.getGlobal = function()"), "{out}");
+    }
+
+    #[test]
+    fn unwraps_injected_global_used_only_as_a_guarded_fallback() {
+        let input = r#"(function(injectedGlobal) {
+    function selectGlobal(candidate) {
+        return candidate && candidate.Math === Math && candidate;
+    }
+    module.exports = selectGlobal("object" === typeof globalThis && globalThis)
+        || selectGlobal("object" === typeof injectedGlobal && injectedGlobal)
+        || Function("return this")();
+}).call(this, require(99));
+"#;
+        let out = run_unwrap(input);
+        assert!(!out.contains(".call(this"), "{out}");
+        assert!(
+            out.contains("require(99);"),
+            "an unidentified provider must keep its eager side effect: {out}"
+        );
+        assert!(!out.contains("injectedGlobal"), "{out}");
+        assert!(out.contains("module.exports"), "{out}");
+    }
+
+    #[test]
+    fn unwraps_known_builtin_guarded_fallback_without_runtime_edge() {
+        let input = r#"(function(injectedGlobal) {
+    function selectGlobal(candidate) {
+        return candidate && candidate.Math === Math && candidate;
+    }
+    module.exports = selectGlobal("object" === typeof globalThis && globalThis)
+        || selectGlobal("object" === typeof injectedGlobal && injectedGlobal)
+        || Function("return this")();
+}).call(this, require("../node_modules/webpack/buildin/global.js"));
+"#;
+        let out = run_unwrap(input);
+        assert!(!out.contains(".call(this"), "{out}");
+        assert!(
+            !out.contains("webpack/buildin/global.js"),
+            "the proven webpack runtime helper must not become a side-effect edge: {out}"
+        );
+        assert!(!out.contains("injectedGlobal"), "{out}");
+        assert!(out.contains("module.exports"), "{out}");
+    }
+
+    // ---- negative cases ----
+
+    #[test]
+    fn skips_when_module_helper_tail_missing() {
+        // Without a `require(X)(module)` arg, we don't trust the shape.
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).call(this, something, somethingElse);
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "should preserve wrapper: {out}");
+    }
+
+    #[test]
+    fn skips_when_module_arg_is_not_raw_module_binding() {
+        // `require(X)(module.exports)` doesn't count — the tell is the raw
+        // `module` binding.
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).call(this, g, require("./amd.js")(module.exports));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+    }
+
+    #[test]
+    fn skips_when_global_ternary_missing() {
+        // `(module)` tail is present but the body doesn't have the global-
+        // detect ternary — we can't safely strip the args.
+        let input = r#"(function(e, r) {
+    exports.combined = e + r;
+}).call(this, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+    }
+
+    #[test]
+    fn skips_dot_apply_variant() {
+        // `.apply` takes an array, not positional args — different semantics.
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).apply(this, [g, require("./amd.js")(module)]);
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".apply"), "{out}");
+    }
+
+    #[test]
+    fn skips_when_this_arg_is_not_this() {
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+}).call(null, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(
+            out.contains(".call(null"),
+            "non-this thisArg should preserve wrapper: {out}"
+        );
+    }
+
+    #[test]
+    fn skips_when_params_used_outside_ternary() {
+        // `r` is also assigned to a property — the wrapper carries real data,
+        // not just a fallback global. Dropping the arg would change semantics.
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+    exports.g = o;
+    exports.helper = r;
+}).call(this, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(
+            out.contains(".call(this"),
+            "param used outside ternary — preserve: {out}"
+        );
+    }
+
+    #[test]
+    fn skips_generic_require_argument_without_webpack_builtin_identity() {
+        let input = r#"(function(value) {
+    exports.value = value;
+}).call(this, require("./user-module.js"));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+    }
+
+    #[test]
+    fn skips_guarded_parameter_when_global_this_is_not_an_earlier_candidate() {
+        let input = r#"(function(value) {
+    module.exports = selectGlobal("object" === typeof value && value);
+}).call(this, require(99));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+        assert!(out.contains("require(99)"), "{out}");
+    }
+
+    #[test]
+    fn skips_guarded_parameter_before_global_this_in_the_same_chain() {
+        let input = r#"(function(value) {
+    module.exports = selectGlobal("object" === typeof value && value)
+        || selectGlobal("object" === typeof globalThis && globalThis);
+}).call(this, require(99));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+        assert!(out.contains("require(99)"), "{out}");
+    }
+
+    #[test]
+    fn skips_guarded_parameter_when_global_this_is_in_another_statement() {
+        let input = r#"(function(value) {
+    const nativeGlobal = selectGlobal("object" === typeof globalThis && globalThis);
+    module.exports = selectGlobal("object" === typeof value && value) || nativeGlobal;
+}).call(this, require(99));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+        assert!(out.contains("require(99)"), "{out}");
+    }
+
+    #[test]
+    fn skips_guarded_parameter_with_a_different_candidate_checker() {
+        let input = r#"(function(value) {
+    module.exports = selectGlobal("object" === typeof globalThis && globalThis)
+        || selectFallback("object" === typeof value && value);
+}).call(this, require(99));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+        assert!(out.contains("require(99)"), "{out}");
+    }
+
+    #[test]
+    fn skips_guarded_parameter_inside_deferred_scopes() {
+        let cases = [
+            (
+                "function",
+                r#"module.exports = function deferred() {
+    selectGlobal("object" === typeof globalThis && globalThis)
+        || selectGlobal("object" === typeof value && value);
+};"#,
+            ),
+            (
+                "arrow",
+                r#"module.exports = () => selectGlobal("object" === typeof globalThis && globalThis)
+    || selectGlobal("object" === typeof value && value);"#,
+            ),
+            (
+                "constructor",
+                r#"module.exports = class Deferred {
+    constructor() {
+        selectGlobal("object" === typeof globalThis && globalThis)
+            || selectGlobal("object" === typeof value && value);
+    }
+};"#,
+            ),
+            (
+                "getter",
+                r#"module.exports = {
+    get deferred() {
+        selectGlobal("object" === typeof globalThis && globalThis)
+            || selectGlobal("object" === typeof value && value);
+    }
+};"#,
+            ),
+            (
+                "setter",
+                r#"module.exports = {
+    set deferred(next) {
+        selectGlobal("object" === typeof globalThis && globalThis)
+            || selectGlobal("object" === typeof value && value);
+    }
+};"#,
+            ),
+        ];
+
+        for (label, body) in cases {
+            let input = format!("(function(value) {{\n{body}\n}}).call(this, require(99));\n");
+            let out = run_unwrap(&input);
+            assert!(out.contains(".call(this"), "{label}: {out}");
+            assert!(out.contains("require(99)"), "{label}: {out}");
+        }
+    }
+
+    #[test]
+    fn skips_webpack_global_injection_with_function_scope_observers() {
+        let input = r#"(function(injectedGlobal) {
+    exports.read = function() {
+        return injectedGlobal;
+    };
+    exports.wrapperThis = this;
+}).call(this, require("../node_modules/webpack/buildin/global.js"));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+    }
+
+    #[test]
+    fn lifts_generated_global_wrapper_across_own_this_execution_contexts() {
+        let cases = [
+            (
+                "constructor",
+                "exports.Value = class Value { constructor(value) { this.value = value; this.target = new.target; } };",
+            ),
+            (
+                "object getter",
+                "exports.value = { get current() { return [this.current, arguments.length, new.target]; } };",
+            ),
+            (
+                "object setter",
+                "exports.value = { set current(next) { this.current = next; this.count = arguments.length; } };",
+            ),
+            (
+                "instance field",
+                "exports.Value = class Value { current = this; target = new.target; };",
+            ),
+            (
+                "static field and block",
+                "exports.Value = class Value { static current = this; static { this.ready = true; this.target = new.target; } };",
+            ),
+        ];
+
+        for (label, body) in cases {
+            let input = format!(
+                "(function(injectedGlobal) {{\n{body}\n}}).call(this, require(\"../node_modules/webpack/buildin/global.js\"));\n"
+            );
+            let out = run_unwrap(&input);
+            assert!(!out.contains(".call(this"), "{label}: {out}");
+        }
+    }
+
+    #[test]
+    fn keeps_generated_global_wrapper_for_immediate_keys_and_nested_eval() {
+        let cases = [
+            (
+                "computed accessor key",
+                "exports.value = { get [this.key]() { return 1; } };",
+            ),
+            (
+                "computed class-field key",
+                "exports.Value = class Value { [this.key] = 1; };",
+            ),
+            (
+                "accessor direct eval",
+                "exports.value = { get current() { return eval(\"injectedGlobal\"); } };",
+            ),
+            (
+                "static-block direct eval",
+                "exports.Value = class Value { static { eval(\"injectedGlobal\"); } };",
+            ),
+        ];
+
+        for (label, body) in cases {
+            let input = format!(
+                "(function(injectedGlobal) {{\n{body}\n}}).call(this, require(\"../node_modules/webpack/buildin/global.js\"));\n"
+            );
+            let out = run_unwrap(&input);
+            assert!(out.contains(".call(this"), "{label}: {out}");
+        }
+    }
+
+    #[test]
+    fn skips_when_wrapper_is_nested_not_top_level() {
+        // Our pass only touches top-level module items. A nested occurrence
+        // (inside another function) is untouched.
+        let input = r#"function outer() {
+    (function(e, r) {
+        var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? e : r;
+        exports.g = o;
+    }).call(this, g, require("./amd.js")(module));
+}
+"#;
+        let out = run_unwrap(input);
+        assert!(
+            out.contains(".call(this"),
+            "nested wrapper must not be stripped: {out}"
+        );
+    }
+
+    #[test]
+    fn skips_when_param_fallback_cons_does_not_match_test() {
+        // `void 0 !== e ? r : e` — cons/test mismatch breaks the fingerprint.
+        let input = r#"(function(e, r) {
+    var o = typeof self != "undefined" ? self : typeof window != "undefined" ? window : void 0 !== e ? r : e;
+    exports.g = o;
+}).call(this, g, require("./amd.js")(module));
+"#;
+        let out = run_unwrap(input);
+        assert!(out.contains(".call(this"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod object_form_tests {
+    use super::*;
+
+    #[test]
+    fn test_wp4_object_form_detection() {
+        // Minimal wp4 object-form bundle
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = "./src/index.js");
+})({
+    "./src/greet.js": function(module, exports) {
+        function greet(name) { return "Hello, " + name + "!"; }
+        exports.greet = greet;
+    },
+    "./src/index.js": function(module, exports, __webpack_require__) {
+        var greet = __webpack_require__("./src/greet.js");
+        console.log(greet.greet("world"));
+    }
+});
+"#;
+        let result = detect_and_extract(source).expect("should detect wp4 object-form bundle");
+        assert_eq!(
+            result.modules.len(),
+            2,
+            "expected 2 modules, got {}: {:?}",
+            result.modules.len(),
+            result.modules.iter().map(|m| &m.id).collect::<Vec<_>>()
+        );
+
+        // Verify module IDs are string paths
+        let ids: Vec<&str> = result.modules.iter().map(|m| m.id.as_str()).collect();
+        assert!(
+            ids.contains(&"./src/greet.js"),
+            "missing greet module: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"./src/index.js"),
+            "missing index module: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn test_wp4_object_form_string_entry() {
+        // Verify `.s = "./src/index.js"` marks the correct entry
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = "./src/index.js");
+})({
+    "./src/greet.js": function(module, exports) {
+        exports.greet = function(name) { return "Hello, " + name; };
+    },
+    "./src/index.js": function(module, exports, __webpack_require__) {
+        var g = __webpack_require__("./src/greet.js");
+        console.log(g.greet("world"));
+    }
+});
+"#;
+        let result = detect_and_extract(source).expect("should detect wp4 object-form bundle");
+
+        let entry_modules: Vec<&str> = result
+            .modules
+            .iter()
+            .filter(|m| m.is_entry)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(
+            entry_modules,
+            vec!["./src/index.js"],
+            "expected ./src/index.js to be marked as entry, got: {entry_modules:?}"
+        );
+
+        let non_entry: Vec<&str> = result
+            .modules
+            .iter()
+            .filter(|m| !m.is_entry)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert!(
+            non_entry.contains(&"./src/greet.js"),
+            "greet.js should not be entry: {non_entry:?}"
+        );
+    }
+
+    #[test]
+    fn test_wp4_object_form_filenames() {
+        // Verify filenames are sanitized from string keys
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = "./src/index.js");
+})({
+    "./src/utils/helper.js": function(module, exports) {
+        exports.help = function() { return 42; };
+    },
+    "./src/index.js": function(module, exports, __webpack_require__) {
+        var h = __webpack_require__("./src/utils/helper.js");
+        console.log(h.help());
+    }
+});
+"#;
+        let result = detect_and_extract(source).expect("should detect wp4 object-form bundle");
+
+        let filenames: Vec<&str> = result.modules.iter().map(|m| m.filename.as_str()).collect();
+        // "./src/utils/helper.js" should become "src/utils/helper.js"
+        assert!(
+            filenames.contains(&"src/utils/helper.js"),
+            "expected sanitized filename 'src/utils/helper.js', got: {filenames:?}"
+        );
+        // "./src/index.js" should become "src/index.js"
+        assert!(
+            filenames.contains(&"src/index.js"),
+            "expected sanitized filename 'src/index.js', got: {filenames:?}"
+        );
+    }
+
+    #[test]
+    fn test_wp4_object_form_require_rewriting() {
+        // Verify that require("./src/greet.js") is rewritten to the sanitized path.
+        // After rules run, require may be converted to import, so we use raw mode.
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = "./src/index.js");
+})({
+    "./src/greet.js": function(module, exports) {
+        exports.greet = function(name) { return "Hello, " + name; };
+    },
+    "./src/index.js": function(module, exports, __webpack_require__) {
+        var g = __webpack_require__("./src/greet.js");
+        console.log(g.greet("world"));
+    }
+});
+"#;
+        let result =
+            detect_and_extract_raw(source).expect("should detect wp4 object-form bundle (raw)");
+
+        let index_module = result
+            .modules
+            .iter()
+            .find(|m| m.id == "./src/index.js")
+            .expect("should find index module");
+
+        // The require should reference the sanitized path relative to the importer
+        assert!(
+            index_module.code.contains("\"./greet.js\""),
+            "require should reference sanitized path relative to importer, got: {}",
+            index_module.code
+        );
+    }
+
+    #[test]
+    fn test_wp4_object_form_fixture() {
+        // Real webpack 4 dev-mode bundle with object-form modules
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/bundles/webpack-gen/dist/wp4-cjs/bundle.js"
+        ))
+        .expect("failed to read wp4-cjs fixture");
+
+        let result = detect_and_extract(&source).expect("wp4-cjs object-form should be detected");
+        let module_ids: Vec<&str> = result.modules.iter().map(|m| m.id.as_str()).collect();
+
+        assert_eq!(
+            result.modules.len(),
+            3,
+            "expected 3 modules, got {}: {:?}",
+            result.modules.len(),
+            module_ids
+        );
+
+        // Verify entry detection
+        let entry_modules: Vec<&str> = result
+            .modules
+            .iter()
+            .filter(|m| m.is_entry)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert!(
+            entry_modules.contains(&"./src/index.js"),
+            "expected ./src/index.js as entry, entries: {entry_modules:?}"
+        );
+
+        // Verify all expected modules are present
+        assert!(
+            module_ids.contains(&"./src/greet.js"),
+            "missing greet module"
+        );
+        assert!(
+            module_ids.contains(&"./src/index.js"),
+            "missing index module"
+        );
+        assert!(
+            module_ids.contains(&"./src/utils.js"),
+            "missing utils module"
+        );
+    }
+
+    #[test]
+    fn test_wp4_object_form_does_not_break_array_form() {
+        // Verify that the existing array-form still works
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = 0);
+})([
+    function(module, exports, __webpack_require__) {
+        var greet = __webpack_require__(1);
+        console.log(greet.greet("world"));
+    },
+    function(module, exports) {
+        exports.greet = function(name) { return "Hello, " + name; };
+    }
+]);
+"#;
+        let result = detect_and_extract(source).expect("should still detect array-form bundle");
+        assert_eq!(
+            result.modules.len(),
+            2,
+            "expected 2 modules from array-form"
+        );
+
+        let entry_modules: Vec<&str> = result
+            .modules
+            .iter()
+            .filter(|m| m.is_entry)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert!(
+            entry_modules.contains(&"0"),
+            "expected module 0 as entry, entries: {entry_modules:?}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("./src/index.js"), "src/index.js");
+        assert_eq!(
+            sanitize_filename("./src/utils/helper.js"),
+            "src/utils/helper.js"
+        );
+        assert_eq!(sanitize_filename("../../../etc/passwd"), "etc/passwd.js");
+        assert_eq!(
+            sanitize_filename("....//node_modules/@wakaru/cli/bin/wakaru"),
+            "..../node_modules/@wakaru/cli/bin/wakaru.js"
+        );
+        assert_eq!(sanitize_filename("./src/style.less"), "src/style.less.js");
+        assert_eq!(sanitize_filename("./src/view.tsx"), "src/view.tsx");
+        assert_eq!(sanitize_filename("./App.vue?type=style"), "App.vue.js");
+        assert_eq!(sanitize_filename("opaque"), "module-opaque.js");
+        assert_eq!(sanitize_filename("./"), "unknown.js");
+        assert_eq!(sanitize_filename("../"), "unknown.js");
+        assert_eq!(sanitize_filename("index.js"), "index.js");
+    }
+
+    #[test]
+    fn test_wp4_numeric_object_form() {
+        let source = r#"
+(function(modules) {
+    var installedModules = {};
+    function __webpack_require__(moduleId) {
+        if (installedModules[moduleId]) return installedModules[moduleId].exports;
+        var module = installedModules[moduleId] = { i: moduleId, l: false, exports: {} };
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+        module.l = true;
+        return module.exports;
+    }
+    return __webpack_require__(__webpack_require__.s = 0);
+})({
+    0: function(module, exports, __webpack_require__) {
+        var greet = __webpack_require__(1);
+        console.log(greet.greet("world"));
+    },
+    1: function(module, exports) {
+        exports.greet = function(name) { return "Hello, " + name; };
+    }
+});
+"#;
+        let result = detect_and_extract(source).expect("should detect numeric object-form");
+        assert_eq!(result.modules.len(), 2, "expected 2 modules");
+
+        let entry = result.modules.iter().find(|m| m.is_entry);
+        assert!(entry.is_some(), "should have an entry module");
+        assert_eq!(
+            entry.unwrap().filename,
+            "entry.js",
+            "entry should be named entry.js"
+        );
+
+        let non_entry = result.modules.iter().find(|m| !m.is_entry).unwrap();
+        assert_eq!(
+            non_entry.filename, "module-1.js",
+            "non-entry should be module-1.js"
+        );
+
+        // require(1) should be rewritten to require("./module-1.js")
+        assert!(
+            entry.unwrap().code.contains("module-1.js"),
+            "require(1) should be rewritten; code: {}",
+            entry.unwrap().code
+        );
+    }
+}

@@ -1,0 +1,128 @@
+{
+  "commit": "379f9adb1",
+  "date": "2026-09-27",
+  "aggregate": {
+    "yes": 2447,
+    "total": 2606,
+    "pct": 93.9
+  },
+  "matrices": [
+    {
+      "name": "array-spread-rest",
+      "yes": 289,
+      "no": 22,
+      "error": 0,
+      "info": 0,
+      "total": 311,
+      "pct": 92.9
+    },
+    {
+      "name": "async-await",
+      "yes": 685,
+      "no": 118,
+      "error": 0,
+      "info": 6,
+      "total": 803,
+      "pct": 85.3
+    },
+    {
+      "name": "class-accessor",
+      "yes": 32,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 32,
+      "pct": 100
+    },
+    {
+      "name": "closure-compiler",
+      "yes": 15,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 15,
+      "pct": 100
+    },
+    {
+      "name": "conditional-switch",
+      "yes": 25,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 25,
+      "pct": 100
+    },
+    {
+      "name": "enum",
+      "yes": 93,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 93,
+      "pct": 100
+    },
+    {
+      "name": "for-of-iteration",
+      "yes": 92,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 92,
+      "pct": 100
+    },
+    {
+      "name": "object-rest-spread",
+      "yes": 252,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 252,
+      "pct": 100
+    },
+    {
+      "name": "optional-nullish",
+      "yes": 461,
+      "no": 15,
+      "error": 0,
+      "info": 0,
+      "total": 476,
+      "pct": 96.8
+    },
+    {
+      "name": "parameters",
+      "yes": 128,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 128,
+      "pct": 100
+    },
+    {
+      "name": "swc-minifier",
+      "yes": 32,
+      "no": 4,
+      "error": 0,
+      "info": 9,
+      "total": 36,
+      "pct": 88.9
+    },
+    {
+      "name": "template-literal",
+      "yes": 178,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 178,
+      "pct": 100
+    },
+    {
+      "name": "tslib-helpers",
+      "yes": 165,
+      "no": 0,
+      "error": 0,
+      "info": 0,
+      "total": 165,
+      "pct": 100
+    }
+  ]
+}

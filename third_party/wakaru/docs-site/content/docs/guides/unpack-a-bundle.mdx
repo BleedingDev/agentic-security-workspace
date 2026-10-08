@@ -1,0 +1,65 @@
+---
+title: Unpack a bundle
+icon: PackageOpen
+description: Split a production bundle back into individual, readable modules.
+---
+
+```bash
+npx wakaru bundle.js --unpack -o out/
+```
+
+Wakaru detects the bundle format automatically, splits the bundle into one
+file per module, and decompiles each module.
+
+See [Supported inputs](/reference/supported-inputs#bundlers) for supported
+bundlers and format-specific limits. You do not need to specify a format.
+
+## Inputs
+
+```bash
+npx wakaru entry.js chunk.js --unpack -o out/   # multiple explicit files
+npx wakaru dist/ --unpack -o out/               # recursively scan a directory
+```
+
+Directory inputs recursively scan `.js`, `.mjs`, and `.cjs` files. Hidden
+paths and `node_modules` are skipped. Only files detected as bundles or
+chunks are included.
+
+## Output
+
+One file per module. A small production webpack bundle with four modules
+comes out like this:
+
+```
+out/
+├── entry.js
+├── module-184.js
+├── module-611.js
+└── module-823.js
+```
+
+Names depend on what the bundle retains. Some modules keep readable paths,
+while others receive generated names. See
+[Output & warnings](/reference/output-and-warnings) for naming and failure handling.
+
+The output directory must be new or empty unless you pass `--force`.
+
+To start exploring the files, follow
+[Read an unpacked bundle](/guides/read-an-unpacked-bundle).
+
+## Variants
+
+```bash
+npx wakaru bundle.js --unpack --raw -o out/       # raw split, no readability transforms
+npx wakaru bundle.js --unpack=strict -o out/      # structural detection only, no heuristic fallback
+npx wakaru bundle.js --unpack=inspect -o out/     # finer boundaries for static inspection
+```
+
+`--raw` splits the bundle without any readability rewrites. Module names
+stay provisional, and the result is not a usable module graph.
+
+`--unpack=inspect` splits at finer boundaries for static inspection. The
+result may not preserve initialization order. Do not treat it as runnable
+code.
+
+See the [CLI reference](/reference/cli) for the full option list.

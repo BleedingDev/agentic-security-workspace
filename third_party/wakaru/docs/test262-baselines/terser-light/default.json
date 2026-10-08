@@ -1,0 +1,1301 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "default"
+    ],
+    "paths": [
+      "test/language/expressions/coalesce",
+      "test/language/expressions/optional-chaining",
+      "test/language/expressions/object",
+      "test/language/expressions/array",
+      "test/language/statements/for-of",
+      "test/language/statements/let"
+    ]
+  },
+  "totals": {
+    "discovered": 2180,
+    "runnable": 2180,
+    "skipped": 0,
+    "unsupported": 37,
+    "rejected": 120,
+    "passed": 2023,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-null.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-undefined.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/object/__proto__-permitted-dup-shorthand.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "d6e9d31a2797ded5c48a2d5f10c3e4e20c53fd22139437b6e79ac9265e7a3ee3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«[object Object]», «2») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/accessor-name-computed-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "d04bfac0270f5b4d267485b7163c95884cd98def15e88323e99261b45d163d9c",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (41..46, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-const-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-continue-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-debugger-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-delete-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-do-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-else-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-enum-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-export-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-extends-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-extends-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-finally-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-for-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-function-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-import-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-in-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-instanceof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-let-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-const-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-continue-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-debugger-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-delete-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-do-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-else-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-enum-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-export-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-extends-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-extends-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-finally-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-for-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-function-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-import-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-in-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-instanceof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-let-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-const-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-continue-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-debugger-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-delete-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-do-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-else-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-enum-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-export-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-extends-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-extends-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-finally-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-for-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-function-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-import-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-in-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-instanceof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-let-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/object/identifier-shorthand-await-strict-mode.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/let-non-strict-access.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/expressions/object/let-non-strict-syntax.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/async-gen-yield-identifier-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "df7e98ec0a822a9ac30e9efa485748812bb99b30344667a10b10e137f2de262e",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (98..103, TS1109) }; <stdin>:1:79: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/async-gen-yield-identifier-spread-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "f19d36d9fa244f65fe188d3df3f0e20649ced5975764eb1b611428c73b7a1098",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (134..139, WithLabel { inner: Error { error: (134..139, TS1109) }, span: 72..77, note: \"Tried to parse an argument of yield\" }) }; <stdin>:1:114: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/gen-yield-identifier-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "c12728f78cc2e148b47a4b0c14fefe0a0b7e91ee40d55642746b1f84ccbee6c1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (93..98, TS1109) }; <stdin>:1:74: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/gen-yield-identifier-spread-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "6e2f77c0e53ad5bb36660f351e9db10fec12a0454cd5b2aefd1a1eb537026056",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (129..134, WithLabel { inner: Error { error: (129..134, TS1109) }, span: 67..72, note: \"Tried to parse an argument of yield\" }) }; <stdin>:1:109: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/generator-prop-name-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "da57145af830e998c7e0181939d604d7e40e2368868a2d50433f45412d81a50e",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (33..38, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-param-id-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "4a3c5b75f94e295cc290b59e69c83950ce02b737294c10f5cb30e2d51e4f43d1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, TS1109) }; <stdin>:1:17: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-param-init-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "a95f9bece233ae9b040f4ed38366ff88a9a9f368897d5adf0955d7ff838decf5",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (39..44, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-prop-name-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "47f3821c9b12e080a2e36b058fa2962ac67cad3baea83451b863f66e9c43b2f1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (32..37, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-accessor.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-static-init-await",
+      "fingerprint": "00cdeb8a455ee457dbceed779923fcde36ba8506ad4748a7056b49670cf58cae",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, ExpectedIdent) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-generator.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-static-init-await",
+      "fingerprint": "dbe9d657e8b3617fb9b6b88be232ad15973dc3abaa4b81d308c901bbca121b83",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (26..31, ExpectedIdent) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-normal.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-static-init-await",
+      "fingerprint": "eb64acb651e89a6963f757a5d362bfc4dda92d74936a7fd6204944d3d4aef3a5",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, ExpectedIdent) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-accessor.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-generator.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-normal.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/yield-as-function-expression-binding-identifier.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "96c24a231b8565c64432bc02cbea3508b6aadfaaf5737a7e6dc8c53ec22feb76",
+      "summary": "SyntaxError: Yield cannot be used as identifier inside generators"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/yield-as-identifier-in-nested-function.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-ident",
+      "fingerprint": "124f44850fd8620ce15f0004ad54e4b25fc64c0904b5830ffea51c829faf41a0",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (39..44, TS1109) }"
+    },
+    {
+      "path": "test/language/expressions/object/yield-non-strict-access.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "b5a8911633c4ef6cb58f26b3d277ddbd3f1f33744cd5955196befef6d92318d1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/yield-non-strict-syntax.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "b5a8911633c4ef6cb58f26b3d277ddbd3f1f33744cd5955196befef6d92318d1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c9c2da1f20ea630e0761b1357c00f59e9b4b00421567b7b0f9ce5635df85b9ea",
+      "summary": "Error: sloppy: expected success, got runtime undefined: undefined"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "aba5886e06b2aa502962f977bf5b466118fb848f7b6e22f2838ed8c8450ed82b",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (40..45, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "19b5bbe18fef91a132977e472e29ed33a6fbbebbd8b09ad783cfddbb3ec29143",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (49..54, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "d0a09ec24ac14485bd6951b432baaaf395f3843e9011201d2c74d6ea27e25cf9",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (43..48, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-target-yield-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "3595db12e4c80104139807d477c060364b8e4ffea75f7b153bdfee306d756b57",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (48..53, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "81e7ab8b76d8e746b6c0d7e9c042d72d6409e62dba954de7a8af1be547230143",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (52..57, WithLabel { inner: Error { error: (52..57, TS1109) }, span: 46..49, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "929345de0f021d2acad50960296dd37a6826a25a8fca79a3134e339305726509",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (46..51, WithLabel { inner: Error { error: (46..51, TS1109) }, span: 38..41, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "3f019b54a99b3bd1331e6d9591e6b1322d57ff13175f81c3c2647c42101dbc69",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (51..56, WithLabel { inner: Error { error: (51..56, TS1109) }, span: 46..49, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-identifier-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "da7bdce6df695f324204e0c129efa853192396b5e16ddd8c84c0c1ee5356c3a8",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (36..41, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "fd4885bb1968d637643fbcb0dba2b9415f46e610be97da0a6551851e5bdeb3b9",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (42..47, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "fd4885bb1968d637643fbcb0dba2b9415f46e610be97da0a6551851e5bdeb3b9",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (42..47, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-target-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "ef67070c6bfd5c1a7b0f62413ca92574d8d81f845a62c9ea49027134b9d7ffeb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (50..55, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "43c38b5e8c5137bb3b648d911042ae8830785a7b5a02253306c1a82a4df9ac36",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (44..49, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "43daa4e93ecb8694f9341f19ee0af4cef454b488bf63e6dcce265f377abcc161",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (52..57, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/head-await-using-bound-names-fordecl-tdz.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5273372e583bf8903ef370c5107e80103fe1f32eb499977bce6a3b5290af198e",
+      "summary": "SyntaxError: Unexpected token name «x», expected punc «;»"
+    },
+    {
+      "path": "test/language/statements/for-of/head-await-using-fresh-binding-per-iteration.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5273372e583bf8903ef370c5107e80103fe1f32eb499977bce6a3b5290af198e",
+      "summary": "SyntaxError: Unexpected token name «x», expected punc «;»"
+    },
+    {
+      "path": "test/language/statements/for-of/head-lhs-async-escaped.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "ea8da37d6a5e332e380c984845d4c7b425850c299b5b0077ba14c1aa7adba8a8",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: The left-hand side of a for-of loop may not be 'async'."
+    },
+    {
+      "path": "test/language/statements/for-of/head-lhs-async-parens.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "ea8da37d6a5e332e380c984845d4c7b425850c299b5b0077ba14c1aa7adba8a8",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: The left-hand side of a for-of loop may not be 'async'."
+    },
+    {
+      "path": "test/language/statements/for-of/head-using-bound-names-fordecl-tdz.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5273372e583bf8903ef370c5107e80103fe1f32eb499977bce6a3b5290af198e",
+      "summary": "SyntaxError: Unexpected token name «x», expected punc «;»"
+    },
+    {
+      "path": "test/language/statements/for-of/head-using-fresh-binding-per-iteration.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5273372e583bf8903ef370c5107e80103fe1f32eb499977bce6a3b5290af198e",
+      "summary": "SyntaxError: Unexpected token name «x», expected punc «;»"
+    },
+    {
+      "path": "test/language/statements/for-of/head-var-bound-names-let.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/statements/for-of/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5ee121742147cc8ae334c1d358417b9d75e324313e8011ae15a53c822069a027",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Missing initializer in destructuring declaration"
+    },
+    {
+      "path": "test/language/statements/let/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/let/syntax/escaped-let.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    }
+  ]
+}

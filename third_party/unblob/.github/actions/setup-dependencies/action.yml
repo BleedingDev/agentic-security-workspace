@@ -1,0 +1,56 @@
+inputs:
+  python-version:
+    description: "Python version to setup"
+    required: false
+    default: "3.10"
+  install-test-deps:
+    description: "Wether to install 3rd Party dependencies (for tests)"
+    required: false
+    default: "true" # unfortunately boolean variables are not supported
+  uv-groups:
+    description: "Space-separated uv dependency groups to install"
+    required: false
+    default: ""
+
+name: "Setup dependencies"
+description: "Install all required dependencies for worflows to run."
+runs:
+  using: "composite"
+  steps:
+    - if: inputs.install-test-deps == 'true'
+      name: Install 3rd party dependencies
+      run: sudo ./install-deps.sh
+      shell: bash
+
+    - name: Setup sccache # for speeding up Rust builds
+      uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      with:
+        disable_annotations: true # it is very spammy, but useful for diagnostics
+
+    - name: Enable sccache
+      run: |
+        echo SCCACHE_GHA_ENABLED=true >> $GITHUB_ENV
+      shell: bash
+
+    - name: Install uv & Python
+      uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install the project
+      run: |
+        set -e
+        group_args=""
+        if [ -n "${{ inputs.uv-groups }}" ]; then
+          for group in ${{ inputs.uv-groups }}; do
+            group_args="$group_args --group ${group}"
+          done
+        fi
+        uv sync --no-dev ${group_args}
+      shell: bash
+
+    - name: Setup pip # some tools need it, and uv virtualenvs doesn't contain it
+      run: uv pip install pip
+      shell: bash

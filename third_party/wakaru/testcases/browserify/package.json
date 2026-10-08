@@ -1,0 +1,19 @@
+{
+  "name": "testcase-browserify",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@8.15.2",
+  "author": "Pionxzh",
+  "license": "MIT",
+  "scripts": {
+    "build": "browserify src/index.js -o dist/index.js",
+    "lint": "eslint src --max-warnings=0",
+    "lint:fix": "eslint src --fix --max-warnings=0"
+  },
+  "dependencies": {
+    "is-array": "^1.0.1"
+  },
+  "devDependencies": {
+    "browserify": "^17.0.0"
+  }
+}

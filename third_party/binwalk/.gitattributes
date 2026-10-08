@@ -1,0 +1,5 @@
+* text eol=lf
+*.md text eol=lf
+*.png binary
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter

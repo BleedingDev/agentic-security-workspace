@@ -1,0 +1,212 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import r from "./module-40.js";
+export default h;
+export const parse = h.parse = i;
+export const compile = h.compile = function(e, t) {
+    return l(i(e, t), t);
+};
+export const tokensToFunction = h.tokensToFunction = l;
+export const tokensToRegExp = h.tokensToRegExp = p;
+var o = new RegExp([
+    "(\\\\.)",
+    "([\\/.])?(?:(?:\\:(\\w+)(?:\\(((?:\\\\.|[^\\\\()])+)\\))?|\\(((?:\\\\.|[^\\\\()])+)\\))([+*?])?|(\\*))"
+].join("|"), "g");
+function i(e, t) {
+    let n;
+    const r = [];
+    let i = 0;
+    let a = 0;
+    let u = "";
+    const l = t && t.delimiter || "/";
+    while((n = o.exec(e)) != null){
+        const f = n[0];
+        const d = n[1];
+        const p = n.index;
+        u += e.slice(a, p);
+        a = p + f.length;
+        if (d) {
+            u += d[1];
+        } else {
+            const h = e[a];
+            const m = n[2];
+            const y = n[3];
+            const v = n[4];
+            const b = n[5];
+            const g = n[6];
+            const w = n[7];
+            if (u) {
+                r.push(u);
+                u = "";
+            }
+            const partial = m != null && h != null && h !== m;
+            const repeat = g === "+" || g === "*";
+            const optional = g === "?" || g === "*";
+            const delimiter = n[2] || l;
+            const S = v || b;
+            r.push({
+                name: y || i++,
+                prefix: m || "",
+                delimiter,
+                optional,
+                repeat,
+                partial,
+                asterisk: !!w,
+                pattern: S ? s(S) : w ? ".*" : `[^${c(delimiter)}]+?`
+            });
+        }
+    }
+    if (a < e.length) {
+        u += e.substr(a);
+    }
+    if (u) {
+        r.push(u);
+    }
+    return r;
+}
+function a(e) {
+    return encodeURI(e).replace(/[\/?#]/g, (e)=>`%${e.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+function u(e) {
+    return encodeURI(e).replace(/[?#]/g, (e)=>`%${e.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+function l(e, t) {
+    const n = new Array(e.length);
+    for(let o = 0; o < e.length; o++){
+        if (typeof e[o] === "object") {
+            n[o] = new RegExp(`^(?:${e[o].pattern})\$`, d(t));
+        }
+    }
+    return (t, o)=>{
+        let i = "";
+        const l = t || {};
+        const c = (o || {}).pretty ? a : encodeURIComponent;
+        for(let s = 0; s < e.length; s++){
+            const f = e[s];
+            if (typeof f !== "string") {
+                let d;
+                const p = l[f.name];
+                if (p == null) {
+                    if (f.optional) {
+                        if (f.partial) {
+                            i += f.prefix;
+                        }
+                        continue;
+                    }
+                    throw new TypeError(`Expected "${f.name}" to be defined`);
+                }
+                if (r(p)) {
+                    if (!f.repeat) {
+                        throw new TypeError(`Expected "${f.name}" to not repeat, but received \`${JSON.stringify(p)}\``);
+                    }
+                    if (p.length === 0) {
+                        if (f.optional) {
+                            continue;
+                        }
+                        throw new TypeError(`Expected "${f.name}" to not be empty`);
+                    }
+                    for(let h = 0; h < p.length; h++){
+                        d = c(p[h]);
+                        if (!n[s].test(d)) {
+                            throw new TypeError(`Expected all "${f.name}" to match "${f.pattern}", but received \`${JSON.stringify(d)}\``);
+                        }
+                        i += (h === 0 ? f.prefix : f.delimiter) + d;
+                    }
+                } else {
+                    d = f.asterisk ? u(p) : c(p);
+                    if (!n[s].test(d)) {
+                        throw new TypeError(`Expected "${f.name}" to match "${f.pattern}", but received "${d}"`);
+                    }
+                    i += f.prefix + d;
+                }
+            } else {
+                i += f;
+            }
+        }
+        return i;
+    };
+}
+function c(e) {
+    return e.replace(/([.+*?=^!:${}()[\]|\/\\])/g, "\\$1");
+}
+function s(e) {
+    return e.replace(/([=!:$\/()])/g, "\\$1");
+}
+function f(e, t) {
+    e.keys = t;
+    return e;
+}
+function d(e) {
+    if (e && e.sensitive) {
+        return "";
+    }
+    return "i";
+}
+function p(e, t, n) {
+    if (!r(t)) {
+        n = t || n;
+        t = [];
+    }
+    const strict = (n = n || {}).strict;
+    const i = n.end !== false;
+    let a = "";
+    for (const l of e){
+        if (typeof l === "string") {
+            a += c(l);
+        } else {
+            const s = c(l.prefix);
+            let p = `(?:${l.pattern})`;
+            t.push(l);
+            if (l.repeat) {
+                p += `(?:${s}${p})*`;
+            }
+            a += p = l.optional ? l.partial ? `${s}(${p})?` : `(?:${s}(${p}))?` : `${s}(${p})`;
+        }
+    }
+    const h = c(n.delimiter || "/");
+    const m = a.slice(-h.length) === h;
+    if (!strict) {
+        a = `${m ? a.slice(0, -h.length) : a}(?:${h}(?=\$))?`;
+    }
+    a += i ? "$" : strict && m ? "" : `(?=${h}|\$)`;
+    return f(new RegExp(`^${a}`, d(n)), t);
+}
+function h(e, t, n) {
+    if (!r(t)) {
+        n = t || n;
+        t = [];
+    }
+    n = n || {};
+    if (e instanceof RegExp) {
+        return ((e, t)=>{
+            const n = e.source.match(/\((?!\?)/g);
+            if (n) {
+                for(let r = 0; r < n.length; r++){
+                    t.push({
+                        name: r,
+                        prefix: null,
+                        delimiter: null,
+                        optional: false,
+                        repeat: false,
+                        partial: false,
+                        asterisk: false,
+                        pattern: null
+                    });
+                }
+            }
+            return f(e, t);
+        })(e, t);
+    }
+    if (r(e)) {
+        return ((e, t, n)=>{
+            const r = [];
+            for(let o = 0; o < e.length; o++){
+                r.push(h(e[o], t, n).source);
+            }
+            return f(new RegExp(`(?:${r.join("|")})`, d(n)), t);
+        })(e, t, n);
+    }
+    return ((e, t, n)=>p(i(e, n), t, n))(e, t, n);
+}

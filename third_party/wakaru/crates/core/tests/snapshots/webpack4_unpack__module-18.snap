@@ -1,0 +1,110 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { Component } from "./module-50.js";
+import i from "./module-1.js";
+import * as u from "./module-16.js";
+import { a } from "./module-15.js";
+export const LOCATION_CHANGE = "@@router/LOCATION_CHANGE";
+const s = {
+    location: null
+};
+export function routerReducer(e = s, { type, payload } = {}) {
+    if (type === LOCATION_CHANGE) {
+        return {
+            ...e,
+            location: payload
+        };
+    }
+    return e;
+}
+export class ConnectedRouter extends Component {
+    constructor(...i){
+        super(...i);
+        var r = this;
+        this.handleLocationChange = (payload)=>{
+            r.store.dispatch({
+                type: LOCATION_CHANGE,
+                payload
+            });
+        };
+    }
+    componentWillMount() {
+        const props = this.props;
+        const { store, history, isSSR } = props;
+        this.store = store || this.context.store;
+        this.handleLocationChange(history.location);
+        if (!isSSR) {
+            this.unsubscribeFromHistory = history.listen(this.handleLocationChange);
+        }
+    }
+    componentWillUnmount() {
+        if (this.unsubscribeFromHistory) {
+            this.unsubscribeFromHistory();
+        }
+    }
+    render() {
+        return <u.a {...this.props}/>;
+    }
+}
+ConnectedRouter.propTypes = {
+    store: i.object,
+    history: i.object.isRequired,
+    children: i.node,
+    isSSR: i.bool
+};
+ConnectedRouter.contextTypes = {
+    store: i.object
+};
+export const getLocation = function(e) {
+    return e.router.location;
+};
+export const createMatchSelector = function(e) {
+    let t = null;
+    let n = null;
+    return (r)=>{
+        const pathname = (getLocation(r) || {}).pathname;
+        if (pathname === t) {
+            return n;
+        }
+        t = pathname;
+        const i = a(pathname, e);
+        if (!(i && n && i.url === n.url)) {
+            n = i;
+        }
+        return n;
+    };
+};
+export const CALL_HISTORY_METHOD = "@@router/CALL_HISTORY_METHOD";
+function g(method) {
+    return (...args)=>({
+            type: CALL_HISTORY_METHOD,
+            payload: {
+                method,
+                args
+            }
+        });
+}
+export const push = g("push");
+export const replace = g("replace");
+export const go = g("go");
+export const goBack = g("goBack");
+export const goForward = g("goForward");
+export const routerActions = {
+    push,
+    replace,
+    go,
+    goBack,
+    goForward
+};
+export function routerMiddleware(e) {
+    return ()=>(t)=>(n)=>{
+                if (n.type !== CALL_HISTORY_METHOD) {
+                    return t(n);
+                }
+                const n_payload = n.payload;
+                const { method, args } = n_payload;
+                e[method](...args);
+            };
+}

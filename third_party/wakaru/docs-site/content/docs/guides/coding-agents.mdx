@@ -1,0 +1,33 @@
+---
+title: Coding agents
+icon: Bot
+description: Give your agent the ability to read minified JavaScript.
+---
+
+Coding agents hit unreadable minified JavaScript constantly. Left alone, an
+agent burns tokens reading through a wall of minified JavaScript and guesses
+at what the code does. With the Wakaru skill, it unpacks the bundle
+into readable modules, reads only the files it needs, and reasons about real
+code instead of guessing. Works with Claude Code, Codex, Grok, and any other
+agent that reads the skills format.
+
+## Install
+
+Install via skills.sh:
+
+```bash
+npx skills add pionxzh/wakaru
+```
+
+## Start using it
+
+Give your agent the file and tell it what you want to understand: how an SDK
+behaves, why an error occurs, or how a request is built. Ask as you normally
+would, or say "Use Wakaru to analyze this bundle."
+
+The skill gives the agent the instructions it needs to run Wakaru and work
+with the recovered code. You can focus on your question without learning
+the CLI first.
+
+The [Wakaru skill](https://github.com/pionxzh/wakaru/blob/main/skills/wakaru/SKILL.md)
+is available to read or adapt for your own workflow.

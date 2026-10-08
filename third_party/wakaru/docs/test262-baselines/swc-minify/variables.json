@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "variables"
+    ],
+    "paths": [
+      "test/language/statements/variable"
+    ]
+  },
+  "totals": {
+    "discovered": 178,
+    "runnable": 178,
+    "skipped": 0,
+    "unsupported": 3,
+    "rejected": 3,
+    "passed": 172,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/statements/variable/binding-resolution.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "84a23beb64d51ca2f92cf26b8672585d60ac18f8c71125b197ebb32ec8d84612",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«undefined», «true») to be true"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/ary-ptrn-elem-id-static-init-await-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/variable/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    }
+  ]
+}

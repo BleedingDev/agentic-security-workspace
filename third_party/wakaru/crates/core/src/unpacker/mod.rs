@@ -1,0 +1,1755 @@
+pub mod amd;
+pub mod browserify;
+pub mod chunk_enumeration;
+pub mod closure_module_manager;
+pub(crate) mod emit_esm;
+pub mod esbuild;
+pub mod metro;
+pub mod scope_hoist;
+pub mod systemjs;
+pub mod webpack4;
+pub mod webpack5;
+mod webpack_common;
+mod wrappers;
+
+use std::panic::{self, AssertUnwindSafe};
+
+use swc_core::atoms::Atom;
+use swc_core::common::{
+    sync::Lrc, BytePos, FileName, Globals, LineCol, Mark, SourceMap, Span, Spanned, SyntaxContext,
+    GLOBALS,
+};
+use swc_core::ecma::ast::{
+    Decl, Expr, Module, ModuleDecl, ModuleItem, Stmt, UnaryExpr, UnaryOp, VarDecl, WithStmt,
+};
+use swc_core::ecma::codegen::{text_writer::JsWriter, Config, Emitter};
+use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
+use swc_core::ecma::transforms::base::resolver;
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+use crate::analysis::binding_uses::BindingUseIndex;
+use crate::rules::rename_utils::{
+    binding_replacement_would_be_shadowed, collect_module_names, rename_bindings_in_module,
+    BindingRename, RenameShadowIndex,
+};
+use crate::utils::paren::strip_parens;
+
+/// Whether emitting this parsed tree as an ES module would make syntax that is
+/// valid only in sloppy scripts invalid. The parser reports most strict-mode
+/// violations as recoverable errors, but parenthesized delete targets such as
+/// `delete (binding)` currently pass parsing and lose their parentheses during
+/// code generation.
+pub(crate) fn has_strict_mode_syntax_hazard(module: &Module) -> bool {
+    #[derive(Default)]
+    struct StrictModeSyntaxHazard {
+        found: bool,
+    }
+
+    impl Visit for StrictModeSyntaxHazard {
+        fn visit_with_stmt(&mut self, _: &WithStmt) {
+            self.found = true;
+        }
+
+        fn visit_unary_expr(&mut self, expression: &UnaryExpr) {
+            if expression.op == UnaryOp::Delete
+                && matches!(strip_parens(&expression.arg), Expr::Ident(_))
+            {
+                self.found = true;
+                return;
+            }
+            expression.visit_children_with(self);
+        }
+    }
+
+    let mut visitor = StrictModeSyntaxHazard::default();
+    module.visit_with(&mut visitor);
+    visitor.found
+}
+
+#[derive(Default)]
+pub struct UnpackedModule {
+    pub id: String,
+    pub is_entry: bool,
+    pub code: String,
+    pub filename: String,
+    /// Byte ranges in the original input source this module was extracted
+    /// from (provenance). Empty when the extraction site has no real spans
+    /// (fully synthesized modules).
+    pub source_ranges: Vec<(u32, u32)>,
+    /// Inspect-only provenance for the full pre-cap scope-hoist write
+    /// component that this finer module came from. Modules split from the
+    /// same coarse component carry the same ranges; empty in normal output.
+    pub inspection_context_ranges: Vec<(u32, u32)>,
+    /// Input filename the ranges refer to. Unpackers leave this empty; the
+    /// driver fills it in for multi-source unpacks.
+    pub source_input: String,
+    /// Mapping points from this module's emitted code back to the original
+    /// input source. Output source maps compose through them, and nested
+    /// scope splitting uses them for provenance when `mapped_in_every_mode`.
+    pub generated_source_map: Vec<GeneratedSourceMapPoint>,
+    /// `generated_source_map` came from an emission that records points in
+    /// every mode (prepared-module materialization, Closure segments), not
+    /// only under [`SourcePositions::Record`]. Nested scope splitting keys on
+    /// this instead of the points being present, so requesting output source
+    /// maps cannot change the unpacked code or its provenance.
+    pub mapped_in_every_mode: bool,
+    /// Set when `code` is a byte-for-byte copy of the input starting at this
+    /// offset, so every code offset maps to the input by a constant shift.
+    pub verbatim_source_offset: Option<u32>,
+}
+
+/// Whether extraction records where printed code came from in the input
+/// (`UnpackedModule::generated_source_map`). Only output source maps need
+/// it, and recording costs emitter bookkeeping for every token.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourcePositions {
+    #[default]
+    Discard,
+    Record,
+}
+
+impl SourcePositions {
+    pub fn from_output_source_maps(enabled: bool) -> Self {
+        if enabled {
+            Self::Record
+        } else {
+            Self::Discard
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GeneratedSourceMapPoint {
+    pub generated_offset: u32,
+    pub source_offset: u32,
+}
+
+/// Extracted module text assembled from printed pieces, keeping each
+/// piece's input mapping points aligned with its position in the whole text.
+#[derive(Default)]
+pub(crate) struct MappedCode {
+    pub(crate) code: String,
+    pub(crate) points: Vec<GeneratedSourceMapPoint>,
+}
+
+impl UnpackedModule {
+    /// Append printed text to `code`, shifting its points into place.
+    pub(crate) fn append_mapped(&mut self, piece: MappedCode) {
+        append_shifted(&mut self.code, &mut self.generated_source_map, piece);
+    }
+}
+
+impl MappedCode {
+    /// Append text that has no input position (synthesized glue).
+    pub(crate) fn push_str(&mut self, text: &str) {
+        self.code.push_str(text);
+    }
+
+    /// Append printed text with points relative to its own start.
+    pub(crate) fn push_mapped(&mut self, piece: MappedCode) {
+        append_shifted(&mut self.code, &mut self.points, piece);
+    }
+}
+
+/// Where an intermediate text's offsets land in the input.
+#[derive(Clone, Copy)]
+pub(crate) enum InputOffsets<'a> {
+    /// The text is a byte-for-byte copy of the input starting here.
+    Verbatim(u32),
+    /// The text was printed; only offsets with an exact point are known.
+    Printed(&'a [GeneratedSourceMapPoint]),
+}
+
+impl<'a> InputOffsets<'a> {
+    pub(crate) fn of(module: &'a UnpackedModule) -> Option<Self> {
+        match module.verbatim_source_offset {
+            Some(start) => Some(Self::Verbatim(start)),
+            None if module.generated_source_map.is_empty() => None,
+            None => Some(Self::Printed(&module.generated_source_map)),
+        }
+    }
+
+    pub(crate) fn input_offset(&self, offset: u32) -> Option<u32> {
+        match *self {
+            Self::Verbatim(start) => start.checked_add(offset),
+            Self::Printed(points) => {
+                let index = points.partition_point(|point| point.generated_offset < offset);
+                points
+                    .get(index)
+                    .filter(|point| point.generated_offset == offset)
+                    .map(|point| point.source_offset)
+            }
+        }
+    }
+
+    /// Carry points that target this intermediate text on to the input,
+    /// dropping any whose target has no known input offset.
+    pub(crate) fn compose(
+        &self,
+        points: &[GeneratedSourceMapPoint],
+    ) -> Vec<GeneratedSourceMapPoint> {
+        points
+            .iter()
+            .filter_map(|point| {
+                Some(GeneratedSourceMapPoint {
+                    generated_offset: point.generated_offset,
+                    source_offset: self.input_offset(point.source_offset)?,
+                })
+            })
+            .collect()
+    }
+}
+
+fn append_shifted(code: &mut String, points: &mut Vec<GeneratedSourceMapPoint>, piece: MappedCode) {
+    let base = code.len() as u32;
+    points.extend(
+        piece
+            .points
+            .into_iter()
+            .map(|point| GeneratedSourceMapPoint {
+                generated_offset: point.generated_offset + base,
+                source_offset: point.source_offset,
+            }),
+    );
+    code.push_str(&piece.code);
+}
+
+/// Convert an AST span to a 0-based byte range into the parsed source.
+///
+/// Returns `None` for dummy/synthesized spans and anything that does not
+/// fall inside the span's source file.
+pub(crate) fn span_byte_range(cm: &SourceMap, span: Span) -> Option<(u32, u32)> {
+    if span.lo.0 == 0 || span.hi.0 == 0 || span.lo > span.hi {
+        return None;
+    }
+    let file = cm.lookup_byte_offset(span.lo).sf;
+    let start = span.lo.0.checked_sub(file.start_pos.0)?;
+    let end = span.hi.0.checked_sub(file.start_pos.0)?;
+    (end as usize <= file.src.len()).then_some((start, end))
+}
+
+/// Collect byte ranges for a sequence of spans, sorted and coalesced
+/// (overlapping or touching ranges are merged).
+pub(crate) fn spans_byte_ranges(
+    cm: &SourceMap,
+    spans: impl Iterator<Item = Span>,
+) -> Vec<(u32, u32)> {
+    let mut ranges: Vec<(u32, u32)> = spans.filter_map(|s| span_byte_range(cm, s)).collect();
+    ranges.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for (lo, hi) in ranges {
+        match out.last_mut() {
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
+pub(crate) fn source_fallback_for_stmts(cm: &SourceMap, statements: &[Stmt]) -> String {
+    source_slice_for_stmts(cm, statements).0
+}
+
+/// Like [`source_fallback_for_stmts`], also returning the input byte offset the
+/// copied text starts at.
+pub(crate) fn source_slice_for_stmts(cm: &SourceMap, statements: &[Stmt]) -> (String, Option<u32>) {
+    let (Some(first), Some(last)) = (statements.first(), statements.last()) else {
+        return (String::new(), None);
+    };
+    let first_span = first.span();
+    let last_span = last.span();
+    if first_span.lo.0 == 0 || last_span.hi.0 == 0 || first_span.lo > last_span.hi {
+        return (String::new(), None);
+    }
+    let file = cm.lookup_byte_offset(first_span.lo).sf;
+    let start = first_span.lo.0.saturating_sub(file.start_pos.0) as usize;
+    let end = last_span.hi.0.saturating_sub(file.start_pos.0) as usize;
+    match file.src.get(start..end) {
+        Some(text) => (text.to_string(), Some(start as u32)),
+        None => (String::new(), None),
+    }
+}
+
+/// Whether lifting `statements` out of their current function boundary would
+/// expose a `return` belonging to that function. Returns nested inside another
+/// function-like body do not belong to the boundary being considered.
+pub(crate) fn function_level_returns(statements: &[Stmt]) -> (usize, bool) {
+    #[derive(Default)]
+    struct FunctionLevelReturn {
+        count: usize,
+        has_value: bool,
+    }
+
+    impl Visit for FunctionLevelReturn {
+        fn visit_return_stmt(&mut self, statement: &swc_core::ecma::ast::ReturnStmt) {
+            self.count += 1;
+            self.has_value |= statement.arg.is_some();
+        }
+
+        fn visit_function(&mut self, _: &swc_core::ecma::ast::Function) {}
+
+        fn visit_arrow_expr(&mut self, _: &swc_core::ecma::ast::ArrowExpr) {}
+
+        fn visit_constructor(&mut self, _: &swc_core::ecma::ast::Constructor) {}
+
+        fn visit_getter_prop(&mut self, _: &swc_core::ecma::ast::GetterProp) {}
+
+        fn visit_setter_prop(&mut self, _: &swc_core::ecma::ast::SetterProp) {}
+    }
+
+    let mut finder = FunctionLevelReturn::default();
+    for statement in statements {
+        statement.visit_with(&mut finder);
+    }
+    (finder.count, finder.has_value)
+}
+
+pub(crate) fn stmts_have_function_level_return(statements: &[Stmt]) -> bool {
+    function_level_returns(statements).0 > 0
+}
+
+fn stmts_have_function_level_await(statements: &[Stmt]) -> bool {
+    #[derive(Default)]
+    struct FunctionLevelAwait {
+        found: bool,
+    }
+
+    impl Visit for FunctionLevelAwait {
+        fn visit_await_expr(&mut self, _: &swc_core::ecma::ast::AwaitExpr) {
+            self.found = true;
+        }
+
+        // `for await` carries no AwaitExpr node; the loop head is the await.
+        fn visit_for_of_stmt(&mut self, statement: &swc_core::ecma::ast::ForOfStmt) {
+            if statement.is_await {
+                self.found = true;
+            }
+            statement.visit_children_with(self);
+        }
+
+        fn visit_function(&mut self, _: &swc_core::ecma::ast::Function) {}
+
+        fn visit_arrow_expr(&mut self, _: &swc_core::ecma::ast::ArrowExpr) {}
+
+        fn visit_constructor(&mut self, _: &swc_core::ecma::ast::Constructor) {}
+
+        fn visit_getter_prop(&mut self, _: &swc_core::ecma::ast::GetterProp) {}
+
+        fn visit_setter_prop(&mut self, _: &swc_core::ecma::ast::SetterProp) {}
+    }
+
+    let mut finder = FunctionLevelAwait::default();
+    for statement in statements {
+        statement.visit_with(&mut finder);
+    }
+    finder.found
+}
+
+/// Whether lifted statements observe the enclosing function's `this`,
+/// `arguments`, or `new.target`. All three change meaning when the statements
+/// move to ESM module scope or into a restored arrow boundary: `this` becomes
+/// `undefined`, `arguments` becomes an unresolved reference, and `new.target`
+/// becomes syntactically invalid. Ordinary functions, class bodies, and
+/// accessors rebind them, so the scan does not descend into those; arrows
+/// inherit them, so it does.
+#[derive(Default)]
+struct FunctionLevelSpecialBindings {
+    found: bool,
+}
+
+impl Visit for FunctionLevelSpecialBindings {
+    fn visit_this_expr(&mut self, _: &swc_core::ecma::ast::ThisExpr) {
+        self.found = true;
+    }
+
+    fn visit_ident(&mut self, ident: &swc_core::ecma::ast::Ident) {
+        if ident.sym == *"arguments" {
+            self.found = true;
+        }
+    }
+
+    fn visit_meta_prop_expr(&mut self, meta: &swc_core::ecma::ast::MetaPropExpr) {
+        if meta.kind == swc_core::ecma::ast::MetaPropKind::NewTarget {
+            self.found = true;
+        }
+    }
+
+    fn visit_function(&mut self, _: &swc_core::ecma::ast::Function) {}
+
+    fn visit_constructor(&mut self, _: &swc_core::ecma::ast::Constructor) {}
+
+    fn visit_getter_prop(&mut self, prop: &swc_core::ecma::ast::GetterProp) {
+        // The accessor body has its own function boundary, but a computed key
+        // evaluates in the enclosing factory context.
+        if let swc_core::ecma::ast::PropName::Computed(key) = &prop.key {
+            key.visit_with(self);
+        }
+    }
+
+    fn visit_setter_prop(&mut self, prop: &swc_core::ecma::ast::SetterProp) {
+        // As with getters, do not enter the body; only the key is inherited.
+        if let swc_core::ecma::ast::PropName::Computed(key) = &prop.key {
+            key.visit_with(self);
+        }
+    }
+
+    fn visit_static_block(&mut self, _: &swc_core::ecma::ast::StaticBlock) {}
+
+    fn visit_class_prop(&mut self, prop: &swc_core::ecma::ast::ClassProp) {
+        // Field initializers rebind `this`; computed keys evaluate outside.
+        if let swc_core::ecma::ast::PropName::Computed(key) = &prop.key {
+            key.visit_with(self);
+        }
+    }
+
+    fn visit_private_prop(&mut self, _: &swc_core::ecma::ast::PrivateProp) {}
+}
+
+pub(crate) fn stmts_have_function_level_special_bindings(statements: &[Stmt]) -> bool {
+    let mut finder = FunctionLevelSpecialBindings::default();
+    for statement in statements {
+        statement.visit_with(&mut finder);
+    }
+    finder.found
+}
+
+pub(crate) fn module_stmts_have_function_level_special_bindings(module: &Module) -> bool {
+    let mut finder = FunctionLevelSpecialBindings::default();
+    for item in &module.body {
+        if let ModuleItem::Stmt(statement) = item {
+            statement.visit_with(&mut finder);
+        }
+    }
+    finder.found
+}
+
+pub(crate) fn expr_has_function_level_special_bindings(
+    expression: &swc_core::ecma::ast::Expr,
+) -> bool {
+    let mut finder = FunctionLevelSpecialBindings::default();
+    expression.visit_with(&mut finder);
+    finder.found
+}
+
+pub(crate) fn arrow_iife_call(statements: Vec<Stmt>) -> swc_core::ecma::ast::Expr {
+    arrow_iife_call_with_async(statements, false)
+}
+
+pub(crate) fn arrow_iife_call_with_async(
+    statements: Vec<Stmt>,
+    force_async: bool,
+) -> swc_core::ecma::ast::Expr {
+    use swc_core::common::{SyntaxContext, DUMMY_SP};
+    use swc_core::ecma::ast::{
+        ArrowExpr, ArrowFunctionBody, CallExpr, Callee, Expr, FunctionBody, ParenExpr,
+    };
+
+    let is_async = force_async || stmts_have_function_level_await(&statements);
+    Expr::Call(CallExpr {
+        span: DUMMY_SP,
+        ctxt: SyntaxContext::empty(),
+        callee: Callee::Expr(Box::new(Expr::Paren(ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(Expr::Arrow(ArrowExpr {
+                span: DUMMY_SP,
+                ctxt: SyntaxContext::empty(),
+                params: Vec::new(),
+                body: Box::new(ArrowFunctionBody::FunctionBody(FunctionBody {
+                    span: DUMMY_SP,
+                    stmts: statements,
+                })),
+                is_async,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+            })),
+        }))),
+        args: Vec::new(),
+        type_args: None,
+    })
+}
+
+/// Whether extraction can rename removed factory parameters without changing
+/// which binding a printed identifier resolves to.
+pub(crate) fn runtime_binding_renames_are_safe(module: &Module, renames: &[BindingRename]) -> bool {
+    let uses = BindingUseIndex::collect(module);
+    let relevant = renames
+        .iter()
+        .filter(|rename| uses.use_count(&rename.old) > 0 || uses.has_declaration(&rename.old))
+        .collect::<Vec<_>>();
+    if relevant.is_empty() {
+        return true;
+    }
+
+    let module_names = collect_module_names(module);
+    let bindings = relevant
+        .iter()
+        .map(|rename| rename.old.clone())
+        .collect::<crate::collections::HashSet<_>>();
+    let shadow_index = RenameShadowIndex::for_bindings(module, &bindings);
+
+    relevant.into_iter().all(|rename| {
+        let target = (rename.new.clone(), rename.old.1);
+        !module_names.contains(&rename.new)
+            && uses.use_count(&target) == 0
+            && !uses.has_declaration(&target)
+            && !shadow_index.rename_causes_shadowing(&rename.old, &rename.new)
+    })
+}
+
+/// Make bound-local conflicts safe before factory runtime parameters receive
+/// their canonical names. Free references to a target name remain a hard
+/// rejection because renaming them would change host-environment lookup.
+pub(crate) fn deconflict_runtime_binding_renames(
+    module: &mut Module,
+    renames: &[BindingRename],
+) -> bool {
+    let uses = BindingUseIndex::collect(module);
+    let relevant = renames
+        .iter()
+        .filter(|rename| uses.use_count(&rename.old) > 0 || uses.has_declaration(&rename.old))
+        .collect::<Vec<_>>();
+    if relevant.is_empty() {
+        return true;
+    }
+
+    // The stripped factory parameters and free globals both carry the
+    // unresolved context. A pre-existing free target therefore cannot be
+    // hygienically renamed or kept distinct in the standalone module.
+    if relevant.iter().any(|rename| {
+        let target = (rename.new.clone(), rename.old.1);
+        uses.use_count(&target) > 0
+    }) {
+        return false;
+    }
+
+    let module_names = collect_module_names(module);
+    let bindings = relevant
+        .iter()
+        .map(|rename| rename.old.clone())
+        .collect::<crate::collections::HashSet<_>>();
+    let shadow_index = RenameShadowIndex::for_bindings(module, &bindings);
+    let declared_bindings = uses.declared_bindings();
+    let mut conflicts = crate::collections::HashSet::default();
+
+    for rename in relevant {
+        if !module_names.contains(&rename.new)
+            && !shadow_index.rename_causes_shadowing(&rename.old, &rename.new)
+            && !binding_replacement_would_be_shadowed(module, &rename.old, &rename.new)
+        {
+            continue;
+        }
+
+        conflicts.extend(
+            declared_bindings
+                .iter()
+                .filter(|binding| binding.0 == rename.new)
+                .cloned(),
+        );
+    }
+
+    if conflicts.is_empty() {
+        return runtime_binding_renames_are_safe(module, renames);
+    }
+
+    let mut used_names = uses
+        .referenced_bindings()
+        .into_iter()
+        .chain(declared_bindings)
+        .map(|binding| binding.0)
+        .collect::<crate::collections::HashSet<_>>();
+    used_names.extend(renames.iter().map(|rename| rename.new.clone()));
+
+    let mut conflicts = conflicts.into_iter().collect::<Vec<_>>();
+    conflicts.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.as_u32().cmp(&right.1.as_u32()))
+    });
+    let local_renames = conflicts
+        .into_iter()
+        .map(|old| {
+            let new = fresh_runtime_local_name(&old.0, &mut used_names);
+            BindingRename { old, new }
+        })
+        .collect::<Vec<_>>();
+    rename_bindings_in_module(module, &local_renames);
+
+    runtime_binding_renames_are_safe(module, renames)
+}
+
+fn fresh_runtime_local_name(
+    name: &Atom,
+    used_names: &mut crate::collections::HashSet<Atom>,
+) -> Atom {
+    let base = Atom::from(format!("_{name}"));
+    if used_names.insert(base.clone()) {
+        return base;
+    }
+
+    let mut suffix = 2usize;
+    loop {
+        let candidate = Atom::from(format!("_{name}_{suffix}"));
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+pub(crate) fn generated_source_map_points(
+    generated_code: &str,
+    cm: &SourceMap,
+    mappings: &[(BytePos, LineCol)],
+) -> Vec<GeneratedSourceMapPoint> {
+    let line_starts = line_start_offsets(generated_code);
+    let mut points = mappings
+        .iter()
+        .filter_map(|(source_pos, generated_pos)| {
+            if source_pos.0 == 0 {
+                return None;
+            }
+            let generated_offset =
+                line_col_to_byte_offset(&line_starts, generated_code, generated_pos)?;
+            let file = cm.lookup_byte_offset(*source_pos).sf;
+            let source_offset = source_pos.0.checked_sub(file.start_pos.0)?;
+            (source_offset as usize <= file.src.len()).then_some(GeneratedSourceMapPoint {
+                generated_offset,
+                source_offset,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    points.sort_unstable_by_key(|point| (point.generated_offset, point.source_offset));
+    points.dedup();
+    points
+}
+
+fn line_start_offsets(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (idx, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push(idx + 1);
+        }
+    }
+    starts
+}
+
+fn line_col_to_byte_offset(line_starts: &[usize], source: &str, loc: &LineCol) -> Option<u32> {
+    let line_start = *line_starts.get(loc.line as usize)?;
+    let line_end = source[line_start..]
+        .find('\n')
+        .map(|offset| line_start + offset)
+        .unwrap_or(source.len());
+    let line = &source[line_start..line_end];
+    let mut utf16_col = 0u32;
+    let mut byte_col = 0usize;
+    for ch in line.chars() {
+        if utf16_col == loc.col {
+            break;
+        }
+        utf16_col = utf16_col.checked_add(ch.len_utf16() as u32)?;
+        byte_col = byte_col.checked_add(ch.len_utf8())?;
+        if utf16_col > loc.col {
+            return None;
+        }
+    }
+    if utf16_col != loc.col {
+        return None;
+    }
+    let offset = line_start.checked_add(byte_col)?;
+    (offset <= source.len()).then_some(offset as u32)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BundleFormat {
+    Webpack5,
+    Webpack4,
+    Browserify,
+    ClosureModuleManager,
+    SystemJs,
+    Esbuild,
+    Metro,
+    Amd,
+    ScopeHoisted,
+}
+
+impl BundleFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webpack5 => "webpack5",
+            Self::Webpack4 => "webpack4",
+            Self::Browserify => "browserify",
+            Self::ClosureModuleManager => "closure-module-manager",
+            Self::SystemJs => "systemjs",
+            Self::Esbuild => "esbuild",
+            Self::Metro => "metro",
+            Self::Amd => "amd",
+            Self::ScopeHoisted => "scope-hoisted",
+        }
+    }
+}
+
+pub struct UnpackResult {
+    pub modules: Vec<UnpackedModule>,
+    pub report_import_cycle_warnings: bool,
+    /// The detected container registers its modules into a cross-asset runtime
+    /// registry (e.g. a webpack JSONP/CommonJS lazy chunk): consumers may live
+    /// in other physical assets, so the absence of a local importer is not
+    /// evidence that a module is dead. Dead-module elimination must fail
+    /// closed for these modules.
+    pub external_consumers: bool,
+    pub format: BundleFormat,
+}
+
+/// Current result of the internal chunk-enumeration inspection path.
+///
+/// This is exposed from `wakaru-core` only for the hidden CLI command. The
+/// implementation crate is not a supported integration surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkEnumerationReport {
+    pub detected_format: Option<BundleFormat>,
+    pub enumeration: Option<chunk_enumeration::ChunkEnumeration>,
+}
+
+/// Detector-owned AST that has completed bundler-specific normalization.
+///
+/// This is private to the core pipeline. Public/raw unpack APIs materialize it
+/// into `UnpackedModule::code`; the normal driver can instead consume it at the
+/// Phase 1 boundary and avoid the intermediate emit/parse round trip.
+pub(crate) struct PreparedModuleAst {
+    pub(crate) globals: Globals,
+    pub(crate) module: Module,
+    pub(crate) unresolved_mark: Mark,
+    pub(crate) recoverable_parse_errors: Vec<RecoverableParseError>,
+}
+
+/// Parser recovery details retained across the detector/driver boundary.
+pub(crate) struct RecoverableParseError {
+    pub(crate) line: usize,
+    pub(crate) column: usize,
+    pub(crate) message: String,
+}
+
+/// Detector-local reason why one structurally identified module could not be
+/// normalized safely.
+///
+/// These modules retain their raw extracted body and must bypass every driver
+/// transform and fact collector. The sidecar is intentionally internal: raw
+/// detector APIs have no module-graph quality contract, while the normal
+/// driver turns this into a stable operational diagnostic and failed status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DetectedModuleFailure {
+    WebpackRuntimeParameterReuse,
+}
+
+/// Internal detector result. `prepared` is always aligned one-for-one with
+/// `result.modules`; a `None` entry means that module is source-only.
+pub(crate) struct DetectedBundle {
+    pub(crate) result: UnpackResult,
+    pub(crate) prepared: Vec<Option<PreparedModuleAst>>,
+    pub(crate) module_failures: crate::collections::HashMap<String, DetectedModuleFailure>,
+    /// Numeric module identities proven directly from webpack container keys.
+    ///
+    /// The public/raw module id is a string for compatibility, so it cannot
+    /// distinguish a syntactically numeric object key (`17`) from a quoted
+    /// numeric key (`"17"`). The latter does not prove the type webpack passed
+    /// as `moduleId`, so runtime recovery must not parse the public id or guess
+    /// from the emitted filename.
+    pub(crate) webpack_numeric_module_ids: crate::collections::HashMap<String, f64>,
+    /// Factories whose surrounding container proves webpack 4's minified
+    /// `module.i` module-identity spelling. Modern webpack uses `module.id`;
+    /// a bare `.i` in a modern chunk must not be guessed from the table key.
+    pub(crate) webpack_legacy_module_i: crate::collections::HashSet<String>,
+    pub(crate) chunk_ids: crate::collections::HashSet<usize>,
+    /// Statically extracted webpack chunk-reference surface, when one was
+    /// found. Populated only for the dedicated debug inspection path and
+    /// never consumed by module recovery.
+    pub(crate) chunk_enumeration: Option<chunk_enumeration::ChunkEnumeration>,
+    pub(crate) input_has_esm_declarations: bool,
+    materialize_cm: Option<Lrc<SourceMap>>,
+}
+
+impl DetectedBundle {
+    pub(crate) fn from_result(result: UnpackResult) -> Self {
+        let prepared = std::iter::repeat_with(|| None)
+            .take(result.modules.len())
+            .collect();
+        Self {
+            result,
+            prepared,
+            module_failures: Default::default(),
+            webpack_numeric_module_ids: Default::default(),
+            webpack_legacy_module_i: Default::default(),
+            chunk_ids: Default::default(),
+            chunk_enumeration: None,
+            input_has_esm_declarations: false,
+            materialize_cm: None,
+        }
+    }
+
+    pub(crate) fn new(
+        result: UnpackResult,
+        prepared: Vec<Option<PreparedModuleAst>>,
+        materialize_cm: Lrc<SourceMap>,
+    ) -> Self {
+        assert_eq!(
+            result.modules.len(),
+            prepared.len(),
+            "prepared AST sidecar must align with unpacked modules"
+        );
+        Self {
+            result,
+            prepared,
+            module_failures: Default::default(),
+            webpack_numeric_module_ids: Default::default(),
+            webpack_legacy_module_i: Default::default(),
+            chunk_ids: Default::default(),
+            chunk_enumeration: None,
+            input_has_esm_declarations: false,
+            materialize_cm: Some(materialize_cm),
+        }
+    }
+
+    pub(crate) fn with_module_failures(
+        mut self,
+        failures: crate::collections::HashMap<String, DetectedModuleFailure>,
+    ) -> Self {
+        debug_assert!(failures.keys().all(|filename| self
+            .result
+            .modules
+            .iter()
+            .any(|module| &module.filename == filename)));
+        self.module_failures = failures;
+        self
+    }
+
+    pub(crate) fn with_webpack_numeric_module_ids(
+        mut self,
+        module_ids: crate::collections::HashMap<String, f64>,
+    ) -> Self {
+        debug_assert!(module_ids.keys().all(|filename| self
+            .result
+            .modules
+            .iter()
+            .any(|module| &module.filename == filename)));
+        self.webpack_numeric_module_ids = module_ids;
+        self
+    }
+
+    pub(crate) fn with_webpack_legacy_module_i(
+        mut self,
+        filenames: crate::collections::HashSet<String>,
+    ) -> Self {
+        debug_assert!(filenames.iter().all(|filename| self
+            .result
+            .modules
+            .iter()
+            .any(|module| &module.filename == filename)));
+        self.webpack_legacy_module_i = filenames;
+        self
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        UnpackResult,
+        Vec<Option<PreparedModuleAst>>,
+        crate::collections::HashMap<String, DetectedModuleFailure>,
+    ) {
+        (self.result, self.prepared, self.module_failures)
+    }
+
+    pub(crate) fn materialize_prepared(mut self) -> anyhow::Result<Self> {
+        let cm = self.materialize_cm.take();
+        for (module, prepared) in self.result.modules.iter_mut().zip(&mut self.prepared) {
+            let prepared = prepared.take();
+            let Some(prepared) = prepared else {
+                continue;
+            };
+            let cm = cm
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("prepared module is missing its source map"))?;
+            let (code, generated_source_map) = prepared.materialize(cm.clone())?;
+            module.code = code;
+            module.generated_source_map = generated_source_map;
+            module.mapped_in_every_mode = true;
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn materialize(self) -> anyhow::Result<UnpackResult> {
+        Ok(self.materialize_prepared()?.result)
+    }
+}
+
+impl From<UnpackResult> for DetectedBundle {
+    fn from(result: UnpackResult) -> Self {
+        Self::from_result(result)
+    }
+}
+
+/// Re-derives every `SyntaxContext` in a detector-prepared module.
+///
+/// Detectors resolve a synthetic module once and then keep rewriting it:
+/// stripping the factory wrapper, lifting runtime parameters into locals,
+/// synthesizing bindings. Those later identifiers follow detector-local
+/// conventions rather than resolver output. Clearing and resolving again at
+/// the handoff gives the rule pipeline the same contexts a parsed module
+/// would have, so the detector's conventions never reach a rule. Must run
+/// inside the module's `Globals`.
+pub(crate) fn resolve_prepared_module(module: &mut Module) -> Mark {
+    struct ClearContexts;
+
+    impl VisitMut for ClearContexts {
+        fn visit_mut_syntax_context(&mut self, ctxt: &mut SyntaxContext) {
+            *ctxt = SyntaxContext::empty();
+        }
+    }
+
+    module.visit_mut_with(&mut ClearContexts);
+    let unresolved_mark = Mark::new();
+    let top_level_mark = Mark::new();
+    module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+    unresolved_mark
+}
+
+impl PreparedModuleAst {
+    pub(crate) fn materialize(
+        self,
+        cm: Lrc<SourceMap>,
+    ) -> anyhow::Result<(String, Vec<GeneratedSourceMapPoint>)> {
+        let Self {
+            globals, module, ..
+        } = self;
+        GLOBALS.set(&globals, || {
+            let span = tracing::info_span!("unpacker: prepared emit");
+            let _enter = span.enter();
+            emit_module_with_source_map(&module, cm)
+        })
+    }
+}
+
+/// Print an extracted module, recording input points only when `positions`
+/// asks for them.
+pub(crate) fn emit_module_with_positions(
+    module: &Module,
+    cm: Lrc<SourceMap>,
+    cfg: Config,
+    positions: SourcePositions,
+) -> anyhow::Result<MappedCode> {
+    let mut output = Vec::new();
+    let mut srcmap_buf = Vec::new();
+    {
+        let srcmap = (positions == SourcePositions::Record).then_some(&mut srcmap_buf);
+        let mut emitter = Emitter {
+            cfg,
+            cm: cm.clone(),
+            comments: None,
+            wr: JsWriter::new(cm.clone(), "\n", &mut output, srcmap),
+        };
+        emitter
+            .emit_module(module)
+            .map_err(|error| anyhow::anyhow!("emit error: {error:?}"))?;
+    }
+    let code = String::from_utf8(output).map_err(|error| anyhow::anyhow!("utf8 error: {error}"))?;
+    let points = generated_source_map_points(&code, &cm, &srcmap_buf);
+    Ok(MappedCode { code, points })
+}
+
+pub(crate) fn emit_module_with_source_map(
+    module: &Module,
+    cm: Lrc<SourceMap>,
+) -> anyhow::Result<(String, Vec<GeneratedSourceMapPoint>)> {
+    let mut output = Vec::new();
+    let mut srcmap_buf = Vec::new();
+    {
+        let mut emitter = Emitter {
+            cfg: Config::default().with_minify(false),
+            cm: cm.clone(),
+            comments: None,
+            wr: JsWriter::new(cm.clone(), "\n", &mut output, Some(&mut srcmap_buf)),
+        };
+        emitter
+            .emit_module(module)
+            .map_err(|error| anyhow::anyhow!("emit error: {error:?}"))?;
+    }
+    let code = String::from_utf8(output).map_err(|error| anyhow::anyhow!("utf8 error: {error}"))?;
+    let mappings = generated_source_map_points(&code, &cm, &srcmap_buf);
+    Ok((code, mappings))
+}
+
+impl UnpackResult {
+    pub(crate) fn new(modules: Vec<UnpackedModule>, format: BundleFormat) -> Self {
+        Self {
+            modules,
+            report_import_cycle_warnings: true,
+            external_consumers: false,
+            format,
+        }
+    }
+
+    pub(crate) fn without_cycle_warnings(
+        modules: Vec<UnpackedModule>,
+        format: BundleFormat,
+    ) -> Self {
+        Self {
+            modules,
+            report_import_cycle_warnings: false,
+            external_consumers: false,
+            format,
+        }
+    }
+
+    /// Mark every module in this result as reachable from other physical
+    /// assets (see [`UnpackResult::external_consumers`]).
+    pub(crate) fn with_external_consumers(mut self) -> Self {
+        self.external_consumers = true;
+        self
+    }
+}
+
+pub(crate) use crate::analysis::BindingId;
+
+/// Convert a bundler-provided module path into a relative output path.
+///
+/// This is component-based instead of replacement-based so overlapping strings
+/// like `....//foo` cannot turn into `../foo` after a single sanitation pass.
+pub(crate) fn sanitize_relative_path(raw: &str, fallback: &str) -> String {
+    let normalized = raw.replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+        .collect();
+
+    if parts.is_empty() {
+        fallback.to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+pub fn unpack_bundle(source: &str) -> Option<UnpackResult> {
+    try_unpack_bundle(source).ok().flatten()
+}
+
+pub fn try_unpack_bundle(source: &str) -> anyhow::Result<Option<UnpackResult>> {
+    try_unpack_bundle_with_positions(source, SourcePositions::Discard)
+}
+
+pub(crate) fn try_unpack_bundle_with_positions(
+    source: &str,
+    positions: SourcePositions,
+) -> anyhow::Result<Option<UnpackResult>> {
+    try_prepare_bundle(source, positions)?
+        .map(DetectedBundle::materialize)
+        .transpose()
+}
+
+pub(crate) enum PreparedSource {
+    Bundle(DetectedBundle),
+    Plain(Option<PreparedModuleAst>),
+}
+
+pub(crate) fn try_prepare_bundle(
+    source: &str,
+    positions: SourcePositions,
+) -> anyhow::Result<Option<DetectedBundle>> {
+    GLOBALS.set(&Default::default(), || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let (mut module, recoverable_parse_errors) = {
+            let span = tracing::info_span!("parse_bundle");
+            let _enter = span.enter();
+            parse_es_module_with_recovery(source, "bundle.js", cm.clone())?
+        };
+        if !recoverable_parse_errors.is_empty() || has_strict_mode_syntax_hazard(&module) {
+            return Ok(None);
+        }
+        Ok(detect_parsed_source(
+            &mut module,
+            cm,
+            source,
+            false,
+            positions,
+        ))
+    })
+}
+
+pub(crate) fn try_prepare_source(
+    source: &str,
+    filename: &str,
+    prepare_plain_ast: bool,
+    positions: SourcePositions,
+) -> anyhow::Result<PreparedSource> {
+    enum PreparedSourceParts {
+        Bundle(Box<DetectedBundle>),
+        Plain {
+            module: Module,
+            unresolved_mark: Mark,
+            recoverable_parse_errors: Vec<RecoverableParseError>,
+        },
+        PlainUnprepared,
+    }
+
+    let globals = Globals::new();
+    let prepared = GLOBALS.set(&globals, || -> anyhow::Result<PreparedSourceParts> {
+        let cm: Lrc<SourceMap> = Default::default();
+        let (mut module, recoverable_parse_errors) = {
+            let span = tracing::info_span!("parse_bundle");
+            let _enter = span.enter();
+            parse_es_module_with_recovery(source, filename, cm.clone())?
+        };
+
+        if recoverable_parse_errors.is_empty() && !has_strict_mode_syntax_hazard(&module) {
+            if let Some(result) = detect_parsed_source(&mut module, cm, source, false, positions) {
+                return Ok(PreparedSourceParts::Bundle(Box::new(result)));
+            }
+        }
+
+        if prepare_plain_ast {
+            let unresolved_mark = {
+                let span = tracing::info_span!("prepare_plain: resolver");
+                let _enter = span.enter();
+                let unresolved_mark = Mark::new();
+                let top_level_mark = Mark::new();
+                module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+                unresolved_mark
+            };
+            Ok(PreparedSourceParts::Plain {
+                module,
+                unresolved_mark,
+                recoverable_parse_errors,
+            })
+        } else {
+            Ok(PreparedSourceParts::PlainUnprepared)
+        }
+    })?;
+
+    let source = match prepared {
+        PreparedSourceParts::Bundle(bundle) => PreparedSource::Bundle(*bundle),
+        PreparedSourceParts::Plain {
+            module,
+            unresolved_mark,
+            recoverable_parse_errors,
+        } => PreparedSource::Plain(Some(PreparedModuleAst {
+            globals,
+            module,
+            unresolved_mark,
+            recoverable_parse_errors,
+        })),
+        PreparedSourceParts::PlainUnprepared => PreparedSource::Plain(None),
+    };
+    Ok(source)
+}
+
+fn detect_parsed_source(
+    module: &mut Module,
+    cm: Lrc<SourceMap>,
+    source: &str,
+    collect_chunk_enumeration: bool,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    let input_has_esm_declarations = module
+        .body
+        .iter()
+        .any(|item| matches!(item, ModuleItem::ModuleDecl(_)));
+    let chunk_ids = webpack5::detect_chunk_ids_from_module(module);
+    if let Some(mut result) = detect_bundle_candidate(module, cm.clone(), source, true, positions) {
+        result.chunk_ids = chunk_ids;
+        result.input_has_esm_declarations = input_has_esm_declarations;
+        if collect_chunk_enumeration {
+            let unresolved_mark = resolve_chunk_enumeration_module(module);
+            result.chunk_enumeration = chunk_enumeration::extract_chunk_enumeration(
+                module,
+                result.result.format,
+                unresolved_mark,
+            );
+        }
+        return Some(result);
+    }
+
+    if let Some(mut result) = wrappers::try_detect_bun_compile_candidate(module, |candidate| {
+        detect_owned_bun_candidate(candidate, cm.clone(), source, positions)
+    }) {
+        result.chunk_ids = chunk_ids;
+        result.input_has_esm_declarations = input_has_esm_declarations;
+        return Some(result);
+    }
+
+    let unwrapped_candidates = wrappers::collect_unwrap_candidates(module);
+    for mut candidate in unwrapped_candidates {
+        if let Some(mut result) =
+            detect_bundle_candidate(&candidate, cm.clone(), source, false, positions)
+        {
+            result.chunk_ids = chunk_ids;
+            result.input_has_esm_declarations = input_has_esm_declarations;
+            if collect_chunk_enumeration {
+                let unresolved_mark = resolve_chunk_enumeration_module(&mut candidate);
+                result.chunk_enumeration = chunk_enumeration::extract_chunk_enumeration(
+                    &candidate,
+                    result.result.format,
+                    unresolved_mark,
+                );
+            }
+            return Some(result);
+        }
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_amd");
+        let _enter = span.enter();
+        amd::detect_from_module(module, cm, positions)
+    };
+    result.map(|result| {
+        let mut detected = DetectedBundle::from_result(result);
+        detected.chunk_ids = chunk_ids;
+        detected.input_has_esm_declarations = input_has_esm_declarations;
+        detected
+    })
+}
+
+fn resolve_chunk_enumeration_module(module: &mut Module) -> Mark {
+    let unresolved_mark = Mark::new();
+    let top_level_mark = Mark::new();
+    module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+    unresolved_mark
+}
+
+fn detect_bundle_candidate(
+    module: &Module,
+    cm: Lrc<SourceMap>,
+    source: &str,
+    allow_runtime_entry: bool,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    if let Some(result) = detect_bundle_candidate_before_esbuild(
+        module,
+        cm.clone(),
+        source,
+        allow_runtime_entry,
+        positions,
+    ) {
+        return Some(result);
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_esbuild");
+        let _enter = span.enter();
+        esbuild::detect_from_module_with_source(module, Some(source), cm.clone(), positions)
+    };
+    if result.is_some() {
+        return result.map(DetectedBundle::from_result);
+    }
+
+    let span = tracing::info_span!("detect_metro");
+    let _enter = span.enter();
+    metro::detect_from_module_prepared(module, cm)
+}
+
+fn detect_owned_bun_candidate(
+    candidate: Module,
+    cm: Lrc<SourceMap>,
+    source: &str,
+    positions: SourcePositions,
+) -> Result<DetectedBundle, Module> {
+    if let Some(result) =
+        detect_bundle_candidate_before_esbuild(&candidate, cm.clone(), source, false, positions)
+    {
+        return Ok(result);
+    }
+
+    let candidate = match esbuild::detect_from_owned_factory_module_with_source(
+        candidate,
+        Some(source),
+        cm.clone(),
+        positions,
+    ) {
+        Ok(result) => return Ok(DetectedBundle::from_result(result)),
+        Err(candidate) => candidate,
+    };
+
+    let result = {
+        let span = tracing::info_span!("detect_esbuild");
+        let _enter = span.enter();
+        esbuild::detect_from_module_with_source(&candidate, Some(source), cm.clone(), positions)
+    };
+    if let Some(result) = result {
+        return Ok(DetectedBundle::from_result(result));
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_metro");
+        let _enter = span.enter();
+        metro::detect_from_module_prepared(&candidate, cm)
+    };
+    result.ok_or(candidate)
+}
+
+fn detect_bundle_candidate_before_esbuild(
+    module: &Module,
+    cm: Lrc<SourceMap>,
+    source: &str,
+    allow_runtime_entry: bool,
+    positions: SourcePositions,
+) -> Option<DetectedBundle> {
+    let result = {
+        let span = tracing::info_span!("detect_webpack5");
+        let _enter = span.enter();
+        webpack5::detect_from_module_prepared(module, cm.clone(), positions)
+    };
+    if result.is_some() {
+        return result;
+    }
+
+    if allow_runtime_entry {
+        let result = {
+            let span = tracing::info_span!("detect_webpack5_runtime_entry");
+            let _enter = span.enter();
+            webpack5::detect_runtime_entry_from_module(module, source)
+        };
+        if result.is_some() {
+            return result.map(DetectedBundle::from_result);
+        }
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_webpack4");
+        let _enter = span.enter();
+        webpack4::detect_from_module(module, cm.clone(), positions)
+    };
+    if result.is_some() {
+        return result;
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_webpack5_chunk");
+        let _enter = span.enter();
+        webpack5::detect_chunk_from_module_prepared(module, cm.clone())
+    };
+    if result.is_some() {
+        return result;
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_browserify");
+        let _enter = span.enter();
+        browserify::detect_from_module_prepared(module, cm.clone())
+    };
+    if result.is_some() {
+        return result;
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_closure_module_manager");
+        let _enter = span.enter();
+        closure_module_manager::detect_from_module(module, cm.clone(), source)
+    };
+    if result.is_some() {
+        return result.map(DetectedBundle::from_result);
+    }
+
+    let result = {
+        let span = tracing::info_span!("detect_systemjs");
+        let _enter = span.enter();
+        systemjs::detect_from_module(module, cm.clone(), positions)
+    };
+    if result.is_some() {
+        return result.map(DetectedBundle::from_result);
+    }
+
+    None
+}
+
+pub(crate) fn parse_es_module(
+    source: &str,
+    filename: &str,
+    cm: Lrc<SourceMap>,
+) -> anyhow::Result<Module> {
+    parse_es_module_with_recovery(source, filename, cm).map(|(module, _)| module)
+}
+
+/// Inspect one JavaScript input for statically enumerable chunk references.
+///
+/// This performs parsing and structural bundle detection, but does not
+/// materialize extracted modules or run the decompiler pipeline. It is the
+/// internal engine for `wakaru debug enumerate-chunks`.
+pub fn enumerate_chunks(source: &str, filename: &str) -> anyhow::Result<ChunkEnumerationReport> {
+    let globals = Globals::new();
+    GLOBALS.set(&globals, || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let (mut module, _) = parse_es_module_with_recovery(source, filename, cm.clone())?;
+        let relative_imports = chunk_enumeration::collect_relative_import_specifiers(&module);
+        let mut detected =
+            detect_parsed_source(&mut module, cm, source, true, SourcePositions::Discard);
+        let detected_format = detected.as_ref().map(|detected| detected.result.format);
+        let webpack = detected
+            .as_mut()
+            .and_then(|detected| detected.chunk_enumeration.take());
+        Ok(ChunkEnumerationReport {
+            detected_format,
+            enumeration: chunk_enumeration::merge(webpack, relative_imports),
+        })
+    })
+}
+
+/// Parse a source and run chunk-enumeration extraction as the given detected
+/// format, bypassing bundle detection. Integration-test support only —
+/// debug-command callers should use [`enumerate_chunks`] so detection remains
+/// part of the exercised path.
+pub fn extract_chunk_enumeration_from_source(
+    source: &str,
+    format: BundleFormat,
+) -> Option<chunk_enumeration::ChunkEnumeration> {
+    let globals = Globals::new();
+    GLOBALS.set(&globals, || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let (mut module, _) = parse_es_module_with_recovery(source, "test.js", cm).ok()?;
+        let unresolved_mark = resolve_chunk_enumeration_module(&mut module);
+        chunk_enumeration::extract_chunk_enumeration(&module, format, unresolved_mark)
+    })
+}
+
+fn parse_es_module_with_recovery(
+    source: &str,
+    filename: &str,
+    cm: Lrc<SourceMap>,
+) -> anyhow::Result<(Module, Vec<RecoverableParseError>)> {
+    let fm = cm.new_source_file(
+        FileName::Custom(filename.to_string()).into(),
+        source.to_string(),
+    );
+    let lexer = Lexer::new(
+        Syntax::Es(EsSyntax {
+            jsx: true,
+            ..Default::default()
+        }),
+        Default::default(),
+        StringInput::from(&*fm),
+        None,
+    );
+    let mut parser = Parser::new_from(lexer);
+    let parsed = match panic::catch_unwind(AssertUnwindSafe(|| parser.parse_module())) {
+        Ok(result) => result,
+        Err(_) => return Err(anyhow::anyhow!("SWC parser panicked on {filename}")),
+    };
+    let parser_errors: Vec<RecoverableParseError> = parser
+        .take_errors()
+        .into_iter()
+        .map(|error| {
+            let loc = cm.lookup_char_pos(error.span().lo());
+            RecoverableParseError {
+                line: loc.line,
+                column: loc.col_display + 1,
+                message: format!("{:?}", error.kind()),
+            }
+        })
+        .collect();
+
+    match (parsed, parser_errors.is_empty()) {
+        (Ok(module), _) => Ok((module, parser_errors)),
+        (Err(error), true) => Err(anyhow::anyhow!("failed to parse {filename}: {error:?}")),
+        (Err(error), false) => Err(anyhow::anyhow!(
+            "failed to parse {filename}: {error:?}; {}",
+            parser_errors
+                .iter()
+                .map(|error| format!(
+                    "{}:{}:{}: {}",
+                    filename, error.line, error.column, error.message
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+    }
+}
+
+pub(crate) fn module_item_declared_names(item: &ModuleItem) -> Vec<Atom> {
+    module_item_declared_binding_ids(item)
+        .into_iter()
+        .map(|(sym, _)| sym)
+        .collect()
+}
+
+pub(crate) fn module_item_declared_binding_ids(item: &ModuleItem) -> Vec<BindingId> {
+    match item {
+        ModuleItem::Stmt(Stmt::Decl(decl)) => decl_declared_names(decl),
+        ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => decl_declared_names(&export.decl),
+        _ => vec![],
+    }
+}
+
+fn decl_declared_names(decl: &Decl) -> Vec<BindingId> {
+    match decl {
+        Decl::Fn(f) => vec![(f.ident.sym.clone(), f.ident.ctxt)],
+        Decl::Class(c) => vec![(c.ident.sym.clone(), c.ident.ctxt)],
+        Decl::Var(var) => var_declared_names(var),
+        _ => vec![],
+    }
+}
+
+fn var_declared_names(var: &VarDecl) -> Vec<BindingId> {
+    use swc_core::ecma::ast::Id;
+    use swc_core::ecma::utils::find_pat_ids;
+
+    let mut ids = Vec::new();
+    for decl in &var.decls {
+        let pat_ids: Vec<Id> = find_pat_ids(&decl.name);
+        ids.extend(pat_ids);
+    }
+    ids
+}
+
+pub fn unpack_webpack4(source: &str) -> Option<UnpackResult> {
+    webpack4::detect_and_extract(source)
+}
+
+pub fn unpack_webpack4_raw(source: &str) -> Option<UnpackResult> {
+    webpack4::detect_and_extract_raw(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(generated_offset: u32, source_offset: u32) -> GeneratedSourceMapPoint {
+        GeneratedSourceMapPoint {
+            generated_offset,
+            source_offset,
+        }
+    }
+
+    #[test]
+    fn printed_input_offsets_map_only_exact_points() {
+        let points = [point(0, 40), point(6, 52)];
+        let offsets = InputOffsets::Printed(&points);
+        assert_eq!(offsets.input_offset(6), Some(52));
+        assert_eq!(offsets.input_offset(3), None);
+        assert_eq!(InputOffsets::Verbatim(40).input_offset(3), Some(43));
+    }
+
+    #[test]
+    fn composing_input_offsets_drops_points_without_an_input_target() {
+        let parent = [point(0, 100), point(10, 150)];
+        let child = [point(0, 10), point(4, 5), point(9, 0)];
+        assert_eq!(
+            InputOffsets::Printed(&parent).compose(&child),
+            vec![point(0, 150), point(9, 100)]
+        );
+        assert_eq!(
+            InputOffsets::Verbatim(7).compose(&child),
+            vec![point(0, 17), point(4, 12), point(9, 7)]
+        );
+    }
+
+    #[test]
+    fn appending_mapped_code_shifts_points_past_the_prefix() {
+        let mut code = MappedCode::default();
+        code.push_str("glue;\n");
+        code.push_mapped(MappedCode {
+            code: "a();".to_string(),
+            points: vec![point(0, 30)],
+        });
+        assert_eq!(code.code, "glue;\na();");
+        assert_eq!(code.points, vec![point(6, 30)]);
+    }
+
+    #[test]
+    fn emitting_records_input_points_only_on_request() {
+        GLOBALS.set(&Default::default(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let source = "var  answer =  42;";
+            let module = parse_es_module(source, "input.js", cm.clone()).expect("parse");
+            let cfg = || Config::default().with_minify(false);
+            let discarded =
+                emit_module_with_positions(&module, cm.clone(), cfg(), SourcePositions::Discard)
+                    .expect("emit");
+            assert!(discarded.points.is_empty());
+            let recorded = emit_module_with_positions(&module, cm, cfg(), SourcePositions::Record)
+                .expect("emit");
+            assert_eq!(recorded.code, discarded.code);
+            let answer = recorded.code.find("answer").unwrap() as u32;
+            let offsets = InputOffsets::Printed(&recorded.points);
+            assert_eq!(
+                offsets.input_offset(answer),
+                Some(source.find("answer").unwrap() as u32)
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_prepared_module_rederives_every_context() {
+        use swc_core::ecma::ast::Ident;
+
+        GLOBALS.set(&Globals::new(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let mut module = parse_es_module(
+                "var a = 1; function f() { let b = a; return b + c; }",
+                "fixture.js",
+                cm,
+            )
+            .expect("fixture should parse");
+
+            // Simulate detector surgery: one binding carries a stray mark, the
+            // rest of the module was never resolved.
+            struct Stamp(SyntaxContext);
+            impl VisitMut for Stamp {
+                fn visit_mut_ident(&mut self, ident: &mut Ident) {
+                    if ident.sym == "a" {
+                        ident.ctxt = self.0;
+                    }
+                }
+            }
+            let stray = SyntaxContext::empty().apply_mark(Mark::new());
+            module.visit_mut_with(&mut Stamp(stray));
+
+            let unresolved_mark = resolve_prepared_module(&mut module);
+
+            #[derive(Default)]
+            struct Idents(Vec<Ident>);
+            impl Visit for Idents {
+                fn visit_ident(&mut self, ident: &Ident) {
+                    self.0.push(ident.clone());
+                }
+            }
+            let mut idents = Idents::default();
+            module.visit_with(&mut idents);
+            let ctxts = |name: &str| -> Vec<SyntaxContext> {
+                idents
+                    .0
+                    .iter()
+                    .filter(|ident| ident.sym == name)
+                    .map(|ident| ident.ctxt)
+                    .collect()
+            };
+
+            let a = ctxts("a");
+            assert_eq!(a.len(), 2, "declaration and reference");
+            assert_eq!(a[0], a[1], "binding and reference share one context");
+            assert_ne!(a[0], SyntaxContext::empty());
+            assert_ne!(a[0], stray, "the stray context was replaced");
+            let b = ctxts("b");
+            assert_eq!(b[0], b[1]);
+            assert_ne!(b[0], a[0], "inner scope gets its own context");
+            let c = ctxts("c");
+            assert_eq!(
+                c[0].outer(),
+                unresolved_mark,
+                "free reference is unresolved"
+            );
+        });
+    }
+
+    #[test]
+    fn runtime_local_name_uses_delimited_suffix() {
+        let mut used_names = crate::collections::HashSet::from_iter([Atom::from("_value")]);
+
+        assert_eq!(
+            fresh_runtime_local_name(&Atom::from("value"), &mut used_names),
+            "_value_2"
+        );
+    }
+
+    #[test]
+    fn sanitize_relative_path_drops_only_path_components() {
+        assert_eq!(
+            sanitize_relative_path("....//node_modules/@wakaru/cli/bin/wakaru", "module.js"),
+            "..../node_modules/@wakaru/cli/bin/wakaru"
+        );
+        assert_eq!(
+            sanitize_relative_path(".\\..\\node_modules\\debug\\src\\index", "module.js"),
+            "node_modules/debug/src/index"
+        );
+        assert_eq!(
+            sanitize_relative_path("./src/../utils/./helper.js", "module.js"),
+            "src/utils/helper.js"
+        );
+    }
+
+    #[test]
+    fn sanitize_relative_path_uses_fallback_for_empty_or_traversal_only_paths() {
+        assert_eq!(sanitize_relative_path("", "module.js"), "module.js");
+        assert_eq!(sanitize_relative_path("./", "module.js"), "module.js");
+        assert_eq!(sanitize_relative_path("../../..", "module.js"), "module.js");
+        assert_eq!(sanitize_relative_path("..\\..\\", "module.js"), "module.js");
+    }
+
+    #[test]
+    fn source_fallback_rejects_empty_and_dummy_statement_ranges() {
+        assert!(source_fallback_for_stmts(&SourceMap::default(), &[]).is_empty());
+        let statements = [Stmt::Empty(swc_core::ecma::ast::EmptyStmt {
+            span: Default::default(),
+        })];
+        assert!(source_fallback_for_stmts(&SourceMap::default(), &statements).is_empty());
+    }
+
+    #[test]
+    fn try_unpack_bundle_distinguishes_parse_errors_from_non_bundles() {
+        let err = match try_unpack_bundle("const = ;") {
+            Ok(_) => panic!("invalid source should fail to parse"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("bundle.js"),
+            "error should include parser filename: {err}"
+        );
+
+        let result = try_unpack_bundle("const value = 1;").expect("valid source should parse");
+        assert!(
+            result.is_none(),
+            "valid non-bundle source should return None"
+        );
+    }
+
+    #[test]
+    fn try_unpack_bundle_rejects_recoverably_parsed_sloppy_bundle() {
+        let source = r#"
+(function(modules) {
+    var cache = {};
+    function require(id) {
+        if (cache[id]) return cache[id].exports;
+        var module = cache[id] = { exports: {} };
+        modules[id].call(module.exports, module, module.exports, require);
+        return module.exports;
+    }
+    return require(0);
+})([
+    function(module) {
+        with ({ value: 42 }) {
+            module.exports = value;
+        }
+    }
+]);
+"#;
+
+        let result = try_unpack_bundle(source).expect("the recoverable parse should not be fatal");
+        assert!(
+            result.is_none(),
+            "module-goal recovery must not authorize webpack extraction"
+        );
+    }
+
+    #[test]
+    fn try_unpack_bundle_rejects_parenthesized_delete_identifier() {
+        let source = r#"
+(function(modules) {
+    function require(id) {
+        var module = { exports: {} };
+        modules[id](module, module.exports, require);
+        return module.exports;
+    }
+    return require(0);
+})([
+    function(module) {
+        var temporary = 1;
+        delete (temporary);
+        module.exports = temporary;
+    }
+]);
+"#;
+
+        let result = try_unpack_bundle(source).expect("the source should parse");
+        assert!(
+            result.is_none(),
+            "sloppy-only delete syntax must not authorize webpack extraction"
+        );
+    }
+}

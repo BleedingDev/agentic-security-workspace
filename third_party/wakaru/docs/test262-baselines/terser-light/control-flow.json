@@ -1,0 +1,327 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "control-flow"
+    ],
+    "paths": [
+      "test/language/statements/if",
+      "test/language/statements/switch",
+      "test/language/statements/try",
+      "test/language/statements/return",
+      "test/language/statements/throw",
+      "test/language/statements/break",
+      "test/language/statements/continue",
+      "test/language/statements/labeled",
+      "test/language/statements/for",
+      "test/language/statements/for-in",
+      "test/language/statements/while",
+      "test/language/statements/do-while",
+      "test/language/expressions/conditional",
+      "test/language/expressions/logical-and",
+      "test/language/expressions/logical-or",
+      "test/language/expressions/comma"
+    ]
+  },
+  "totals": {
+    "discovered": 1117,
+    "runnable": 1117,
+    "skipped": 0,
+    "unsupported": 24,
+    "rejected": 10,
+    "passed": 1083,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/comma/tco-final.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-cond.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-pos.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-and/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-or/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/do-while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for-in/head-lhs-let.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/statements/for-in/head-var-bound-names-let.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/statements/for-in/identifier-let-allowed-as-lefthandside-expression-not-strict.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/statements/for-in/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5ee121742147cc8ae334c1d358417b9d75e324313e8011ae15a53c822069a027",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Missing initializer in destructuring declaration"
+    },
+    {
+      "path": "test/language/statements/for/head-lhs-let.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6df422243d1a07a945b3dee23545f0365059adeca35d83d1f7193356b9ae05c2",
+      "summary": "SyntaxError: Name expected"
+    },
+    {
+      "path": "test/language/statements/for/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5ee121742147cc8ae334c1d358417b9d75e324313e8011ae15a53c822069a027",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Missing initializer in destructuring declaration"
+    },
+    {
+      "path": "test/language/statements/for/tco-const-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-let-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-lhs-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-var-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5ee121742147cc8ae334c1d358417b9d75e324313e8011ae15a53c822069a027",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Missing initializer in destructuring declaration"
+    },
+    {
+      "path": "test/language/statements/if/tco-else-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/tco-if-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "2924ff2bfee6425895f0aac82b5d5038ffbde4dec33f8698c0321d4117efe3c0",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Lexical declaration cannot appear in a single-statement context"
+    },
+    {
+      "path": "test/language/statements/labeled/let-identifier-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "2924ff2bfee6425895f0aac82b5d5038ffbde4dec33f8698c0321d4117efe3c0",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Lexical declaration cannot appear in a single-statement context"
+    },
+    {
+      "path": "test/language/statements/labeled/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/value-yield-non-strict-escaped.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-label",
+      "fingerprint": "745d947eb5ced649c47a5f67d72533b9e57e095dc6ef212f9f1b7b60af102058",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (1..6, TS1109) }"
+    },
+    {
+      "path": "test/language/statements/labeled/value-yield-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-label",
+      "fingerprint": "745d947eb5ced649c47a5f67d72533b9e57e095dc6ef212f9f1b7b60af102058",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (1..6, TS1109) }"
+    },
+    {
+      "path": "test/language/statements/return/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body-dflt.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-dftl-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "43eeaea751b6351dd94e091aca5bd964ff8805b01df111eba0bebac1c9408f10",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (32..37, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/while/let-block-with-newline.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5ee121742147cc8ae334c1d358417b9d75e324313e8011ae15a53c822069a027",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Missing initializer in destructuring declaration"
+    },
+    {
+      "path": "test/language/statements/while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    }
+  ]
+}

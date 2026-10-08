@@ -1,0 +1,2802 @@
+use crate::collections::{HashMap, HashSet};
+
+use swc_core::atoms::Atom;
+use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
+use swc_core::ecma::ast::{
+    ArrowExpr, AssignExpr, AssignOp, AssignTarget, AssignTargetPat, AutoAccessor, AwaitExpr,
+    CallExpr, Callee, ClassProp, Constructor, Decl, Expr, ExprOrSpread, ExprStmt, Function,
+    FunctionBody, Ident, IfStmt, MemberExpr, Module, ObjectPat, ObjectPatProp, Param, Pat,
+    PrivateProp, Prop, PropName, ReturnStmt, SeqExpr, SimpleAssignTarget, StaticBlock, Stmt,
+    SwitchCase, ThisExpr, UnaryOp, VarDecl, VarDeclKind, VarDeclarator, YieldExpr,
+};
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+use super::cross_module_helper_refs::{
+    collect_cross_module_ts_helper_refs, cross_module_ts_member_helper,
+};
+use super::decl_utils::{
+    binding_id, collect_decl_binding_ids, collect_pat_names, collect_var_decl_binding_ids,
+};
+use super::eval_utils::{is_direct_eval_call, module_has_with_stmt};
+use super::helper_matcher::{binding_key, ident_matches_binding};
+use super::remove_void::finalize_synthesized_undefined;
+use super::rename_utils::{rename_bindings, BindingId, BindingRename};
+use super::state_machine::{
+    invert_condition, stmts_contain_state_opcode_return, CatchBindings, ForwardJumpJoin,
+    IndexLoopContinueMode, OpcodeReturnScan, StateMachineProgram,
+};
+use super::transpiler_helper_utils::{
+    tslib_member_ts_helper_kind, tslib_require_ts_helper_kind_with_mark, BindingKey,
+    LocalHelperContext, TsHelperKind,
+};
+use crate::facts::{ModuleFactsMap, TypeScriptHelperKind};
+use crate::js_names::is_likely_generated_alias;
+use crate::utils::paren::strip_parens;
+
+pub struct UnAsyncAwait {
+    unresolved_mark: Mark,
+}
+
+impl UnAsyncAwait {
+    /// The resolver mark is required: the canonical-frame checks distinguish
+    /// genuine globals (`undefined`, `Promise`, `arguments`) and
+    /// resolver-proven local aliases from unresolved names, and without the
+    /// mark those checks fail closed.
+    pub fn new(unresolved_mark: Mark) -> Self {
+        Self { unresolved_mark }
+    }
+}
+
+impl UnAsyncAwait {
+    pub(crate) fn run_with_helpers(
+        module: &mut swc_core::ecma::ast::Module,
+        unresolved_mark: Mark,
+        local_helpers: &LocalHelperContext,
+        module_facts: Option<&ModuleFactsMap>,
+        current_filename: Option<&str>,
+    ) {
+        let mut helpers =
+            AsyncHelperContext::from_local_helpers(local_helpers, Some(unresolved_mark));
+        if let Some(module_facts) = module_facts {
+            helpers.extend_cross_module(module, module_facts, current_filename);
+        }
+        helpers.record_module_hazards(module);
+        module.visit_mut_with(&mut UnAsyncAwaitWithHelpers { helpers: &helpers });
+        module.visit_mut_with(&mut AwaiterIifeTransformer { helpers: &helpers });
+        remove_unused_inline_async_helpers(module, local_helpers);
+        finalize_synthesized_undefined(module, unresolved_mark);
+    }
+}
+
+impl VisitMut for UnAsyncAwait {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        let local_helpers = LocalHelperContext::collect_with_mark(module, self.unresolved_mark);
+        let mut helpers =
+            AsyncHelperContext::from_local_helpers(&local_helpers, Some(self.unresolved_mark));
+        helpers.record_module_hazards(module);
+        module.visit_mut_with(&mut UnAsyncAwaitWithHelpers { helpers: &helpers });
+        module.visit_mut_with(&mut AwaiterIifeTransformer { helpers: &helpers });
+        remove_unused_inline_async_helpers(module, &local_helpers);
+        finalize_synthesized_undefined(module, self.unresolved_mark);
+    }
+
+    fn visit_mut_function(&mut self, func: &mut Function) {
+        let helpers = AsyncHelperContext::default();
+        visit_mut_function_with_helpers(func, &helpers);
+    }
+}
+
+struct UnAsyncAwaitWithHelpers<'a> {
+    helpers: &'a AsyncHelperContext,
+}
+
+impl VisitMut for UnAsyncAwaitWithHelpers<'_> {
+    fn visit_mut_function(&mut self, func: &mut Function) {
+        visit_mut_function_with_helpers(func, self.helpers);
+    }
+}
+
+struct AwaiterIifeTransformer<'a> {
+    helpers: &'a AsyncHelperContext,
+}
+
+impl VisitMut for AwaiterIifeTransformer<'_> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+        try_transform_awaiter_iife(expr, self.helpers);
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AsyncHelperContext {
+    tslib_namespaces: HashSet<BindingKey>,
+    awaiter_helpers: HashSet<BindingKey>,
+    awaiter_namespaces: HashMap<BindingKey, HashSet<String>>,
+    generator_helpers: HashSet<BindingKey>,
+    generator_namespaces: HashMap<BindingKey, HashSet<String>>,
+    values_helpers: HashSet<BindingKey>,
+    values_namespaces: HashMap<BindingKey, HashSet<String>>,
+    unresolved_mark: Option<Mark>,
+    /// Bindings written anywhere in the module (assignments, updates,
+    /// destructuring and for-in/of targets). A thisArg alias that is written
+    /// after capture cannot be substituted for `this`: the wrapper reads it
+    /// once at call time, the spliced body would read it live.
+    written_bindings: HashSet<BindingKey>,
+    /// The module contains a `with` statement. Inside its body any identifier
+    /// may resolve to a property of the with-object at runtime, which the
+    /// resolver cannot see, so the identifier-shaped canonical frame slots
+    /// (`undefined`, `arguments`, `Promise`, a `this` alias) are not trusted
+    /// anywhere in the module. `this` and `void <literal>` are unaffected.
+    with_statement_present: bool,
+}
+
+impl AsyncHelperContext {
+    pub(crate) fn from_local_helpers(
+        local_helpers: &LocalHelperContext,
+        unresolved_mark: Option<Mark>,
+    ) -> Self {
+        Self {
+            tslib_namespaces: local_helpers.tslib_namespaces().clone(),
+            awaiter_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Awaiter),
+            awaiter_namespaces: HashMap::default(),
+            generator_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Generator),
+            generator_namespaces: HashMap::default(),
+            values_helpers: local_helpers.ts_helpers_of_kind(TsHelperKind::Values),
+            values_namespaces: HashMap::default(),
+            unresolved_mark,
+            written_bindings: HashSet::default(),
+            with_statement_present: false,
+        }
+    }
+
+    pub(crate) fn record_module_hazards(&mut self, module: &Module) {
+        self.written_bindings =
+            crate::analysis::binding_uses::BindingUseIndex::collect_direct_write_bindings(module);
+        self.with_statement_present = module_has_with_stmt(module);
+    }
+
+    fn extend_cross_module(
+        &mut self,
+        module: &Module,
+        module_facts: &ModuleFactsMap,
+        current_filename: Option<&str>,
+    ) {
+        let awaiter = collect_cross_module_ts_helper_refs(
+            module,
+            module_facts,
+            current_filename,
+            TypeScriptHelperKind::Awaiter,
+        );
+        self.awaiter_helpers.extend(awaiter.direct);
+        self.awaiter_namespaces.extend(awaiter.namespaces);
+
+        let generator = collect_cross_module_ts_helper_refs(
+            module,
+            module_facts,
+            current_filename,
+            TypeScriptHelperKind::Generator,
+        );
+        self.generator_helpers.extend(generator.direct);
+        self.generator_namespaces.extend(generator.namespaces);
+
+        let values = collect_cross_module_ts_helper_refs(
+            module,
+            module_facts,
+            current_filename,
+            TypeScriptHelperKind::Values,
+        );
+        self.values_helpers.extend(values.direct);
+        self.values_namespaces.extend(values.namespaces);
+    }
+
+    fn is_awaiter_call(&self, call: &swc_core::ecma::ast::CallExpr) -> bool {
+        self.matches_helper_call(
+            call,
+            &self.awaiter_helpers,
+            &self.awaiter_namespaces,
+            "__awaiter",
+            TsHelperKind::Awaiter,
+        )
+    }
+
+    fn is_generator_call(&self, call: &swc_core::ecma::ast::CallExpr) -> bool {
+        self.matches_helper_call(
+            call,
+            &self.generator_helpers,
+            &self.generator_namespaces,
+            "__generator",
+            TsHelperKind::Generator,
+        )
+    }
+
+    fn matches_helper_call(
+        &self,
+        call: &swc_core::ecma::ast::CallExpr,
+        helpers: &HashSet<BindingKey>,
+        namespaces: &HashMap<BindingKey, HashSet<String>>,
+        canonical_name: &str,
+        kind: TsHelperKind,
+    ) -> bool {
+        let Some(callee) = call
+            .callee
+            .as_expr()
+            .map(|expr| strip_parens(expr.as_ref()))
+        else {
+            return false;
+        };
+        let lookup = match callee {
+            Expr::Ident(id) => Some(id),
+            Expr::Member(member) => match strip_parens(&member.obj) {
+                Expr::Ident(id) => Some(id),
+                _ => None,
+            },
+            _ => None,
+        };
+        if lookup.is_some_and(|id| self.written_bindings.contains(&binding_key(id))) {
+            return false;
+        }
+        match callee {
+            Expr::Ident(id) => {
+                helpers.contains(&binding_key(id))
+                    || (id.sym.as_ref() == canonical_name
+                        && self
+                            .unresolved_mark
+                            .is_some_and(|mark| id.ctxt.outer() == mark))
+            }
+            Expr::Member(_) => {
+                // `with` can replace either the namespace or the require
+                // binding at runtime, even when resolver identity matches.
+                if self.with_statement_present {
+                    return false;
+                }
+                cross_module_ts_member_helper(callee, namespaces)
+                    || tslib_member_ts_helper_kind(callee, &self.tslib_namespaces) == Some(kind)
+                    || self.unresolved_mark.is_some_and(|mark| {
+                        tslib_require_ts_helper_kind_with_mark(callee, mark) == Some(kind)
+                    })
+            }
+            _ => false,
+        }
+    }
+}
+
+fn visit_mut_function_with_helpers(func: &mut Function, helpers: &AsyncHelperContext) {
+    let awaiter_param_hints = collect_awaiter_param_hints(func, helpers);
+
+    // Recurse into children first
+    func.visit_mut_children_with(&mut UnAsyncAwaitWithHelpers { helpers });
+
+    let reserved_names = binding_names_from_params(&func.params);
+    let body = match func.body.as_mut() {
+        Some(b) => b,
+        None => return,
+    };
+
+    // Try __generator transform first (makes function a generator)
+    if try_transform_generator(body, helpers, &reserved_names) {
+        func.is_generator = true;
+        return;
+    }
+
+    // Try __awaiter transform (makes function async).
+    // After extracting the inner body, also run the generator transform
+    // in case the inner function was a __generator state machine.
+    if let Some(saved_stmts) = try_transform_awaiter(body, helpers, &reserved_names) {
+        try_transform_generator(body, helpers, &reserved_names);
+        if stmts_contain_state_opcode_return(&body.stmts, OpcodeReturnScan::SkipNestedFunctions)
+            || contains_unresolved_generator_wrapper(body, helpers)
+        {
+            body.stmts = saved_stmts;
+        } else {
+            func.is_async = true;
+            apply_unused_param_hints(func, awaiter_param_hints);
+        }
+    }
+}
+
+/// An awaiter wrapper is only safe to remove when its generator wrapper in the
+/// current function body was decoded too. Otherwise the async function would
+/// return the generator iterator itself instead of awaiting the state machine's
+/// result. Independent nested callables are transformed on their own and must
+/// not make the containing awaiter roll back.
+fn contains_unresolved_generator_wrapper(
+    body: &FunctionBody,
+    helpers: &AsyncHelperContext,
+) -> bool {
+    struct Finder<'a> {
+        helpers: &'a AsyncHelperContext,
+        found: bool,
+    }
+
+    impl Visit for Finder<'_> {
+        fn visit_function(&mut self, _function: &Function) {}
+
+        fn visit_arrow_expr(&mut self, _arrow: &ArrowExpr) {}
+
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if self.helpers.is_generator_call(call)
+                && call
+                    .args
+                    .get(1)
+                    .is_some_and(|arg| matches!(strip_parens(&arg.expr), Expr::Fn(_)))
+            {
+                self.found = true;
+                return;
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut finder = Finder {
+        helpers,
+        found: false,
+    };
+    body.visit_with(&mut finder);
+    finder.found
+}
+
+// ============================================================
+// __generator state-machine -> function*
+// ============================================================
+
+pub(crate) fn try_transform_ts_generator_body(
+    body: &mut FunctionBody,
+    helpers: &AsyncHelperContext,
+    reserved_names: &HashSet<Atom>,
+) -> bool {
+    try_transform_generator(body, helpers, reserved_names)
+}
+
+fn try_transform_generator(
+    body: &mut FunctionBody,
+    helpers: &AsyncHelperContext,
+    reserved_names: &HashSet<Atom>,
+) -> bool {
+    // Find: return __generator(this, function(_a) { switch(_a.label) { ... } })
+    let return_idx = body
+        .stmts
+        .iter()
+        .position(|stmt| is_generator_return(stmt, helpers));
+    let return_idx = match return_idx {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let mut extracted = match extract_generator_stmts(body.stmts[return_idx].clone(), helpers) {
+        Some(extracted) => extracted,
+        None => return false,
+    };
+    if !hygienically_move_callback_locals(
+        &mut extracted.stmts,
+        &extracted.callback_local_ids,
+        &body.stmts,
+        return_idx,
+        reserved_names,
+    ) {
+        return false;
+    }
+    body.stmts.remove(return_idx);
+
+    // Insert new statements where the return was
+    body.stmts.splice(return_idx..return_idx, extracted.stmts);
+    true
+}
+
+fn is_generator_return(stmt: &Stmt, helpers: &AsyncHelperContext) -> bool {
+    let Stmt::Return(ret) = stmt else {
+        return false;
+    };
+    let Some(arg) = &ret.arg else { return false };
+    let Expr::Call(call) = arg.as_ref() else {
+        return false;
+    };
+    helpers.is_generator_call(call)
+}
+
+struct ExtractedGenerator {
+    stmts: Vec<Stmt>,
+    callback_local_ids: HashSet<BindingId>,
+}
+
+fn extract_generator_stmts(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<ExtractedGenerator> {
+    let Stmt::Return(ret) = stmt else { return None };
+    let arg = *ret.arg?;
+    let Expr::Call(mut call) = arg else {
+        return None;
+    };
+    if !helpers.is_generator_call(&call) {
+        return None;
+    }
+    if call.args.len() < 2 {
+        return None;
+    }
+
+    let fn_arg = *call.args.remove(1).expr;
+    let Expr::Fn(fn_expr) = fn_arg else {
+        return None;
+    };
+    let state_param: Ident = fn_expr.function.params.first().and_then(|p| {
+        if let Pat::Ident(bi) = &p.pat {
+            Some(bi.id.clone())
+        } else {
+            None
+        }
+    })?;
+    let body = fn_expr.function.body?;
+    let mut state_stmt = None;
+    let mut callback_locals = Vec::new();
+    let mut callback_local_ids = HashSet::default();
+    for stmt in body.stmts {
+        match stmt {
+            Stmt::Switch(_) | Stmt::Return(_) => {
+                if state_stmt.replace(stmt).is_some() {
+                    return None;
+                }
+            }
+            Stmt::Decl(Decl::Var(var))
+                if var.kind == VarDeclKind::Var
+                    && var.decls.iter().all(|decl| decl.init.is_none()) =>
+            {
+                collect_var_decl_binding_ids(&var, &mut callback_local_ids);
+                callback_locals.push(Stmt::Decl(Decl::Var(var)));
+            }
+            Stmt::Empty(_) => {}
+            _ => return None,
+        }
+    }
+    let decoded = match state_stmt? {
+        Stmt::Switch(sw) => decode_state_machine(state_param, sw.cases, helpers)?,
+        Stmt::Return(ret) => decode_return_opcode(&Stmt::Return(ret), helpers)?
+            .into_iter()
+            .collect(),
+        _ => unreachable!("state_stmt is restricted above"),
+    };
+    callback_locals.extend(decoded);
+    Some(ExtractedGenerator {
+        stmts: callback_locals,
+        callback_local_ids,
+    })
+}
+
+fn binding_names_from_params(params: &[Param]) -> HashSet<Atom> {
+    let mut names = HashSet::default();
+    for param in params {
+        collect_pat_names(&param.pat, &mut names);
+    }
+    names
+}
+
+/// Rename moved callback locals that would collide with the destination
+/// function's parameters or other identifiers. Direct `eval` / `with` can
+/// observe the original names as strings, and callable declarations or
+/// anonymous initializers can expose them through `.name`, so those cases stay
+/// fail-closed.
+fn hygienically_move_callback_locals(
+    moved_stmts: &mut [Stmt],
+    moved_ids: &HashSet<BindingId>,
+    destination_stmts: &[Stmt],
+    replaced_index: usize,
+    reserved_names: &HashSet<Atom>,
+) -> bool {
+    if moved_ids.is_empty() {
+        return true;
+    }
+    let destination_names =
+        destination_identifier_names(destination_stmts, Some(replaced_index), reserved_names);
+    let colliding: Vec<BindingId> = moved_ids
+        .iter()
+        .filter(|(name, _)| destination_names.contains(name))
+        .cloned()
+        .collect();
+    if colliding.is_empty() {
+        return true;
+    }
+    if stmts_have_direct_eval_or_with(moved_stmts)
+        || stmts_have_direct_eval_or_with(&destination_stmts[..replaced_index])
+        || stmts_have_direct_eval_or_with(&destination_stmts[replaced_index + 1..])
+    {
+        return false;
+    }
+    if renaming_changes_callable_name(moved_stmts, &colliding) {
+        return false;
+    }
+
+    let mut reserved = destination_names;
+    reserved.extend(destination_identifier_names(
+        moved_stmts,
+        None,
+        &HashSet::default(),
+    ));
+    let renames: Vec<BindingRename> = colliding
+        .into_iter()
+        .map(|old| {
+            let new = allocate_unique_name(&old.0, &mut reserved);
+            BindingRename { old, new }
+        })
+        .collect();
+    for stmt in moved_stmts.iter_mut() {
+        rename_bindings(stmt, &renames);
+    }
+    true
+}
+
+/// Whether renaming any colliding binding would change an observable
+/// `Function.name` / class `name`. Declarations carry their binding name
+/// directly; anonymous function, class, and arrow expressions also infer a
+/// name from direct declarations, assignments, and destructuring defaults.
+fn renaming_changes_callable_name(stmts: &[Stmt], colliding: &[BindingId]) -> bool {
+    let colliding: HashSet<BindingId> = colliding.iter().cloned().collect();
+
+    for stmt in stmts {
+        let Stmt::Decl(decl) = stmt else {
+            continue;
+        };
+        let id = match decl {
+            Decl::Fn(function) => Some(binding_id(&function.ident)),
+            Decl::Class(class) => Some(binding_id(&class.ident)),
+            _ => None,
+        };
+        if id.is_some_and(|id| colliding.contains(&id)) {
+            return true;
+        }
+    }
+
+    struct Finder<'a> {
+        colliding: &'a HashSet<BindingId>,
+        found: bool,
+    }
+
+    impl Visit for Finder<'_> {
+        fn visit_var_declarator(&mut self, declarator: &VarDeclarator) {
+            if self.found {
+                return;
+            }
+            if pat_default_infers_colliding_name(&declarator.name, self.colliding)
+                || matches!(
+                    (&declarator.name, declarator.init.as_deref()),
+                    (Pat::Ident(binding), Some(init))
+                        if self.colliding.contains(&binding_id(&binding.id))
+                            && is_anonymous_callable(init)
+                )
+            {
+                self.found = true;
+                return;
+            }
+            declarator.visit_children_with(self);
+        }
+
+        fn visit_assign_expr(&mut self, assign: &AssignExpr) {
+            if self.found {
+                return;
+            }
+            let direct_target_infers_name = matches!(
+                assign.op,
+                AssignOp::Assign
+                    | AssignOp::AndAssign
+                    | AssignOp::OrAssign
+                    | AssignOp::NullishAssign
+            ) && assign_target_binding(&assign.left)
+                .is_some_and(|id| self.colliding.contains(&id))
+                && is_anonymous_callable(&assign.right);
+            let pattern_default_infers_name = match &assign.left {
+                AssignTarget::Pat(pattern) => {
+                    assign_target_pat_default_infers_colliding_name(pattern, self.colliding)
+                }
+                AssignTarget::Simple(_) => false,
+            };
+            if direct_target_infers_name || pattern_default_infers_name {
+                self.found = true;
+                return;
+            }
+            assign.visit_children_with(self);
+        }
+    }
+
+    let mut finder = Finder {
+        colliding: &colliding,
+        found: false,
+    };
+    for stmt in stmts {
+        stmt.visit_with(&mut finder);
+        if finder.found {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_anonymous_callable(expr: &Expr) -> bool {
+    match strip_parens(expr) {
+        Expr::Arrow(_) => true,
+        Expr::Fn(function) => function.ident.is_none(),
+        Expr::Class(class) => class.ident.is_none(),
+        _ => false,
+    }
+}
+
+fn assign_target_binding(target: &AssignTarget) -> Option<BindingId> {
+    let AssignTarget::Simple(target) = target else {
+        return None;
+    };
+    match target {
+        SimpleAssignTarget::Ident(binding) => Some(binding_id(&binding.id)),
+        SimpleAssignTarget::Paren(paren) => match strip_parens(&paren.expr) {
+            Expr::Ident(ident) => Some(binding_id(ident)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn assign_target_pat_default_infers_colliding_name(
+    pattern: &AssignTargetPat,
+    colliding: &HashSet<BindingId>,
+) -> bool {
+    match pattern {
+        AssignTargetPat::Array(array) => array
+            .elems
+            .iter()
+            .flatten()
+            .any(|pattern| pat_default_infers_colliding_name(pattern, colliding)),
+        AssignTargetPat::Object(object) => {
+            object_pat_default_infers_colliding_name(object, colliding)
+        }
+        AssignTargetPat::Invalid(_) => false,
+    }
+}
+
+fn pat_default_infers_colliding_name(pattern: &Pat, colliding: &HashSet<BindingId>) -> bool {
+    match pattern {
+        Pat::Assign(assign) => {
+            matches!(assign.left.as_ref(), Pat::Ident(binding)
+                if colliding.contains(&binding_id(&binding.id))
+                    && is_anonymous_callable(&assign.right))
+                || pat_default_infers_colliding_name(&assign.left, colliding)
+        }
+        Pat::Array(array) => array
+            .elems
+            .iter()
+            .flatten()
+            .any(|pattern| pat_default_infers_colliding_name(pattern, colliding)),
+        Pat::Object(object) => object_pat_default_infers_colliding_name(object, colliding),
+        Pat::Rest(rest) => pat_default_infers_colliding_name(&rest.arg, colliding),
+        Pat::Ident(_) | Pat::Expr(_) | Pat::Invalid(_) => false,
+    }
+}
+
+fn object_pat_default_infers_colliding_name(
+    object: &ObjectPat,
+    colliding: &HashSet<BindingId>,
+) -> bool {
+    object.props.iter().any(|prop| match prop {
+        ObjectPatProp::Assign(assign) => assign.value.as_deref().is_some_and(|default| {
+            colliding.contains(&binding_id(&assign.key.id)) && is_anonymous_callable(default)
+        }),
+        ObjectPatProp::KeyValue(key_value) => {
+            pat_default_infers_colliding_name(&key_value.value, colliding)
+        }
+        ObjectPatProp::Rest(rest) => pat_default_infers_colliding_name(&rest.arg, colliding),
+    })
+}
+
+fn allocate_unique_name(base: &Atom, reserved: &mut HashSet<Atom>) -> Atom {
+    let mut index = 1u32;
+    loop {
+        let candidate: Atom = format!("{base}{index}").into();
+        if reserved.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn stmts_have_direct_eval_or_with(stmts: &[Stmt]) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl Visit for Finder {
+        fn visit_with_stmt(&mut self, _: &swc_core::ecma::ast::WithStmt) {
+            self.found = true;
+        }
+
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if self.found {
+                return;
+            }
+            if is_direct_eval_call(call) {
+                self.found = true;
+                return;
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    for stmt in stmts {
+        stmt.visit_with(&mut finder);
+        if finder.found {
+            return true;
+        }
+    }
+    false
+}
+
+fn destination_identifier_names(
+    stmts: &[Stmt],
+    excluded_index: Option<usize>,
+    reserved_names: &HashSet<Atom>,
+) -> HashSet<Atom> {
+    let mut collector = IdentifierNameCollector {
+        names: reserved_names.clone(),
+    };
+    for (index, stmt) in stmts.iter().enumerate() {
+        if excluded_index == Some(index) {
+            continue;
+        }
+        stmt.visit_with(&mut collector);
+    }
+    collector.names
+}
+
+struct IdentifierNameCollector {
+    names: HashSet<Atom>,
+}
+
+impl Visit for IdentifierNameCollector {
+    fn visit_ident(&mut self, ident: &Ident) {
+        self.names.insert(ident.sym.clone());
+    }
+}
+
+/// Expand Terser-compressed case body statements back into the form the
+/// decoder expects. Terser merges individual statements into comma sequences
+/// and folds conditional branches into ternary returns:
+///
+///   `a, b, _a.label = 1;`    ->  `a; b; _a.label = 1;`
+///   `return index++, [3, 1]` ->  `index++; return [3, 1];`
+///   `return t ? [4, X] : [3, N]` ->  `if (!t) return [3, N]; return [4, X];`
+fn expand_terser_case_stmts(stmts: &[Stmt]) -> Vec<Stmt> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < stmts.len() {
+        if let Some(consumed) = try_rearrange_if_goto_pair(&stmts[i..], &mut result) {
+            i += consumed;
+        } else {
+            expand_one_stmt(&mut result, &stmts[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Rearrange `if (test) { return [opcode, X]; } return [3, N];` into
+/// `if (!test) return [3, N]; return [opcode, X];` so the goto ends up in
+/// the if-body where `loop_break_test` can detect it. `SimplifySequence`
+/// produces this pattern from `return test ? [opcode, X] : [3, N]`.
+fn try_rearrange_if_goto_pair(stmts: &[Stmt], result: &mut Vec<Stmt>) -> Option<usize> {
+    if stmts.len() < 2 {
+        return None;
+    }
+    let Stmt::If(if_stmt) = &stmts[0] else {
+        return None;
+    };
+    if if_stmt.alt.is_some() {
+        return None;
+    }
+    if !if_body_has_opcode_return(&if_stmt.cons) {
+        return None;
+    }
+    let Stmt::Return(ret) = &stmts[1] else {
+        return None;
+    };
+    if !is_goto_opcode_return(ret) {
+        return None;
+    }
+    result.push(Stmt::If(IfStmt {
+        span: if_stmt.span,
+        test: invert_condition(&if_stmt.test),
+        cons: Box::new(stmts[1].clone()),
+        alt: None,
+    }));
+    flatten_if_cons_into(result, &if_stmt.cons);
+    Some(2)
+}
+
+fn if_body_has_opcode_return(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return(ret) => ret
+            .arg
+            .as_deref()
+            .is_some_and(|a| is_opcode_like(strip_parens(a))),
+        Stmt::Block(block) if block.stmts.len() == 1 => if_body_has_opcode_return(&block.stmts[0]),
+        _ => false,
+    }
+}
+
+fn is_goto_opcode_return(ret: &ReturnStmt) -> bool {
+    let Some(arg) = ret.arg.as_deref() else {
+        return false;
+    };
+    let Expr::Array(arr) = strip_parens(arg) else {
+        return false;
+    };
+    arr.elems.first().and_then(|e| e.as_ref()).is_some_and(|e| {
+        matches!(
+            e.expr.as_ref(),
+            Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) if n.value as u32 == 3
+        )
+    })
+}
+
+fn flatten_if_cons_into(result: &mut Vec<Stmt>, stmt: &Stmt) {
+    match stmt {
+        Stmt::Block(block) => {
+            for s in &block.stmts {
+                expand_one_stmt(result, s);
+            }
+        }
+        _ => expand_one_stmt(result, stmt),
+    }
+}
+
+fn expand_one_stmt(result: &mut Vec<Stmt>, stmt: &Stmt) {
+    if let Stmt::Return(ret) = stmt {
+        if let Some(Expr::Paren(paren)) = ret.arg.as_deref() {
+            return expand_one_stmt(
+                result,
+                &Stmt::Return(ReturnStmt {
+                    span: ret.span,
+                    arg: Some(paren.expr.clone()),
+                }),
+            );
+        }
+    }
+    match stmt {
+        Stmt::Expr(ExprStmt { span, expr, .. }) if matches!(expr.as_ref(), Expr::Seq(_)) => {
+            let Expr::Seq(seq) = expr.as_ref() else {
+                unreachable!()
+            };
+            for sub in &seq.exprs {
+                result.push(Stmt::Expr(ExprStmt {
+                    span: *span,
+                    expr: sub.clone(),
+                }));
+            }
+        }
+        Stmt::Return(ret)
+            if ret
+                .arg
+                .as_deref()
+                .is_some_and(|a| matches!(a, Expr::Seq(_))) =>
+        {
+            let Expr::Seq(seq) = ret.arg.as_ref().unwrap().as_ref() else {
+                unreachable!()
+            };
+            for sub in &seq.exprs[..seq.exprs.len() - 1] {
+                result.push(Stmt::Expr(ExprStmt {
+                    span: ret.span,
+                    expr: sub.clone(),
+                }));
+            }
+            expand_one_stmt(
+                result,
+                &Stmt::Return(ReturnStmt {
+                    span: ret.span,
+                    arg: Some(seq.exprs.last().unwrap().clone()),
+                }),
+            );
+        }
+        Stmt::Return(ret)
+            if ret
+                .arg
+                .as_deref()
+                .is_some_and(|a| matches!(a, Expr::Cond(_))) =>
+        {
+            let Expr::Cond(cond) = ret.arg.as_ref().unwrap().as_ref() else {
+                unreachable!()
+            };
+            let alt_is_sequence = matches!(strip_parens(&cond.alt), Expr::Seq(_));
+            if alt_is_sequence && is_plain_opcode(&cond.cons) {
+                // `return test ? [3, N] : (work, [3, M])`: the guard keeps the
+                // plain opcode and the sequence expands into statements, so
+                // the goto in the sequence stays visible to the block walk.
+                result.push(Stmt::If(IfStmt {
+                    span: ret.span,
+                    test: cond.test.clone(),
+                    cons: Box::new(Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.cons.clone()),
+                    })),
+                    alt: None,
+                }));
+                expand_one_stmt(
+                    result,
+                    &Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.alt.clone()),
+                    }),
+                );
+            } else if is_opcode_like(&cond.cons) || is_opcode_like(&cond.alt) {
+                result.push(Stmt::If(IfStmt {
+                    span: ret.span,
+                    test: invert_condition(&cond.test),
+                    cons: Box::new(Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.alt.clone()),
+                    })),
+                    alt: None,
+                }));
+                expand_one_stmt(
+                    result,
+                    &Stmt::Return(ReturnStmt {
+                        span: ret.span,
+                        arg: Some(cond.cons.clone()),
+                    }),
+                );
+            } else {
+                result.push(stmt.clone());
+            }
+        }
+        _ => result.push(stmt.clone()),
+    }
+}
+
+/// An opcode array that is not wrapped in a sequence: `[3, N]`, not `(a, [3, N])`.
+fn is_plain_opcode(expr: &Expr) -> bool {
+    !matches!(strip_parens(expr), Expr::Seq(_)) && is_opcode_like(expr)
+}
+
+fn is_opcode_like(expr: &Expr) -> bool {
+    let inner = unwrap_seq_last(strip_parens(expr));
+    if let Expr::Array(arr) = inner {
+        arr.elems
+            .first()
+            .and_then(|e| e.as_ref())
+            .is_some_and(|e| matches!(e.expr.as_ref(), Expr::Lit(swc_core::ecma::ast::Lit::Num(_))))
+    } else {
+        false
+    }
+}
+
+fn unwrap_seq_last(expr: &Expr) -> &Expr {
+    let expr = strip_parens(expr);
+    if let Expr::Seq(SeqExpr { exprs, .. }) = expr {
+        exprs
+            .last()
+            .map(|e| strip_parens(e.as_ref()))
+            .unwrap_or(expr)
+    } else {
+        expr
+    }
+}
+
+/// Decode the state machine into a flat list of statements.
+///
+/// Phase 1: Collect (label_idx, Stmt) pairs in case order, decoding opcodes.
+/// Phase 2: Merge `_a.sent()` usages with the previous yield:
+///   - standalone `_a.sent();` -> drop
+///   - `v = _a.sent()` -> pop prev `yield X;`, push `v = yield X;`
+///
+/// Phase 3: Group by label and reconstruct try/catch/finally blocks.
+fn decode_state_machine(
+    state_param: Ident,
+    cases: Vec<SwitchCase>,
+    helpers: &AsyncHelperContext,
+) -> Option<Vec<Stmt>> {
+    let mut trys: Vec<[Option<usize>; 4]> = Vec::new();
+    // (label_idx, stmt) pairs
+    let mut flat: Vec<(usize, Stmt)> = Vec::new();
+
+    for case in &cases {
+        let idx = match numeric_case_test(case) {
+            Some(n) => n as usize,
+            None => continue,
+        };
+        let next_case_label = next_numeric_case_label(&cases, idx);
+
+        let expanded = expand_terser_case_stmts(&case.cons);
+        for (position, stmt) in expanded.iter().enumerate() {
+            if let Some(region) = extract_trys_push(&state_param, stmt) {
+                trys.push(region);
+                continue;
+            }
+            if is_state_label_assign(&state_param, stmt) {
+                continue;
+            }
+
+            // Only the last statement of the last case is the machine's
+            // implicit end; a void `return [2]` anywhere else is an early
+            // `return;` and must stay.
+            let void_return = if next_case_label.is_none() && position + 1 == expanded.len() {
+                VoidReturn::Drop
+            } else {
+                VoidReturn::Keep
+            };
+            if let Some(decoded) = decode_return_opcode_with_backedge(
+                stmt,
+                helpers,
+                idx,
+                next_case_label,
+                &trys,
+                void_return,
+            ) {
+                if let Some(s) = decoded {
+                    flat.push((idx, s));
+                }
+                continue;
+            }
+
+            // `if (cond) return [2, value];` — an early `return` inside a
+            // branch. The value-return opcode has no label semantics, so it
+            // decodes in place; jumps and yields stay for the shared decoder.
+            let mut stmt = stmt.clone();
+            stmt.visit_mut_with(&mut NestedValueReturnDecoder);
+            flat.push((idx, stmt));
+        }
+    }
+
+    // Phase 2: merge _a.sent() with previous yield
+    let mut output: Vec<(usize, Stmt)> = Vec::new();
+    // Catch-region temps. TSC lowers `catch (error)` to a function-scoped temp
+    // assigned from `_a.sent()` (`error_1 = _a.sent(); use(error_1)`). We fold
+    // that alias back into the synthesized `error` catch binding.
+    let mut catch_aliases: Vec<BindingKey> = Vec::new();
+    let folded_aliases: HashSet<Atom> = flat
+        .iter()
+        .filter_map(|(_, stmt)| catch_sent_alias(&state_param, stmt))
+        .map(|(name, _)| name)
+        .collect();
+    let mut catch_bindings = CatchBindings::for_cases(&cases, &folded_aliases);
+    for (idx, stmt) in flat {
+        if is_standalone_sent(&state_param, &stmt) {
+            // Standalone _a.sent(); -- the caller discards the yielded value. Drop.
+            continue;
+        }
+        let catch_binding = catch_bindings.for_label(idx, &trys);
+        if catch_binding.is_none() {
+            catch_aliases.clear();
+        }
+        if let Some(catch_binding) = &catch_binding {
+            // `error_1 = _a.sent()` aliases the caught value. Record it and drop
+            // the assignment; later references resolve to the `error` binding.
+            if let Some(alias) = catch_sent_alias(&state_param, &stmt) {
+                catch_aliases.push(alias);
+                continue;
+            }
+            // Rewrite both `_a.sent()` and any recorded alias to `error`.
+            let mut replacer = CatchValueReplacer {
+                state_param: state_param.clone(),
+                aliases: catch_aliases.clone(),
+                replacement: Box::new(Expr::Ident(catch_binding.clone())),
+            };
+            let mut s = stmt;
+            s.visit_mut_with(&mut replacer);
+            output.push((idx, s));
+            continue;
+        }
+        if stmt_uses_sent(&state_param, &stmt) {
+            if let Some((_, prev)) = output.last() {
+                if let Some(split) = split_sent_consuming_stmt(&state_param, &stmt, prev) {
+                    output.pop();
+                    output.extend(split.into_iter().map(|stmt| (idx, stmt)));
+                    continue;
+                }
+            }
+            // Pop the previous yield and embed it into this assignment/expression.
+            let merged = if let Some((_, prev)) = output.last() {
+                extract_yield_from_stmt(prev).map(|(arg, delegate, yield_span)| {
+                    let yield_expr = Box::new(Expr::Yield(YieldExpr {
+                        span: yield_span,
+                        delegate,
+                        arg: Some(arg),
+                    }));
+                    let mut replacer = SentReplacer {
+                        state_param: state_param.clone(),
+                        replacement: yield_expr,
+                    };
+                    let mut s = stmt.clone();
+                    s.visit_mut_with(&mut replacer);
+                    s
+                })
+            } else {
+                None
+            };
+            if let Some(merged_stmt) = merged {
+                output.pop();
+                output.push((idx, merged_stmt));
+            } else {
+                // No previous yield -- replace sent with undefined
+                let mut replacer = SentReplacer {
+                    state_param: state_param.clone(),
+                    replacement: Box::new(Expr::Ident(Ident::new_no_ctxt(
+                        "undefined".into(),
+                        DUMMY_SP,
+                    ))),
+                };
+                let mut s = stmt;
+                s.visit_mut_with(&mut replacer);
+                output.push((idx, s));
+            }
+        } else {
+            output.push((idx, stmt));
+        }
+    }
+
+    let mut recovered = StateMachineProgram::from_labeled_stmts(output, trys)
+        .with_catch_bindings(catch_bindings)
+        .with_index_loops(IndexLoopContinueMode::AdjacentBackEdge)
+        .recover_conditional_assignments()
+        .recover_conditional_branches(OpcodeReturnScan::SkipNestedFunctions)
+        .resolve_labeled_forward_jumps(
+            OpcodeReturnScan::SkipNestedFunctions,
+            ForwardJumpJoin::MidMachine,
+        )
+        .into_reconstructed_stmts_with_index_loops(IndexLoopContinueMode::AdjacentBackEdge);
+    fold_memoized_member_apply_calls(&mut recovered);
+    if stmts_contain_state_opcode_return(&recovered, OpcodeReturnScan::SkipNestedFunctions) {
+        return None;
+    }
+    Some(recovered)
+}
+
+/// If `stmt` is `ExprStmt(yield X)`, return `(X, delegate, yield_span)`.
+fn extract_yield_from_stmt(stmt: &Stmt) -> Option<(Box<Expr>, bool, Span)> {
+    if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
+        if let Expr::Yield(y) = expr.as_ref() {
+            let arg = y.arg.clone().unwrap_or_else(|| {
+                Box::new(Expr::Ident(Ident::new_no_ctxt(
+                    "undefined".into(),
+                    DUMMY_SP,
+                )))
+            });
+            return Some((arg, y.delegate, y.span));
+        }
+    }
+    None
+}
+
+fn split_sent_consuming_stmt(state_param: &Ident, stmt: &Stmt, prev: &Stmt) -> Option<Vec<Stmt>> {
+    let (arg, delegate, yield_span) = extract_yield_from_stmt(prev)?;
+    let stmt_span = stmt.span();
+    let yielded = Box::new(Expr::Yield(YieldExpr {
+        span: yield_span,
+        delegate,
+        arg: Some(arg),
+    }));
+
+    if let Some((left, followup)) = split_yield_arg_sent_assignment(state_param, stmt) {
+        return Some(vec![
+            assign_stmt(left, yielded, stmt_span),
+            Stmt::Expr(ExprStmt {
+                span: stmt_span,
+                expr: Box::new(Expr::Yield(YieldExpr {
+                    span: stmt_span,
+                    delegate: false,
+                    arg: Some(followup),
+                })),
+            }),
+        ]);
+    }
+
+    if let Some((left, returned)) = split_return_sent_assignment(state_param, stmt) {
+        return Some(vec![
+            assign_stmt(left, yielded, stmt_span),
+            Stmt::Return(swc_core::ecma::ast::ReturnStmt {
+                span: stmt_span,
+                arg: Some(returned),
+            }),
+        ]);
+    }
+
+    None
+}
+
+fn split_yield_arg_sent_assignment(
+    state_param: &Ident,
+    stmt: &Stmt,
+) -> Option<(AssignTarget, Box<Expr>)> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Yield(yield_expr) = expr.as_ref() else {
+        return None;
+    };
+    if yield_expr.delegate {
+        return None;
+    }
+    let arg = yield_expr.arg.as_deref()?;
+    let Expr::Call(call) = arg else {
+        return None;
+    };
+    let callee = call.callee.as_expr()?;
+    let Expr::Member(member) = callee.as_ref() else {
+        return None;
+    };
+    let Expr::Assign(assign) = strip_parens(&member.obj) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(left)) = &assign.left else {
+        return None;
+    };
+
+    let mut next_member: MemberExpr = member.clone();
+    next_member.obj = Box::new(Expr::Ident(left.id.clone()));
+    let mut next_call = call.clone();
+    next_call.callee = swc_core::ecma::ast::Callee::Expr(Box::new(Expr::Member(next_member)));
+
+    Some((assign.left.clone(), Box::new(Expr::Call(next_call))))
+}
+
+fn split_return_sent_assignment(
+    state_param: &Ident,
+    stmt: &Stmt,
+) -> Option<(AssignTarget, Box<Expr>)> {
+    let Stmt::Return(ret) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = ret.arg.as_deref()? else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(left)) = &assign.left else {
+        return None;
+    };
+    Some((assign.left.clone(), Box::new(Expr::Ident(left.id.clone()))))
+}
+
+fn assign_stmt(left: AssignTarget, right: Box<Expr>, span: Span) -> Stmt {
+    Stmt::Expr(ExprStmt {
+        span,
+        expr: Box::new(Expr::Assign(AssignExpr {
+            span,
+            op: AssignOp::Assign,
+            left,
+            right,
+        })),
+    })
+}
+
+fn is_sent_call(state_param: &Ident, expr: &Expr) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+    let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) else {
+        return false;
+    };
+    is_state_param_ref(&mem.obj, state_param) && is_ident_prop(&mem.prop, "sent")
+}
+
+/// Match `ident = _a.sent()` inside a catch region, returning the aliased
+/// local binding. TSC stores the caught value in a function-scoped temp before
+/// using it; we fold that temp into the reconstructed catch binding.
+fn catch_sent_alias(state_param: &Ident, stmt: &Stmt) -> Option<BindingKey> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = expr.as_ref() else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || !is_sent_call(state_param, &assign.right) {
+        return None;
+    }
+    let ident = assign.left.as_simple()?.as_ident()?;
+    Some(binding_key(&ident.id))
+}
+
+fn is_standalone_sent(state_param: &Ident, stmt: &Stmt) -> bool {
+    if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
+        if let Expr::Call(call) = expr.as_ref() {
+            if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
+                if is_state_param_ref(&mem.obj, state_param) && is_ident_prop(&mem.prop, "sent") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn numeric_case_test(case: &SwitchCase) -> Option<f64> {
+    let test = case.test.as_ref()?;
+    if let Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) = test.as_ref() {
+        Some(n.value)
+    } else {
+        None
+    }
+}
+
+fn next_numeric_case_label(cases: &[SwitchCase], current: usize) -> Option<usize> {
+    cases
+        .iter()
+        .filter_map(|case| numeric_case_test(case).map(|n| n as usize))
+        .filter(|label| *label > current)
+        .min()
+}
+
+fn extract_trys_push(state_param: &Ident, stmt: &Stmt) -> Option<[Option<usize>; 4]> {
+    // _a.trys.push([s, c, f, n])
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return None;
+    };
+    let Expr::Member(callee_mem) = &**call.callee.as_expr()? else {
+        return None;
+    };
+    let Expr::Member(outer_mem) = callee_mem.obj.as_ref() else {
+        return None;
+    };
+    let Expr::Ident(obj_id) = outer_mem.obj.as_ref() else {
+        return None;
+    };
+    if obj_id.sym != state_param.sym || obj_id.ctxt != state_param.ctxt {
+        return None;
+    }
+    if !is_ident_prop(&outer_mem.prop, "trys") {
+        return None;
+    }
+    if !is_ident_prop(&callee_mem.prop, "push") {
+        return None;
+    }
+    if call.args.len() != 1 {
+        return None;
+    }
+    let Expr::Array(arr) = call.args[0].expr.as_ref() else {
+        return None;
+    };
+    if arr.elems.len() != 4 {
+        return None;
+    }
+    let region: [Option<usize>; 4] = std::array::from_fn(|i| {
+        arr.elems[i].as_ref().and_then(|e| {
+            if let Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) = e.expr.as_ref() {
+                Some(n.value as usize)
+            } else {
+                None
+            }
+        })
+    });
+    Some(region)
+}
+
+fn is_try_region_exit(label: usize, target: usize, trys: &[[Option<usize>; 4]]) -> bool {
+    trys.iter().any(|region| {
+        let Some(start) = region[0] else {
+            return false;
+        };
+        let Some(end) = region[3].or(region[2]).or(region[1]) else {
+            return false;
+        };
+        if label < start || label >= end {
+            return false;
+        }
+        region[3].is_some_and(|next| target == next)
+            || region[2].is_some_and(|finally_start| target == finally_start)
+    })
+}
+
+fn is_state_label_assign(state_param: &Ident, stmt: &Stmt) -> bool {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return false;
+    };
+    let Expr::Assign(assign) = expr.as_ref() else {
+        return false;
+    };
+    let Some(left_expr) = assign.left.as_simple().and_then(|s| s.as_member()) else {
+        return false;
+    };
+    let Expr::Ident(id) = left_expr.obj.as_ref() else {
+        return false;
+    };
+    id.sym == state_param.sym
+        && id.ctxt == state_param.ctxt
+        && is_ident_prop(&left_expr.prop, "label")
+}
+
+/// Rewrites `return [2, value]` / `return [2]` nested inside a case
+/// statement's branches into plain returns. Nested functions keep their own
+/// returns.
+struct NestedValueReturnDecoder;
+
+impl VisitMut for NestedValueReturnDecoder {
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+
+    fn visit_mut_arrow_expr(&mut self, _: &mut swc_core::ecma::ast::ArrowExpr) {}
+
+    fn visit_mut_return_stmt(&mut self, ret: &mut swc_core::ecma::ast::ReturnStmt) {
+        let Some(Expr::Array(arr)) = ret.arg.as_deref() else {
+            return;
+        };
+        let is_return_opcode = arr
+            .elems
+            .first()
+            .and_then(|elem| elem.as_ref())
+            .is_some_and(|elem| matches!(elem.expr.as_ref(), Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) if n.value == 2.0));
+        if !is_return_opcode || arr.elems.len() > 2 {
+            return;
+        }
+        ret.arg = arr
+            .elems
+            .get(1)
+            .and_then(|elem| elem.as_ref())
+            .map(|elem| elem.expr.clone());
+    }
+}
+
+/// What a void `return [2]` decodes to: the machine's implicit end is
+/// dropped, an explicit early `return;` is kept.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VoidReturn {
+    Drop,
+    Keep,
+}
+
+/// Returns `Some(Some(stmt))` if an opcode-based return was decoded,
+/// `Some(None)` to drop the statement, or `None` if not a return opcode.
+fn decode_return_opcode(stmt: &Stmt, helpers: &AsyncHelperContext) -> Option<Option<Stmt>> {
+    decode_return_opcode_with_backedge(stmt, helpers, 0, None, &[], VoidReturn::Drop)
+}
+
+/// Like `decode_return_opcode`, but preserves non-fallthrough goto opcodes so
+/// shared state-machine recovery can reconstruct loops and structured branches.
+fn decode_return_opcode_with_backedge(
+    stmt: &Stmt,
+    helpers: &AsyncHelperContext,
+    current_case: usize,
+    next_case_label: Option<usize>,
+    trys: &[[Option<usize>; 4]],
+    void_return: VoidReturn,
+) -> Option<Option<Stmt>> {
+    let Stmt::Return(ret) = stmt else { return None };
+    let arg = ret.arg.as_ref()?;
+    let Expr::Array(arr) = arg.as_ref() else {
+        return None;
+    };
+    if arr.elems.is_empty() {
+        return None;
+    }
+    let opcode = match arr.elems[0].as_ref()?.expr.as_ref() {
+        Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) => n.value as u32,
+        _ => return None,
+    };
+    let argument = arr
+        .elems
+        .get(1)
+        .and_then(|e| e.as_ref())
+        .map(|e| e.expr.clone());
+
+    let ret_span = ret.span;
+
+    match opcode {
+        2 => {
+            // return(value?)
+            if argument.is_none() && void_return == VoidReturn::Drop {
+                return Some(None);
+            }
+            Some(Some(Stmt::Return(swc_core::ecma::ast::ReturnStmt {
+                span: ret_span,
+                arg: argument,
+            })))
+        }
+        3 => {
+            // goto(label) -- preserve back-edges for loop recovery and
+            // non-fallthrough forward jumps that mark if/else joins.
+            if let Some(target) = argument.as_deref().and_then(|e| {
+                if let Expr::Lit(swc_core::ecma::ast::Lit::Num(n)) = e {
+                    Some(n.value as usize)
+                } else {
+                    None
+                }
+            }) {
+                // A back-edge to label 0 is a loop whose head is the machine
+                // entry (`for (;;)` at the top of the function); dropping it
+                // would leave the body to run once.
+                if (target < current_case
+                    || (target > current_case && Some(target) != next_case_label))
+                    && !is_try_region_exit(current_case, target, trys)
+                {
+                    return Some(Some(stmt.clone()));
+                }
+            }
+            Some(None)
+        }
+        4 => {
+            // yield(value)
+            let expr = argument.unwrap_or_else(|| {
+                Box::new(Expr::Ident(Ident::new_no_ctxt(
+                    "undefined".into(),
+                    DUMMY_SP,
+                )))
+            });
+            Some(Some(Stmt::Expr(ExprStmt {
+                span: ret_span,
+                expr: Box::new(Expr::Yield(YieldExpr {
+                    span: ret_span,
+                    delegate: false,
+                    arg: Some(expr),
+                })),
+            })))
+        }
+        5 => {
+            // yield*(value)
+            let expr = argument
+                .map(|a| unwrap_ts_values(a, helpers))
+                .unwrap_or_else(|| {
+                    Box::new(Expr::Ident(Ident::new_no_ctxt(
+                        "undefined".into(),
+                        DUMMY_SP,
+                    )))
+                });
+            Some(Some(Stmt::Expr(ExprStmt {
+                span: ret_span,
+                expr: Box::new(Expr::Yield(YieldExpr {
+                    span: ret_span,
+                    delegate: true,
+                    arg: Some(expr),
+                })),
+            })))
+        }
+        0 | 1 | 6 | 7 => Some(None), // skip
+        _ => Some(Some(stmt.clone())),
+    }
+}
+
+fn unwrap_ts_values(expr: Box<Expr>, helpers: &AsyncHelperContext) -> Box<Expr> {
+    let Expr::Call(call) = expr.as_ref() else {
+        return expr;
+    };
+    if call.args.len() != 1 || call.args[0].spread.is_some() || helpers.with_statement_present {
+        return expr;
+    }
+    let Some(callee) = call.callee.as_expr() else {
+        return expr;
+    };
+    let lookup = match strip_parens(callee) {
+        Expr::Ident(id) => Some(id),
+        Expr::Member(member) => match strip_parens(&member.obj) {
+            Expr::Ident(id) => Some(id),
+            _ => None,
+        },
+        _ => None,
+    };
+    if lookup.is_some_and(|id| helpers.written_bindings.contains(&binding_key(id))) {
+        return expr;
+    }
+    let is_values_helper = helpers.matches_helper_call(
+        call,
+        &helpers.values_helpers,
+        &helpers.values_namespaces,
+        "__values",
+        TsHelperKind::Values,
+    ) || call.callee.as_expr().is_some_and(|callee| {
+        matches!(strip_parens(callee), Expr::Ident(id)
+            if id.sym.as_ref() == "_ts_values"
+                && helpers.unresolved_mark.is_some_and(|mark| id.ctxt.outer() == mark))
+    });
+    if is_values_helper {
+        return call.args[0].expr.clone();
+    }
+    expr
+}
+
+fn stmt_uses_sent(state_param: &Ident, stmt: &Stmt) -> bool {
+    struct Finder {
+        state_param: Ident,
+        found: bool,
+    }
+    impl swc_core::ecma::visit::Visit for Finder {
+        fn visit_function(&mut self, _func: &Function) {}
+
+        fn visit_arrow_expr(&mut self, _arrow: &ArrowExpr) {}
+
+        fn visit_call_expr(&mut self, call: &swc_core::ecma::ast::CallExpr) {
+            if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    self.found = true;
+                    return;
+                }
+            }
+            call.visit_children_with(self);
+        }
+    }
+    let mut f = Finder {
+        state_param: state_param.clone(),
+        found: false,
+    };
+    swc_core::ecma::visit::VisitWith::visit_with(stmt, &mut f);
+    f.found
+}
+
+struct SentReplacer {
+    state_param: Ident,
+    replacement: Box<Expr>,
+}
+
+impl VisitMut for SentReplacer {
+    fn visit_mut_function(&mut self, _func: &mut Function) {}
+
+    fn visit_mut_arrow_expr(&mut self, _arrow: &mut ArrowExpr) {}
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Expr::Call(call) = expr {
+            if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    *expr = *self.replacement.clone();
+                    return;
+                }
+            }
+        }
+        expr.visit_mut_children_with(self);
+    }
+}
+
+/// Replaces `_a.sent()` and any recorded catch-temp aliases with the catch
+/// binding inside a reconstructed catch body.
+struct CatchValueReplacer {
+    state_param: Ident,
+    aliases: Vec<BindingKey>,
+    replacement: Box<Expr>,
+}
+
+impl VisitMut for CatchValueReplacer {
+    fn visit_mut_function(&mut self, _func: &mut Function) {}
+
+    fn visit_mut_arrow_expr(&mut self, _arrow: &mut ArrowExpr) {}
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Expr::Call(call) = expr {
+            if let Some(mem) = call.callee.as_expr().and_then(|e| e.as_member()) {
+                if is_state_param_ref(&mem.obj, &self.state_param)
+                    && is_ident_prop(&mem.prop, "sent")
+                {
+                    *expr = *self.replacement.clone();
+                    return;
+                }
+            }
+        }
+        if let Expr::Ident(id) = expr {
+            if self
+                .aliases
+                .iter()
+                .any(|key| ident_matches_binding(id, key))
+            {
+                *expr = *self.replacement.clone();
+                return;
+            }
+        }
+        expr.visit_mut_children_with(self);
+    }
+}
+
+fn fold_memoized_member_apply_calls(stmts: &mut Vec<Stmt>) {
+    let mut folded = Vec::new();
+    let mut index = 0usize;
+
+    while index < stmts.len() {
+        if let Some((stmt, consumed)) = try_fold_memoized_member_apply_call(&stmts[index..]) {
+            folded.push(stmt);
+            index += consumed;
+        } else {
+            let mut stmt = stmts[index].clone();
+            fold_memoized_member_apply_calls_in_stmt(&mut stmt);
+            folded.push(stmt);
+            index += 1;
+        }
+    }
+
+    *stmts = folded;
+}
+
+fn fold_memoized_member_apply_calls_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::Block(block) => fold_memoized_member_apply_calls(&mut block.stmts),
+        Stmt::For(for_stmt) => {
+            if let Stmt::Block(block) = for_stmt.body.as_mut() {
+                fold_memoized_member_apply_calls(&mut block.stmts);
+            }
+        }
+        Stmt::Try(try_stmt) => {
+            fold_memoized_member_apply_calls(&mut try_stmt.block.stmts);
+            if let Some(handler) = &mut try_stmt.handler {
+                fold_memoized_member_apply_calls(&mut handler.body.stmts);
+            }
+            if let Some(finalizer) = &mut try_stmt.finalizer {
+                fold_memoized_member_apply_calls(&mut finalizer.stmts);
+            }
+        }
+        Stmt::If(if_stmt) => {
+            fold_memoized_member_apply_calls_in_stmt(&mut if_stmt.cons);
+            if let Some(alt) = &mut if_stmt.alt {
+                fold_memoized_member_apply_calls_in_stmt(alt);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn try_fold_memoized_member_apply_call(stmts: &[Stmt]) -> Option<(Stmt, usize)> {
+    let first = stmts.first()?;
+    let first_span = first.span();
+    let (method_key, member) = extract_memoized_member_assign(first)?;
+    let call = extract_bound_memoized_member_call(stmts.get(1)?, &method_key, &member)?;
+    let mut keys = vec![method_key];
+    keys.extend(memoized_member_temp_keys(&member));
+    if keys
+        .iter()
+        .any(|key| local_temp_read_before_reassign(&stmts[2..], key))
+    {
+        return None;
+    }
+
+    Some((
+        Stmt::Expr(ExprStmt {
+            span: first_span,
+            expr: Box::new(Expr::Call(call)),
+        }),
+        2,
+    ))
+}
+
+struct MemoizedMember {
+    receiver: Box<Expr>,
+    receiver_key: Option<BindingKey>,
+    prop: swc_core::ecma::ast::MemberProp,
+    member_span: Span,
+}
+
+fn extract_memoized_member_assign(stmt: &Stmt) -> Option<(BindingKey, MemoizedMember)> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = expr.as_ref() else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let method_ident = assign.left.as_simple()?.as_ident()?;
+    if !is_likely_generated_alias(&method_ident.id.sym) {
+        return None;
+    }
+    let Expr::Member(member) = assign.right.as_ref() else {
+        return None;
+    };
+    Some((
+        binding_key(&method_ident.id),
+        MemoizedMember {
+            receiver: memoized_member_receiver(&member.obj)?,
+            receiver_key: memoized_receiver_key(&member.obj),
+            prop: member.prop.clone(),
+            member_span: member.span,
+        },
+    ))
+}
+
+fn memoized_member_receiver(receiver: &Expr) -> Option<Box<Expr>> {
+    let receiver = strip_parens(receiver);
+    if let Expr::Assign(assign) = receiver {
+        if assign.op != AssignOp::Assign {
+            return None;
+        }
+        let left = assign.left.as_simple()?.as_ident()?;
+        if !is_likely_generated_alias(&left.id.sym) {
+            return None;
+        }
+        return Some(assign.right.clone());
+    }
+    Some(Box::new(receiver.clone()))
+}
+
+fn memoized_receiver_key(receiver: &Expr) -> Option<BindingKey> {
+    let Expr::Assign(assign) = strip_parens(receiver) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let left = assign.left.as_simple()?.as_ident()?;
+    Some(binding_key(&left.id))
+}
+
+fn extract_bound_memoized_member_call(
+    stmt: &Stmt,
+    method_key: &BindingKey,
+    member: &MemoizedMember,
+) -> Option<CallExpr> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return None;
+    };
+    let callee = call.callee.as_expr()?;
+    let Expr::Member(call_member) = callee.as_ref() else {
+        return None;
+    };
+    if local_temp_key(&call_member.obj).as_ref() != Some(method_key) {
+        return None;
+    }
+
+    if is_ident_prop(&call_member.prop, "call") {
+        return extract_bound_memoized_call(call, member);
+    }
+    if is_ident_prop(&call_member.prop, "apply") {
+        return extract_bound_memoized_apply(call, member);
+    }
+
+    None
+}
+
+fn extract_bound_memoized_call(call: &CallExpr, member: &MemoizedMember) -> Option<CallExpr> {
+    if call.args.is_empty() || !memoized_call_receiver_matches(&call.args[0].expr, member) {
+        return None;
+    }
+    let mut next = call.clone();
+    next.callee = memoized_call_callee(member);
+    next.args.remove(0);
+    Some(next)
+}
+
+fn extract_bound_memoized_apply(call: &CallExpr, member: &MemoizedMember) -> Option<CallExpr> {
+    if call.args.len() != 2
+        || call.args[0].spread.is_some()
+        || call.args[1].spread.is_some()
+        || !memoized_call_receiver_matches(&call.args[0].expr, member)
+    {
+        return None;
+    }
+    let mut next = call.clone();
+    next.callee = memoized_call_callee(member);
+    next.args = args_from_apply_arg(call.args[1].expr.clone());
+    Some(next)
+}
+
+fn memoized_call_callee(member: &MemoizedMember) -> Callee {
+    Callee::Expr(Box::new(Expr::Member(MemberExpr {
+        span: member.member_span,
+        obj: member.receiver.clone(),
+        prop: member.prop.clone(),
+    })))
+}
+
+fn memoized_call_receiver_matches(receiver_arg: &Expr, member: &MemoizedMember) -> bool {
+    if let Some(receiver_key) = &member.receiver_key {
+        local_temp_key(receiver_arg).as_ref() == Some(receiver_key)
+    } else {
+        direct_memoized_receiver_matches(receiver_arg, &member.receiver)
+    }
+}
+
+fn direct_memoized_receiver_matches(receiver_arg: &Expr, receiver: &Expr) -> bool {
+    match (strip_parens(receiver_arg), strip_parens(receiver)) {
+        (Expr::Ident(left), Expr::Ident(right)) => left.sym == right.sym && left.ctxt == right.ctxt,
+        (Expr::This(_), Expr::This(_)) => true,
+        _ => false,
+    }
+}
+
+fn args_from_apply_arg(arg: Box<Expr>) -> Vec<ExprOrSpread> {
+    match *arg {
+        Expr::Array(array) if array.elems.iter().all(Option::is_some) => {
+            array.elems.into_iter().flatten().collect()
+        }
+        expr => vec![ExprOrSpread {
+            spread: Some(DUMMY_SP),
+            expr: Box::new(expr),
+        }],
+    }
+}
+
+fn memoized_member_temp_keys(member: &MemoizedMember) -> Vec<BindingKey> {
+    let mut keys = Vec::new();
+    if let Some(receiver_key) = &member.receiver_key {
+        keys.push(receiver_key.clone());
+    }
+    keys
+}
+
+fn local_temp_key(expr: &Expr) -> Option<BindingKey> {
+    let Expr::Ident(id) = strip_parens(expr) else {
+        return None;
+    };
+    Some(binding_key(id))
+}
+
+fn local_temp_read_before_reassign(stmts: &[Stmt], key: &BindingKey) -> bool {
+    for stmt in stmts {
+        if let Some(rhs) = direct_local_temp_reassign_rhs(stmt, key) {
+            return expr_reads_local_temp(rhs, key);
+        }
+        if stmt_reads_local_temp(stmt, key) {
+            return true;
+        }
+    }
+    false
+}
+
+fn direct_local_temp_reassign_rhs<'a>(stmt: &'a Stmt, key: &BindingKey) -> Option<&'a Expr> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = expr.as_ref() else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || !assign_target_matches_local_temp(&assign.left, key) {
+        return None;
+    }
+    Some(&assign.right)
+}
+
+fn stmt_reads_local_temp(stmt: &Stmt, key: &BindingKey) -> bool {
+    let mut finder = LocalTempReadFinder { key, found: false };
+    stmt.visit_with(&mut finder);
+    finder.found
+}
+
+fn expr_reads_local_temp(expr: &Expr, key: &BindingKey) -> bool {
+    let mut finder = LocalTempReadFinder { key, found: false };
+    expr.visit_with(&mut finder);
+    finder.found
+}
+
+struct LocalTempReadFinder<'a> {
+    key: &'a BindingKey,
+    found: bool,
+}
+
+impl Visit for LocalTempReadFinder<'_> {
+    fn visit_var_declarator(&mut self, decl: &VarDeclarator) {
+        if let Some(init) = &decl.init {
+            init.visit_with(self);
+        }
+    }
+
+    fn visit_assign_expr(&mut self, assign: &AssignExpr) {
+        if !assign_target_matches_local_temp(&assign.left, self.key) {
+            assign.left.visit_with(self);
+        }
+        assign.right.visit_with(self);
+    }
+
+    fn visit_ident(&mut self, ident: &Ident) {
+        if ident.sym == self.key.0 && ident.ctxt == self.key.1 {
+            self.found = true;
+        }
+    }
+}
+
+fn assign_target_matches_local_temp(target: &AssignTarget, key: &BindingKey) -> bool {
+    matches!(
+        target,
+        AssignTarget::Simple(SimpleAssignTarget::Ident(binding))
+            if binding.id.sym == key.0 && binding.id.ctxt == key.1
+    )
+}
+
+// ============================================================
+// __awaiter wrapper -> async function
+// ============================================================
+
+fn try_transform_awaiter(
+    body: &mut FunctionBody,
+    helpers: &AsyncHelperContext,
+    reserved_names: &HashSet<Atom>,
+) -> Option<Vec<Stmt>> {
+    // Find: return __awaiter(this, void0, void0, function*() { ... })
+    let return_idx = body
+        .stmts
+        .iter()
+        .position(|stmt| is_awaiter_return(stmt, helpers))?;
+
+    let mut inner_stmts = extract_awaiter_body(body.stmts[return_idx].clone(), helpers)?;
+    let moved_ids = moved_function_scope_binding_ids(&inner_stmts);
+    if !hygienically_move_callback_locals(
+        &mut inner_stmts,
+        &moved_ids,
+        &body.stmts,
+        return_idx,
+        reserved_names,
+    ) {
+        return None;
+    }
+    // Keep the original body only once a valid awaiter extraction is known to
+    // mutate it. Post-transform validation can still require a full rollback.
+    let saved_stmts = body.stmts.clone();
+    body.stmts.remove(return_idx);
+
+    // Replace yield with await in the extracted statements
+    replace_yield_with_await(&mut inner_stmts);
+
+    // Splice the inner statements in place of the return
+    body.stmts.splice(return_idx..return_idx, inner_stmts);
+    Some(saved_stmts)
+}
+
+/// Bindings whose scope changes when the awaiter callback body is spliced
+/// into its containing function. Function-scoped `var` declarations are
+/// collected through nested blocks, while top-level lexical/function/class
+/// declarations are collected directly. Nested callable and class scopes stay
+/// intact and are not part of the move.
+fn moved_function_scope_binding_ids(stmts: &[Stmt]) -> HashSet<BindingId> {
+    let mut ids = HashSet::default();
+    for stmt in stmts {
+        if let Stmt::Decl(decl) = stmt {
+            collect_decl_binding_ids(decl, &mut ids);
+        }
+    }
+
+    struct FunctionVarIdCollector<'a> {
+        ids: &'a mut HashSet<BindingId>,
+    }
+
+    impl Visit for FunctionVarIdCollector<'_> {
+        fn visit_var_decl(&mut self, var: &VarDecl) {
+            if var.kind == VarDeclKind::Var {
+                collect_var_decl_binding_ids(var, self.ids);
+            }
+        }
+
+        fn visit_function(&mut self, _function: &Function) {}
+
+        fn visit_arrow_expr(&mut self, _arrow: &ArrowExpr) {}
+
+        fn visit_class(&mut self, _class: &swc_core::ecma::ast::Class) {}
+    }
+
+    let mut collector = FunctionVarIdCollector { ids: &mut ids };
+    for stmt in stmts {
+        stmt.visit_with(&mut collector);
+    }
+    ids
+}
+
+fn is_awaiter_return(stmt: &Stmt, helpers: &AsyncHelperContext) -> bool {
+    let Stmt::Return(ret) = stmt else {
+        return false;
+    };
+    let Some(arg) = &ret.arg else { return false };
+    let Expr::Call(call) = arg.as_ref() else {
+        return false;
+    };
+    helpers.is_awaiter_call(call)
+}
+
+fn extract_awaiter_body(stmt: Stmt, helpers: &AsyncHelperContext) -> Option<Vec<Stmt>> {
+    let Stmt::Return(ret) = stmt else { return None };
+    let arg = *ret.arg?;
+    let Expr::Call(mut call) = arg else {
+        return None;
+    };
+    if !helpers.is_awaiter_call(&call) {
+        return None;
+    }
+    if !awaiter_call_has_canonical_frame(&call, helpers) {
+        return None;
+    }
+    let this_arg = classify_awaiter_this_arg(&call.args[0].expr, helpers);
+    let arguments_slot = classify_awaiter_arguments_arg(&call.args[1].expr);
+
+    let gen_fn_arg = *call.args.remove(3).expr;
+    let Expr::Fn(fn_expr) = gen_fn_arg else {
+        return None;
+    };
+    // tsc's generator is always parameterless; a parameterized generator
+    // receives the applied arguments array, which unwrapping discards.
+    if !fn_expr.function.params.is_empty() {
+        return None;
+    }
+    let body = fn_expr.function.body?;
+    let mut stmts = body.stmts;
+    if !arguments_slot_survives_splice(arguments_slot, &stmts, AwaiterSplice::EnclosingFunction) {
+        return None;
+    }
+    apply_awaiter_this_arg(&mut stmts, this_arg, AwaiterSplice::EnclosingFunction)?;
+    Some(stmts)
+}
+
+/// Canonical tsc `__awaiter` call frame: exactly four arguments
+/// (`thisArg, _arguments, PromiseCtor, generator`), no spread, and
+/// side-effect-free operands in the dropped slots. Anything else is not
+/// recognized tsc output: an extra argument would be silently discarded, a
+/// side-effecting operand would be deleted, and a custom Promise constructor
+/// in the third slot would change the returned promise's identity under a
+/// native-`async` rewrite. Mirrors the esbuild `__async` frame gate in
+/// `un_regenerator.rs`.
+fn awaiter_call_has_canonical_frame(call: &CallExpr, helpers: &AsyncHelperContext) -> bool {
+    if call.args.len() != 4 || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return false;
+    }
+    is_awaiter_arguments_arg(&call.args[1].expr, helpers)
+        && is_awaiter_promise_arg(&call.args[2].expr, helpers)
+}
+
+/// `void <literal>` — the only `void` shape tsc emits in the awaiter frame.
+fn is_void_literal(expr: &Expr) -> bool {
+    match strip_parens(expr) {
+        Expr::Unary(unary) if unary.op == UnaryOp::Void => {
+            matches!(strip_parens(&unary.arg), Expr::Lit(_))
+        }
+        _ => false,
+    }
+}
+
+/// The arguments slot: tsc emits exactly `arguments` or `void 0`, and
+/// RemoveVoid has already rewritten `void 0` to the unresolved `undefined` by
+/// the time this rule runs. Any other identifier is not canonical — a real
+/// array here is applied to the generator's parameters, which unwrapping
+/// discards, and an undeclared name would even lose its ReferenceError.
+/// Both canonical names must carry the resolver mark: the implicit
+/// `arguments` object is unresolved, while a (sloppy-mode) binding of that
+/// name is a real array. Without a mark nothing is proven, so it fails closed.
+fn is_awaiter_arguments_arg(expr: &Expr, helpers: &AsyncHelperContext) -> bool {
+    match strip_parens(expr) {
+        Expr::Ident(id) if matches!(id.sym.as_ref(), "arguments" | "undefined") => {
+            !helpers.with_statement_present
+                && helpers
+                    .unresolved_mark
+                    .is_some_and(|mark| id.ctxt.outer() == mark)
+        }
+        expr => is_void_literal(expr),
+    }
+}
+
+/// Where the generator body ends up after unwrapping. The two destinations
+/// give the body different `this` and `arguments` bindings, so the canonical
+/// frame slots are compatible with different body contents in each.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AwaiterSplice {
+    /// `return __awaiter(...)` — the body is spliced into the enclosing
+    /// function, whose `this` and `arguments` it then shares.
+    EnclosingFunction,
+    /// Expression-position `__awaiter(...)` — the body becomes a new
+    /// `(async function () {...})()`, called with no receiver and no
+    /// arguments. No top-level exception: a module's `this` is `undefined`
+    /// like the IIFE's, but wakaru preserves the script goal, and a strict
+    /// script's top-level `this` is the global object.
+    NewFunction,
+}
+
+/// The already-validated arguments slot, classified by what the generator
+/// body observed as `arguments` before unwrapping.
+#[derive(Clone, Copy)]
+enum AwaiterArgumentsArg {
+    /// `arguments` — the enclosing function's arguments object.
+    EnclosingArguments,
+    /// `void 0` / `undefined` — the helper applies an empty list.
+    Empty,
+}
+
+fn classify_awaiter_arguments_arg(expr: &Expr) -> AwaiterArgumentsArg {
+    match strip_parens(expr) {
+        Expr::Ident(id) if id.sym.as_ref() == "arguments" => {
+            AwaiterArgumentsArg::EnclosingArguments
+        }
+        _ => AwaiterArgumentsArg::Empty,
+    }
+}
+
+/// A body that reads `arguments` keeps its meaning only when the destination
+/// binds `arguments` to the same value the helper applied: the enclosing
+/// function's arguments when splicing there, an empty list inside a fresh
+/// IIFE. tsc never emits the mismatching pairs; anything else preserves the
+/// wrapper.
+fn arguments_slot_survives_splice(
+    slot: AwaiterArgumentsArg,
+    stmts: &[Stmt],
+    splice: AwaiterSplice,
+) -> bool {
+    let compatible = matches!(
+        (slot, splice),
+        (
+            AwaiterArgumentsArg::EnclosingArguments,
+            AwaiterSplice::EnclosingFunction
+        ) | (AwaiterArgumentsArg::Empty, AwaiterSplice::NewFunction)
+    );
+    compatible || !stmts_read_lexical_arguments(stmts)
+}
+
+/// The Promise-constructor slot: only shapes that mean "use the native
+/// Promise" are accepted — `void <literal>`, the unresolved global
+/// `undefined`, or the unresolved global `Promise`. Anything else is a custom
+/// constructor whose promise identity a native-`async` rewrite would change.
+/// Without a resolver mark the names cannot be proven global, so they fail
+/// closed; both entry points supply the mark.
+fn is_awaiter_promise_arg(expr: &Expr, helpers: &AsyncHelperContext) -> bool {
+    if is_void_literal(expr) {
+        return true;
+    }
+    match strip_parens(expr) {
+        Expr::Ident(id) if matches!(id.sym.as_ref(), "undefined" | "Promise") => {
+            !helpers.with_statement_present
+                && helpers
+                    .unresolved_mark
+                    .is_some_and(|mark| id.ctxt.outer() == mark)
+        }
+        _ => false,
+    }
+}
+
+/// The state machine's `this` is the awaiter's first argument. Unwrapping the
+/// wrapper splices the body into the enclosing function, which rebinds `this`,
+/// so anything other than the enclosing `this` must be accounted for.
+enum AwaiterThisArg {
+    /// `this` — the enclosing function's receiver.
+    EnclosingThis,
+    /// `void 0` / `undefined` — the helper applies no receiver (`undefined`
+    /// in strict code, the global object in sloppy code).
+    Undefined,
+    /// A captured alias such as tsc's `var _this = this`; body-level `this`
+    /// references are rewritten to it.
+    Alias(Ident),
+    /// Any other expression would need re-evaluating per `this` reference;
+    /// the wrapper is preserved.
+    Unsupported,
+}
+
+fn classify_awaiter_this_arg(expr: &Expr, helpers: &AsyncHelperContext) -> AwaiterThisArg {
+    let unresolved_mark = helpers.unresolved_mark;
+    // Under a `with` statement no identifier is trustworthy (see
+    // `with_statement_present`); only `this` and `void <literal>` remain.
+    if helpers.with_statement_present && matches!(strip_parens(expr), Expr::Ident(_)) {
+        return AwaiterThisArg::Unsupported;
+    }
+    match strip_parens(expr) {
+        Expr::This(_) => AwaiterThisArg::EnclosingThis,
+        // Only `void <literal>`: `void probe()` would delete the side effect.
+        Expr::Unary(unary) if unary.op == UnaryOp::Void => {
+            if matches!(strip_parens(&unary.arg), Expr::Lit(_)) {
+                AwaiterThisArg::Undefined
+            } else {
+                AwaiterThisArg::Unsupported
+            }
+        }
+        // Only the genuine global `undefined` means "no thisArg"; a local
+        // binding named `undefined` carries a value and is treated as an
+        // ordinary alias below. Without a mark, fail closed.
+        Expr::Ident(id)
+            if id.sym.as_ref() == "undefined"
+                && unresolved_mark.is_some_and(|mark| id.ctxt.outer() == mark) =>
+        {
+            AwaiterThisArg::Undefined
+        }
+        // The alias path is for resolver-proven local bindings (tsc's
+        // `var _this = this`). An unresolved name would throw ReferenceError
+        // when evaluated; if the body never reads `this`, unwrapping would
+        // delete that throw entirely. Without a mark nothing is proven, so
+        // fail closed. A written alias is rejected too: the helper reads it
+        // once at call time, while the spliced body would read it live.
+        Expr::Ident(id) => {
+            let proven_local = unresolved_mark.is_some_and(|mark| id.ctxt.outer() != mark);
+            if proven_local && !helpers.written_bindings.contains(&binding_id(id)) {
+                AwaiterThisArg::Alias(id.clone())
+            } else {
+                AwaiterThisArg::Unsupported
+            }
+        }
+        _ => AwaiterThisArg::Unsupported,
+    }
+}
+
+/// Returns `None` when the thisArg cannot be represented after unwrapping.
+///
+/// `this` and `void 0` are each compatible with exactly one destination when
+/// the body reads `this`: splicing into the enclosing function keeps `this`
+/// for a `this` thisArg, while a fresh IIFE (called with no receiver)
+/// reproduces `void 0`. The mismatching pairs change what `this` evaluates
+/// to, so they preserve the wrapper unless the body never reads `this`.
+fn apply_awaiter_this_arg(
+    stmts: &mut [Stmt],
+    this_arg: AwaiterThisArg,
+    splice: AwaiterSplice,
+) -> Option<()> {
+    match this_arg {
+        AwaiterThisArg::EnclosingThis => (splice == AwaiterSplice::EnclosingFunction
+            || !stmts_read_lexical_this(stmts))
+        .then_some(()),
+        AwaiterThisArg::Undefined => {
+            (splice == AwaiterSplice::NewFunction || !stmts_read_lexical_this(stmts)).then_some(())
+        }
+        AwaiterThisArg::Unsupported => None,
+        AwaiterThisArg::Alias(alias) => {
+            if stmts_declare_name(stmts, &alias.sym) {
+                return None;
+            }
+            let mut replacer = ThisToAlias { alias };
+            for stmt in stmts.iter_mut() {
+                stmt.visit_mut_with(&mut replacer);
+            }
+            Some(())
+        }
+    }
+}
+
+/// Conservatively detect any binding of `name` anywhere in `stmts` (including
+/// scopes the `this` rewrite never reaches); a shadowed alias would be
+/// captured by the inner binding once printed.
+fn stmts_declare_name(stmts: &[Stmt], name: &Atom) -> bool {
+    struct BindingNameFinder<'a> {
+        name: &'a Atom,
+        found: bool,
+    }
+    impl Visit for BindingNameFinder<'_> {
+        fn visit_pat(&mut self, pat: &Pat) {
+            if let Pat::Ident(binding) = pat {
+                self.found |= binding.id.sym == *self.name;
+            }
+            pat.visit_children_with(self);
+        }
+
+        fn visit_fn_expr(&mut self, fn_expr: &swc_core::ecma::ast::FnExpr) {
+            self.found |= fn_expr
+                .ident
+                .as_ref()
+                .is_some_and(|ident| ident.sym == *self.name);
+            fn_expr.visit_children_with(self);
+        }
+
+        fn visit_fn_decl(&mut self, fn_decl: &swc_core::ecma::ast::FnDecl) {
+            self.found |= fn_decl.ident.sym == *self.name;
+            fn_decl.visit_children_with(self);
+        }
+    }
+    let mut finder = BindingNameFinder { name, found: false };
+    for stmt in stmts {
+        stmt.visit_with(&mut finder);
+    }
+    finder.found
+}
+
+struct ThisToAlias {
+    alias: Ident,
+}
+
+impl VisitMut for ThisToAlias {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if matches!(expr, Expr::This(_)) {
+            *expr = Expr::Ident(self.alias.clone());
+            return;
+        }
+        expr.visit_mut_children_with(self);
+    }
+
+    // `this` is lexical only through arrows; anything with its own `this`
+    // binding keeps its references untouched. Inside a class that means
+    // method/constructor bodies, field initializers, and static blocks — but
+    // the `extends` expression and computed keys evaluate in the enclosing
+    // scope and are rewritten.
+    fn visit_mut_function(&mut self, _func: &mut Function) {}
+
+    fn visit_mut_constructor(&mut self, _ctor: &mut Constructor) {}
+
+    fn visit_mut_static_block(&mut self, _block: &mut StaticBlock) {}
+
+    fn visit_mut_class_prop(&mut self, prop: &mut ClassProp) {
+        prop.key.visit_mut_with(self);
+    }
+
+    fn visit_mut_private_prop(&mut self, _prop: &mut PrivateProp) {}
+
+    fn visit_mut_auto_accessor(&mut self, accessor: &mut AutoAccessor) {
+        accessor.key.visit_mut_with(self);
+    }
+}
+
+/// Whether the statements read the lexical `this` — through arrows, class
+/// `extends` expressions, and computed keys, but not inside anything with its
+/// own `this` binding.
+fn stmts_read_lexical_this(stmts: &[Stmt]) -> bool {
+    struct Finder(bool);
+    impl Visit for Finder {
+        fn visit_this_expr(&mut self, _: &ThisExpr) {
+            self.0 = true;
+        }
+        fn visit_function(&mut self, _: &Function) {}
+        fn visit_constructor(&mut self, _: &Constructor) {}
+        fn visit_static_block(&mut self, _: &StaticBlock) {}
+        fn visit_class_prop(&mut self, prop: &ClassProp) {
+            prop.key.visit_with(self);
+        }
+        fn visit_private_prop(&mut self, _: &PrivateProp) {}
+        fn visit_auto_accessor(&mut self, accessor: &AutoAccessor) {
+            accessor.key.visit_with(self);
+        }
+    }
+    let mut finder = Finder(false);
+    for stmt in stmts {
+        stmt.visit_with(&mut finder);
+    }
+    finder.0
+}
+
+/// Whether the statements read the lexical `arguments` object — through
+/// arrows, but not inside functions with their own `arguments` binding.
+fn stmts_read_lexical_arguments(stmts: &[Stmt]) -> bool {
+    struct Finder(bool);
+    impl Visit for Finder {
+        fn visit_ident(&mut self, id: &Ident) {
+            self.0 |= id.sym.as_ref() == "arguments";
+        }
+        fn visit_function(&mut self, _: &Function) {}
+        fn visit_constructor(&mut self, _: &Constructor) {}
+        fn visit_static_block(&mut self, _: &StaticBlock) {}
+    }
+    let mut finder = Finder(false);
+    for stmt in stmts {
+        stmt.visit_with(&mut finder);
+    }
+    finder.0
+}
+
+/// Transform a standalone `__awaiter(this, void0, void0, function*() {...})`
+/// expression into `(async function() {...})()`. Handles the IIFE pattern where
+/// `__awaiter(...)` appears at expression level rather than inside a function body.
+fn try_transform_awaiter_iife(expr: &mut Expr, helpers: &AsyncHelperContext) {
+    let splice = AwaiterSplice::NewFunction;
+    let original_span = expr.span();
+    let Expr::Call(call) = expr else { return };
+    if !helpers.is_awaiter_call(call) || !awaiter_call_has_canonical_frame(call, helpers) {
+        return;
+    }
+    let Expr::Fn(fn_expr) = call.args[3].expr.as_ref() else {
+        return;
+    };
+    if !fn_expr.function.params.is_empty() {
+        return;
+    }
+    let Some(body) = &fn_expr.function.body else {
+        return;
+    };
+    if contains_unresolved_generator_wrapper(body, helpers) {
+        return;
+    }
+    let this_arg = classify_awaiter_this_arg(&call.args[0].expr, helpers);
+    let arguments_slot = classify_awaiter_arguments_arg(&call.args[1].expr);
+    let fn_span = fn_expr.function.span;
+
+    let mut stmts = body.stmts.clone();
+    if !arguments_slot_survives_splice(arguments_slot, &stmts, splice) {
+        return;
+    }
+    if apply_awaiter_this_arg(&mut stmts, this_arg, splice).is_none() {
+        return;
+    }
+    replace_yield_with_await(&mut stmts);
+
+    let async_fn = Expr::Fn(swc_core::ecma::ast::FnExpr {
+        ident: None,
+        function: Box::new(Function {
+            params: vec![],
+            decorators: vec![],
+            span: fn_span,
+            ctxt: Default::default(),
+            this_param: None,
+            body: Some(FunctionBody {
+                span: DUMMY_SP,
+                stmts,
+            }),
+            is_generator: false,
+            is_async: true,
+            type_params: None,
+            return_type: None,
+        }),
+    });
+    *expr = Expr::Call(swc_core::ecma::ast::CallExpr {
+        span: original_span,
+        ctxt: Default::default(),
+        callee: swc_core::ecma::ast::Callee::Expr(Box::new(Expr::Paren(
+            swc_core::ecma::ast::ParenExpr {
+                span: original_span,
+                expr: Box::new(async_fn),
+            },
+        ))),
+        args: vec![],
+        type_args: None,
+    });
+}
+
+fn replace_yield_with_await(stmts: &mut Vec<Stmt>) {
+    struct YieldToAwait;
+    impl VisitMut for YieldToAwait {
+        fn visit_mut_function(&mut self, _func: &mut Function) {}
+
+        fn visit_mut_arrow_expr(&mut self, _arrow: &mut ArrowExpr) {}
+
+        fn visit_mut_expr(&mut self, expr: &mut Expr) {
+            if let Expr::Yield(y) = expr {
+                let yield_span = y.span;
+                let arg = y.arg.take().unwrap_or_else(|| {
+                    Box::new(Expr::Ident(Ident::new_no_ctxt(
+                        "undefined".into(),
+                        DUMMY_SP,
+                    )))
+                });
+                *expr = Expr::Await(AwaitExpr {
+                    span: yield_span,
+                    arg,
+                });
+                expr.visit_mut_children_with(self);
+                return;
+            }
+            expr.visit_mut_children_with(self);
+        }
+    }
+    let mut v = YieldToAwait;
+    for s in stmts.iter_mut() {
+        s.visit_mut_with(&mut v);
+    }
+}
+
+fn remove_unused_inline_async_helpers(
+    module: &mut swc_core::ecma::ast::Module,
+    local_helpers: &LocalHelperContext,
+) {
+    local_helpers.remove_unused_inline_ts_helpers(
+        module,
+        &[
+            TsHelperKind::Awaiter,
+            TsHelperKind::Generator,
+            TsHelperKind::Values,
+        ],
+    );
+}
+
+fn collect_awaiter_param_hints(
+    func: &Function,
+    helpers: &AsyncHelperContext,
+) -> HashMap<BindingId, Atom> {
+    let Some(body) = &func.body else {
+        return HashMap::default();
+    };
+    if !body
+        .stmts
+        .iter()
+        .any(|stmt| is_awaiter_return(stmt, helpers))
+    {
+        return HashMap::default();
+    }
+
+    let param_ids: HashSet<BindingId> = func
+        .params
+        .iter()
+        .filter_map(|param| match &param.pat {
+            Pat::Ident(binding) if is_likely_generated_alias(&binding.id.sym) => {
+                Some((binding.id.sym.clone(), binding.id.ctxt))
+            }
+            _ => None,
+        })
+        .collect();
+    if param_ids.is_empty() {
+        return HashMap::default();
+    }
+
+    #[derive(Default)]
+    struct Collector {
+        param_ids: HashSet<BindingId>,
+        targets: HashMap<BindingId, HashSet<Atom>>,
+    }
+
+    impl Visit for Collector {
+        fn visit_prop(&mut self, prop: &Prop) {
+            if let Prop::KeyValue(kv) = prop {
+                if let Expr::Ident(value) = kv.value.as_ref() {
+                    let bid = (value.sym.clone(), value.ctxt);
+                    if self.param_ids.contains(&bid) {
+                        if let Some(target) = key_as_param_hint(&kv.key) {
+                            self.targets.entry(bid).or_default().insert(target);
+                        }
+                    }
+                }
+            }
+            prop.visit_children_with(self);
+        }
+    }
+
+    let mut collector = Collector {
+        param_ids,
+        targets: HashMap::default(),
+    };
+    body.visit_with(&mut collector);
+
+    collector
+        .targets
+        .into_iter()
+        .filter_map(|(bid, targets)| {
+            if targets.len() == 1 {
+                Some((bid, targets.into_iter().next().unwrap()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn apply_unused_param_hints(func: &mut Function, hints: HashMap<BindingId, Atom>) {
+    if hints.is_empty() {
+        return;
+    }
+    let Some(body) = &func.body else { return };
+
+    struct UseCollector {
+        uses: HashSet<BindingId>,
+    }
+
+    impl Visit for UseCollector {
+        fn visit_ident(&mut self, ident: &Ident) {
+            self.uses.insert((ident.sym.clone(), ident.ctxt));
+        }
+
+        fn visit_pat(&mut self, pat: &Pat) {
+            match pat {
+                Pat::Array(array) => {
+                    for elem in array.elems.iter().flatten() {
+                        self.visit_pat(elem);
+                    }
+                }
+                Pat::Object(object) => {
+                    for prop in &object.props {
+                        match prop {
+                            swc_core::ecma::ast::ObjectPatProp::KeyValue(kv) => {
+                                if let PropName::Computed(computed) = &kv.key {
+                                    computed.expr.visit_with(self);
+                                }
+                                self.visit_pat(&kv.value);
+                            }
+                            swc_core::ecma::ast::ObjectPatProp::Assign(assign) => {
+                                if let Some(default) = &assign.value {
+                                    default.visit_with(self);
+                                }
+                            }
+                            swc_core::ecma::ast::ObjectPatProp::Rest(rest) => {
+                                self.visit_pat(&rest.arg);
+                            }
+                        }
+                    }
+                }
+                Pat::Assign(assign) => {
+                    self.visit_pat(&assign.left);
+                    assign.right.visit_with(self);
+                }
+                Pat::Rest(rest) => self.visit_pat(&rest.arg),
+                Pat::Expr(expr) => expr.visit_with(self),
+                Pat::Ident(_) | Pat::Invalid(_) => {}
+            }
+        }
+
+        fn visit_prop_name(&mut self, name: &PropName) {
+            if let PropName::Computed(computed) = name {
+                computed.expr.visit_with(self);
+            }
+        }
+    }
+
+    let mut collector = UseCollector {
+        uses: HashSet::default(),
+    };
+    for param in &func.params {
+        collector.visit_pat(&param.pat);
+    }
+    body.visit_with(&mut collector);
+
+    let mut reserved_param_names: HashSet<Atom> = func
+        .params
+        .iter()
+        .filter_map(|param| match &param.pat {
+            Pat::Ident(binding) => Some(binding.id.sym.clone()),
+            _ => None,
+        })
+        .collect();
+
+    for param in &mut func.params {
+        let Pat::Ident(binding) = &mut param.pat else {
+            continue;
+        };
+        let bid = (binding.id.sym.clone(), binding.id.ctxt);
+        if collector.uses.contains(&bid) {
+            continue;
+        }
+        let Some(target) = hints.get(&bid) else {
+            continue;
+        };
+        if !is_valid_param_hint(target.as_ref()) || reserved_param_names.contains(target) {
+            continue;
+        }
+        reserved_param_names.remove(&binding.id.sym);
+        binding.id.sym = target.clone();
+        reserved_param_names.insert(target.clone());
+    }
+}
+
+fn key_as_param_hint(key: &PropName) -> Option<Atom> {
+    let raw = match key {
+        PropName::Ident(ident) => ident.sym.as_ref(),
+        PropName::Str(str_) => str_.value.as_str()?,
+        _ => return None,
+    };
+    if is_valid_param_hint(raw) {
+        Some(raw.into())
+    } else {
+        None
+    }
+}
+
+fn is_valid_param_hint(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    if !chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()) {
+        return false;
+    }
+    !matches!(
+        value,
+        "arguments"
+            | "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "eval"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "let"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+    )
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+/// The state callback's parameter by resolver identity: a nested function
+/// whose parameter shares the spelling is a different binding.
+fn is_state_param_ref(expr: &Expr, state_param: &Ident) -> bool {
+    matches!(expr, Expr::Ident(id) if id.sym == state_param.sym && id.ctxt == state_param.ctxt)
+}
+
+fn is_ident_prop(prop: &swc_core::ecma::ast::MemberProp, name: &str) -> bool {
+    matches!(prop, swc_core::ecma::ast::MemberProp::Ident(n) if n.sym.as_str() == name)
+}

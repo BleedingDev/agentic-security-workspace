@@ -1,0 +1,1045 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "esbuild-minify",
+    "version": "0.23.1",
+    "configHash": "5cc7678984b5d2f567c58fa41b6aef47740bd1d8d00a72443d6b759eeeaf1a6f"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "default"
+    ],
+    "paths": [
+      "test/language/expressions/coalesce",
+      "test/language/expressions/optional-chaining",
+      "test/language/expressions/object",
+      "test/language/expressions/array",
+      "test/language/statements/for-of",
+      "test/language/statements/let"
+    ]
+  },
+  "totals": {
+    "discovered": 2180,
+    "runnable": 2180,
+    "skipped": 0,
+    "unsupported": 5,
+    "rejected": 120,
+    "passed": 2055,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-null.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-undefined.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/object/__proto__-permitted-dup-shorthand.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "d6e9d31a2797ded5c48a2d5f10c3e4e20c53fd22139437b6e79ac9265e7a3ee3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«[object Object]», «2») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/cpn-obj-lit-computed-property-name-from-await-expression.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject-top-level-await",
+      "fingerprint": "681af4bb9c87170f5c5e472c50889db0a19e72ceff7ce275c7dd93296cae6d1d",
+      "summary": "Error: Transform failed with 3 errors:\n<stdin>:29:3: ERROR: Top-level await is not available in the configured target environment (\"es2020\")\n<stdin>:33:4: ERROR: Top-level await is not available in the configured target environment (\"es2020\")"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "f73704c8a1271e606a6f129f66a27ef4823d2528928735dcd8cc801c8468a92c",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "4c1baf1f2f01d0521123002f089ef12703e349866bf8bed4d5dd85074ec54778",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "2c5445ee73de9c253fbb6014fc29974120d855ff27e9058b215537092cf544f9",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "9b86043ab2ec99ba5d03c89eb40c9f2e7f215cf361bb78f2fbd98b00f3ed49b3",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "f73704c8a1271e606a6f129f66a27ef4823d2528928735dcd8cc801c8468a92c",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "4c1baf1f2f01d0521123002f089ef12703e349866bf8bed4d5dd85074ec54778",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "2c5445ee73de9c253fbb6014fc29974120d855ff27e9058b215537092cf544f9",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "9b86043ab2ec99ba5d03c89eb40c9f2e7f215cf361bb78f2fbd98b00f3ed49b3",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "f73704c8a1271e606a6f129f66a27ef4823d2528928735dcd8cc801c8468a92c",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "4c1baf1f2f01d0521123002f089ef12703e349866bf8bed4d5dd85074ec54778",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "2c5445ee73de9c253fbb6014fc29974120d855ff27e9058b215537092cf544f9",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "9b86043ab2ec99ba5d03c89eb40c9f2e7f215cf361bb78f2fbd98b00f3ed49b3",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "f73704c8a1271e606a6f129f66a27ef4823d2528928735dcd8cc801c8468a92c",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "4c1baf1f2f01d0521123002f089ef12703e349866bf8bed4d5dd85074ec54778",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "2c5445ee73de9c253fbb6014fc29974120d855ff27e9058b215537092cf544f9",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "9b86043ab2ec99ba5d03c89eb40c9f2e7f215cf361bb78f2fbd98b00f3ed49b3",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/object/fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/object/fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/object/fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/object/fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/object/identifier-shorthand-await-strict-mode.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "62c49f0d5fa415be9e7c135bbde41d5bd682ffd08822abb6a94eb8d99b3349e9",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:19:4: ERROR: Cannot use \"await\" as an identifier here:"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-accessor.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "48d37538e0f533ff1c316b8d36cd586a76d4f4aee813691965d0d4b28588aeb0",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:14:4: ERROR: Cannot use \"await\" as an identifier here:"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-generator.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "48d37538e0f533ff1c316b8d36cd586a76d4f4aee813691965d0d4b28588aeb0",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:14:4: ERROR: Cannot use \"await\" as an identifier here:"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-normal.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "48d37538e0f533ff1c316b8d36cd586a76d4f4aee813691965d0d4b28588aeb0",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:14:4: ERROR: Cannot use \"await\" as an identifier here:"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/yield-as-identifier-in-nested-function.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-ident",
+      "fingerprint": "46801cc909dae12d11d0dc0bf1ba50c4efd0bff554fd92024b45899fb731319e",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (41..46, TS1109) }"
+    },
+    {
+      "path": "test/language/expressions/optional-chaining/eval-optional-call.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "c64907ce2b2df468e1661de33bdbd1ae3f9d5a66297a59279baf9ae71674f2ce",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: a is not defined"
+    },
+    {
+      "path": "test/language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c9c2da1f20ea630e0761b1357c00f59e9b4b00421567b7b0f9ce5635df85b9ea",
+      "summary": "Error: sloppy: expected success, got runtime undefined: undefined"
+    },
+    {
+      "path": "test/language/expressions/optional-chaining/member-expression.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "2327e787b2bea3ea9c2254ffdeaf098d90260b81699ea7137407d515eecd516e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"a\"», «\"\"») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-put-const.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e22653c5ea3891c4dd0d5014af19f2b7e91280cc05daaa1f3ed1f8f247400a02",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:32:9: ERROR: Cannot assign to \"c\" because it is a constant"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-put-const.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "f18f83091ccf1348990ecf589d26bb59bf09b7f06ebb4c495f0440fc1f15b24e",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:32:12: ERROR: Cannot assign to \"c\" because it is a constant"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-put-const.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e22653c5ea3891c4dd0d5014af19f2b7e91280cc05daaa1f3ed1f8f247400a02",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:32:9: ERROR: Cannot assign to \"c\" because it is a constant"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-put-const.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "f18f83091ccf1348990ecf589d26bb59bf09b7f06ebb4c495f0440fc1f15b24e",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:32:12: ERROR: Cannot assign to \"c\" because it is a constant"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-rest-put-const.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "845a844401128b0a728031a9951c8e76dd9e32b11a5e6ccd55b657bfcb93a4e3",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:32:11: ERROR: Cannot assign to \"rest\" because it is a constant"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for-of/head-await-using-fresh-binding-per-iteration.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject-top-level-await",
+      "fingerprint": "ac5ce5a57a7ab1615f41b405387ed3ba1c127dc0456bed7f0970df700da906bd",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:18:5: ERROR: Top-level await is not available in the configured target environment (\"es2020\")"
+    },
+    {
+      "path": "test/language/statements/for-of/scope-body-lex-open.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-of/scope-head-lex-close.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-of/scope-head-lex-open.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/let/block-local-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/let/fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/let/fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/let/fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/let/function-local-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/let/global-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "1518fbb5c85568c92930631ff8374d7fd00baa06287e3406bad527ab19161843",
+      "summary": "Error: sloppy: expected runtime ReferenceError, got success no error: success"
+    },
+    {
+      "path": "test/language/statements/let/syntax/escaped-let.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "cb885d3cb0dc2eef9d3973dd59cae321f8108e8554209be9b1010c8fa5a3cab2",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: let is not defined"
+    }
+  ]
+}

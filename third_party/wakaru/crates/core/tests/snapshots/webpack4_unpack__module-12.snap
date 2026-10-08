@@ -1,0 +1,35 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+const r = [];
+let o = 0;
+function i(e) {
+    try {
+        c();
+        e();
+    } finally{
+        l();
+    }
+}
+function a(e) {
+    r.push(e);
+    if (!o) {
+        c();
+        b();
+    }
+}
+export function c() {
+    o++;
+}
+function l() {
+    o--;
+}
+export function b() {
+    l();
+    let e;
+    while(!o && (e = r.shift()) !== undefined){
+        i(e);
+    }
+}
+export { a };

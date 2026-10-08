@@ -1,0 +1,643 @@
+import * as t from "@babel/types";
+import {
+  AnyMap,
+  eachMapping,
+  type EncodedSourceMap,
+  type Section,
+  type SectionedSourceMap,
+} from "@jridgewell/trace-mapping";
+
+import { sanitizeBrowserUrl } from "../domain/browserObservation.js";
+import { isUrlLikeModuleSpecifier } from "../domain/webBundleAnalyzerAst.js";
+import { analyzeParsedJavaScriptReferences } from "../domain/javascript/javascriptSemanticAnalysis.js";
+import { traverseJavaScriptAst } from "../domain/javascript/javascriptSemanticTraversal.js";
+import { parseJavaScriptSource } from "../domain/javascript/javascriptSourceParser.js";
+import { hasValidSourceMapContents } from "../domain/sourceMapContents.js";
+import type {
+  AnalyzeWebBundleInput,
+  WebSourceMapItem,
+  WebSourceMaps,
+} from "../domain/webBundleAnalysis.js";
+import { webSourceMapsSchema } from "../domain/webBundleAnalysis.js";
+import { createWebTextArtifact } from "../domain/webContentArtifact.js";
+import { safeParseJson } from "../domain/safeJson.js";
+import {
+  flattenSourceMapLeaves,
+  isVersion3Map,
+} from "../domain/sourceMapEnvelope.js";
+
+export interface WebSourceMapRequest {
+  readonly scriptKey: string;
+  readonly declaredUrl: string;
+  readonly fetchUrl: string;
+}
+
+interface SourceMapFetchHost {
+  readonly fetch: typeof fetch;
+  /** Fetch-operation deadline; injectable so boundary regressions stay fast. */
+  readonly timeoutMs?: number;
+  /** Maximum response bytes retained across this operation. */
+  readonly maxResponseBytes?: number;
+}
+
+// Source maps are normally fetched as a small part of a larger inspection.
+// Bound a stalled server to 30 seconds and bound raw map input retained for
+// parsing to 64 MiB per inspection. Both limits apply at the network boundary;
+// hitting either produces an explicit fetch_failed item, never truncated data.
+const SOURCE_MAP_FETCH_TIMEOUT_MS = 30_000;
+const SOURCE_MAP_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+type SourceMaps = WebSourceMaps;
+type SourceMapItem = WebSourceMapItem;
+type ParsedSourceMapItem = Extract<
+  SourceMapItem,
+  { status: "included" | "partial" }
+>;
+
+/** Fetch and validate approved source maps without browser credentials. */
+export const fetchWebSourceMaps = async (
+  requests: readonly WebSourceMapRequest[],
+  input: AnalyzeWebBundleInput,
+  signal?: AbortSignal,
+  host: SourceMapFetchHost = { fetch: globalThis.fetch },
+): Promise<SourceMaps> => {
+  const items: SourceMapItem[] = [];
+  const operationController = new AbortController();
+  const timeout = setTimeout(
+    () => operationController.abort(new SourceMapDeadlineError()),
+    host.timeoutMs ?? SOURCE_MAP_FETCH_TIMEOUT_MS,
+  );
+  const abortFromCaller = (): void => operationController.abort(signal?.reason);
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const operationSignal = operationController.signal;
+  const budget = { retainedBytes: 0 };
+  try {
+    for (const request of requests) {
+      if (signal?.aborted === true) throw signal.reason;
+      if (operationSignal.aborted) {
+        items.push(
+          emptySourceMapItem(
+            request,
+            "fetch_failed",
+            "Source-map fetching exceeded its operation deadline.",
+          ),
+        );
+        continue;
+      }
+      items.push(await fetchOne(request, input, operationSignal, host, budget));
+    }
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
+  const retained = items.filter(
+    ({ status }) => status === "included" || status === "partial",
+  ).length;
+  return webSourceMapsSchema.parse({
+    status:
+      items.length === 0
+        ? "unavailable"
+        : retained === items.length &&
+            !items.some(({ status }) => status === "partial")
+          ? "included"
+          : retained > 0
+            ? "partial"
+            : "unavailable",
+    requested: requests.length,
+    processed: items.length,
+    items,
+  });
+};
+
+class SourceMapDeadlineError extends Error {
+  constructor() {
+    super("Source-map fetching exceeded its operation deadline.");
+    this.name = "SourceMapDeadlineError";
+  }
+}
+
+class SourceMapSizeLimitError extends Error {
+  constructor() {
+    super("Source-map response exceeded the retained-byte budget.");
+    this.name = "SourceMapSizeLimitError";
+  }
+}
+
+const fetchOne = async (
+  request: WebSourceMapRequest,
+  input: AnalyzeWebBundleInput,
+  signal: AbortSignal | undefined,
+  host: SourceMapFetchHost,
+  budget: { retainedBytes: number },
+): Promise<SourceMapItem> => {
+  if (!approvedUrl(request.fetchUrl, input.allowed_origins))
+    return emptySourceMapItem(
+      request,
+      "policy_filtered",
+      "Declared source-map URL is outside the approved exact origins.",
+    );
+  try {
+    const fetched = await fetchFollowingApprovedRedirects(
+      request.fetchUrl,
+      input.allowed_origins,
+      signal,
+      host,
+    );
+    if (fetched === undefined)
+      return emptySourceMapItem(
+        request,
+        "policy_filtered",
+        "A source-map redirect left the approved exact origins.",
+      );
+    const { response, fetchedUrl } = fetched;
+    if (!response.ok) {
+      await response.body?.cancel();
+      return emptySourceMapItem(
+        request,
+        "fetch_failed",
+        `Source-map server returned HTTP ${String(response.status)}.`,
+      );
+    }
+    return normalizeSourceMap(
+      request,
+      await readBoundedText(
+        response,
+        budget,
+        host.maxResponseBytes ?? SOURCE_MAP_RESPONSE_BYTES,
+        signal,
+      ),
+      fetchedUrl,
+    );
+  } catch (cause: unknown) {
+    if (
+      signal?.aborted === true &&
+      !(signal.reason instanceof SourceMapDeadlineError)
+    )
+      throw cause;
+    return emptySourceMapItem(
+      request,
+      "fetch_failed",
+      cause instanceof SourceMapSizeLimitError
+        ? cause.message
+        : cause instanceof SourceMapDeadlineError
+          ? cause.message
+          : "Source-map fetch or validation failed.",
+    );
+  }
+};
+
+const fetchFollowingApprovedRedirects = async (
+  initialUrl: string,
+  allowedOrigins: readonly string[],
+  signal: AbortSignal | undefined,
+  host: SourceMapFetchHost,
+): Promise<{ response: Response; fetchedUrl: string } | undefined> => {
+  let current = initialUrl;
+  const visited = new Set<string>();
+  for (;;) {
+    if (signal?.aborted === true) throw signal.reason;
+    if (!approvedUrl(current, allowedOrigins)) return undefined;
+    if (visited.has(current)) throw new Error("source_map_redirect_loop");
+    visited.add(current);
+    const response = await promiseWithAbort(
+      host.fetch(current, {
+        method: "GET",
+        headers: {
+          Accept: "application/json, application/source-map+json;q=0.9",
+        },
+        redirect: "manual",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        ...(signal === undefined ? {} : { signal }),
+      }),
+      signal,
+    );
+    if (signal !== undefined && signalIsAborted(signal)) {
+      await response.body?.cancel(signal.reason).catch(() => undefined);
+      throw signal.reason;
+    }
+    if (response.status < 300 || response.status >= 400)
+      return { response, fetchedUrl: current };
+    const location = response.headers.get("location");
+    if (location === null) return { response, fetchedUrl: current };
+    await response.body?.cancel();
+    current = new URL(location, current).href;
+  }
+};
+
+const readBoundedText = async (
+  response: Response,
+  budget: { retainedBytes: number },
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<string> => {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      if (signal?.aborted === true) throw signal.reason;
+      const { done, value } = await readWithAbort(reader, signal);
+      if (done) break;
+      const nextBytes = value?.byteLength ?? 0;
+      if (budget.retainedBytes + bytes + nextBytes > maxBytes) {
+        await reader.cancel(new SourceMapSizeLimitError());
+        throw new SourceMapSizeLimitError();
+      }
+      if (value !== undefined) chunks.push(value);
+      bytes += nextBytes;
+    }
+  } finally {
+    // Aborting cancels the reader in readWithAbort. It owns the pending read
+    // until that cancellation settles, so releasing the lock here can throw.
+    if (signal?.aborted !== true) reader.releaseLock();
+  }
+  budget.retainedBytes += bytes;
+  const joined = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+};
+
+const readWithAbort = <T>(
+  reader: ReadableStreamDefaultReader<T>,
+  signal: AbortSignal | undefined,
+): Promise<Awaited<ReturnType<ReadableStreamDefaultReader<T>["read"]>>> => {
+  if (signal === undefined) return reader.read();
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => signal.removeEventListener("abort", abort);
+    const abort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void reader.cancel(signal.reason).catch(() => undefined);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void reader.read().then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (cause: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        void reader.cancel(cause).catch(() => undefined);
+        reject(cause);
+      },
+    );
+  });
+};
+
+const signalIsAborted = (signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true;
+
+const promiseWithAbort = (
+  promise: Promise<Response>,
+  signal: AbortSignal | undefined,
+): Promise<Response> => {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => signal.removeEventListener("abort", abort);
+    const abort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (response) => {
+        if (settled || signal.aborted) {
+          void response.body?.cancel(signal.reason).catch(() => undefined);
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(signal.reason);
+          }
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(response);
+      },
+      (cause: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(cause);
+      },
+    );
+  });
+};
+
+type EncodedBrowserSourceMap = EncodedSourceMap | SectionedSourceMap;
+
+/** Compose indexed offsets before upstream flattening, retaining parent clipping. */
+const sourceMapWithAbsoluteSections = (
+  text: string,
+): EncodedBrowserSourceMap => {
+  const root = JSON.parse(text) as EncodedBrowserSourceMap;
+  if (!("sections" in root)) return root;
+  const sections: Section[] = [];
+  const pending: Section[] = [{ map: root, offset: { line: 0, column: 0 } }];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === undefined) break;
+    if (!("sections" in node.map)) {
+      sections.push(node);
+      continue;
+    }
+    // A parent's boundary clips the preceding leaf even when its first child
+    // starts later or it has no children. Empty maps retain that boundary
+    // without adding source/name identities or point mappings.
+    sections.push({
+      offset: node.offset,
+      map: { version: 3, sources: [], names: [], mappings: "" },
+    });
+    for (let index = node.map.sections.length - 1; index >= 0; index -= 1) {
+      const child = node.map.sections[index];
+      if (child === undefined) continue;
+      pending.push({
+        map: child.map,
+        offset: {
+          line: node.offset.line + child.offset.line,
+          column:
+            child.offset.column +
+            (child.offset.line === 0 ? node.offset.column : 0),
+        },
+      });
+    }
+  }
+  return { ...root, sections };
+};
+
+const normalizeSourceMap = (
+  request: WebSourceMapRequest,
+  text: string,
+  fetchedUrl: string,
+): SourceMapItem => {
+  if (!validSourceMapEnvelope(text))
+    return emptySourceMapItem(
+      request,
+      "invalid",
+      "Source-map JSON is not a version 3 map.",
+    );
+  try {
+    const map = new AnyMap(sourceMapWithAbsoluteSections(text), fetchedUrl);
+    const resolvedBySource = new Map<string, string>();
+    const originalSources = map.sources.map((source, index) => {
+      const content = map.sourcesContent?.[index];
+      const resolved =
+        map.resolvedSources[index] ?? source ?? "[unknown-source]";
+      if (source !== null) resolvedBySource.set(source, resolved);
+      return {
+        source: sanitizeSource(resolved),
+        artifact:
+          typeof content === "string"
+            ? createWebTextArtifact(content, sourceMediaType(source))
+            : null,
+      };
+    });
+    const mappings: ParsedSourceMapItem["mappings"] = [];
+    eachMapping(map, (mapping) => {
+      if (
+        mapping.source === null ||
+        mapping.originalLine === null ||
+        mapping.originalColumn === null
+      )
+        return;
+      mappings.push({
+        generated_line: mapping.generatedLine,
+        generated_column: mapping.generatedColumn,
+        source: sanitizeSource(
+          resolvedBySource.get(mapping.source) ?? mapping.source,
+        ),
+        original_line: mapping.originalLine,
+        original_column: mapping.originalColumn,
+        name: mapping.name ?? null,
+      });
+    });
+    const modules = originalModuleEdges(originalSources);
+    const parsed = {
+      ...sourceMapContext(request),
+      artifact: createWebTextArtifact(text, "application/source-map+json"),
+      original_sources: originalSources,
+      original_module_edges: modules.edges,
+      mappings,
+    };
+    return modules.incomplete.length === 0
+      ? { ...parsed, status: "included", limitation: null }
+      : {
+          ...parsed,
+          status: "partial",
+          limitation: `Module edges are incomplete: ${modules.incomplete.length} of ${originalSources.filter(({ artifact }) => artifact !== null).length} original sources could not be parsed in full (${modules.incomplete.join(", ")}).`,
+        };
+  } catch (cause: unknown) {
+    void cause;
+    return emptySourceMapItem(
+      request,
+      "invalid",
+      "Source-map mappings could not be decoded safely.",
+    );
+  }
+};
+
+interface OriginalModuleEdges {
+  readonly edges: ParsedSourceMapItem["original_module_edges"];
+  /** Original sources whose dependency edges may be incomplete. */
+  readonly incomplete: readonly string[];
+}
+
+const originalModuleEdges = (
+  sources: ParsedSourceMapItem["original_sources"],
+): OriginalModuleEdges => {
+  const edges: ParsedSourceMapItem["original_module_edges"] = [];
+  const seen = new Set<string>();
+  const incomplete: string[] = [];
+  for (const source of sources) {
+    if (source.artifact === null) continue;
+    const parsed = parseJavaScriptSource(source.artifact.text);
+    if (parsed === null) {
+      incomplete.push(source.source);
+      continue;
+    }
+    // A recovered program still yields the imports it did parse, but nodes
+    // after an unrecoverable point are missing, so the edges are a subset.
+    if (parsed.errors.length > 0) incomplete.push(source.source);
+    let unboundRequires: ReadonlySet<string> | undefined;
+    traverseJavaScriptAst(parsed, {
+      enter: (node) => {
+        const dependency = originalDependency(node);
+        if (dependency === null) return;
+        const { kind, specifier } = dependency;
+        if (kind === "require" && t.isCallExpression(node)) {
+          unboundRequires ??= new Set(
+            analyzeParsedJavaScriptReferences(parsed, "require")
+              .filter(
+                ({ role, resolution }) =>
+                  role === "read" && resolution === "unbound",
+              )
+              .map(
+                ({ location }) =>
+                  `${String(location.start.line)}:${String(location.start.column)}`,
+              ),
+          );
+          const location = node.callee.loc?.start;
+          if (
+            location === undefined ||
+            !unboundRequires.has(
+              `${String(location.line)}:${String(location.column)}`,
+            )
+          )
+            return;
+        }
+        const key = `${source.source}\0${kind}\0${specifier}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        edges.push({
+          from_source: source.source,
+          kind,
+          specifier,
+          resolved_source: resolveOriginalSource(specifier, source.source),
+        });
+      },
+    });
+  }
+  return { edges, incomplete };
+};
+
+const validSourceMapEnvelope = (text: string): boolean => {
+  const parsedResult = safeParseJson(text);
+  if (!parsedResult.ok) return false;
+  const parsed: unknown = parsedResult.value;
+  if (isVersion3Map(parsed) && typeof parsed.mappings === "string")
+    return validSourceMapLeaf(parsed);
+  const leaves = flattenSourceMapLeaves(parsed, { validateOffsets: true });
+  if (leaves === undefined) return false;
+  return leaves.every(validSourceMapLeaf);
+};
+
+const validSourceMapLeaf = (map: Readonly<Record<string, unknown>>): boolean =>
+  typeof map.mappings === "string" &&
+  Array.isArray(map.sources) &&
+  Array.isArray(map.names) &&
+  hasValidSourceMapContents(map.sources.length, map.sourcesContent);
+
+const approvedUrl = (
+  value: string,
+  allowedOrigins: readonly string[],
+): boolean => {
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      allowedOrigins.includes(parsed.origin)
+    );
+  } catch (cause: unknown) {
+    // Non-URL input is not an approved source-map URL.
+    void cause;
+    return false;
+  }
+};
+
+const sourceMapContext = (request: WebSourceMapRequest) => ({
+  script_key: request.scriptKey,
+  declared_url: request.declaredUrl,
+});
+
+const emptySourceMapItem = (
+  request: WebSourceMapRequest,
+  status: Extract<SourceMapItem, { readonly artifact: null }>["status"],
+  limitation: string,
+): Extract<SourceMapItem, { readonly artifact: null }> => ({
+  ...sourceMapContext(request),
+  status,
+  artifact: null,
+  original_sources: [],
+  original_module_edges: [],
+  mappings: [],
+  limitation,
+});
+
+const sanitizeSource = (value: string): string => {
+  try {
+    return sanitizeBrowserUrl(new URL(value).href).url;
+  } catch (cause: unknown) {
+    // Non-URL sources are preserved verbatim.
+    void cause;
+    return value;
+  }
+};
+
+const resolveOriginalSource = (
+  specifier: string,
+  base: string,
+): string | null => {
+  if (!isUrlLikeModuleSpecifier(specifier)) return null;
+  try {
+    return sanitizeSource(new URL(specifier, base).href);
+  } catch (cause: unknown) {
+    // Unresolvable source specifiers are represented by null.
+    void cause;
+    return null;
+  }
+};
+
+const sourceMediaType = (source: string | null): string =>
+  source?.endsWith(".ts") ||
+  source?.endsWith(".tsx") ||
+  source?.endsWith(".mts") ||
+  source?.endsWith(".cts")
+    ? "text/typescript"
+    : "text/javascript";
+
+const originalDependency = (
+  node: t.Node,
+): {
+  readonly kind: ParsedSourceMapItem["original_module_edges"][number]["kind"];
+  readonly specifier: string;
+} | null => {
+  if (
+    t.isImportDeclaration(node) ||
+    t.isExportAllDeclaration(node) ||
+    t.isExportNamedDeclaration(node)
+  )
+    return node.source === null || node.source === undefined
+      ? null
+      : { kind: "static_import", specifier: node.source.value };
+  if (t.isImportExpression(node) && t.isStringLiteral(node.source))
+    return { kind: "dynamic_import", specifier: node.source.value };
+  if (
+    t.isCallExpression(node) &&
+    t.isIdentifier(node.callee, { name: "require" }) &&
+    t.isStringLiteral(node.arguments[0])
+  )
+    return { kind: "require", specifier: node.arguments[0].value };
+  // `import x = require("m")` is only legal at module top level and always
+  // refers to the host loader, so it needs no unbound-`require` check. The
+  // `moduleReference` is an entity name for a local alias instead, which
+  // declares no dependency.
+  if (
+    t.isTSImportEqualsDeclaration(node) &&
+    t.isTSExternalModuleReference(node.moduleReference)
+  )
+    return {
+      kind: "require",
+      specifier: node.moduleReference.expression.value,
+    };
+  return null;
+};

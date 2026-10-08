@@ -1,0 +1,1149 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "default"
+    ],
+    "paths": [
+      "test/language/expressions/coalesce",
+      "test/language/expressions/optional-chaining",
+      "test/language/expressions/object",
+      "test/language/expressions/array",
+      "test/language/statements/for-of",
+      "test/language/statements/let"
+    ]
+  },
+  "totals": {
+    "discovered": 2180,
+    "runnable": 2180,
+    "skipped": 0,
+    "unsupported": 33,
+    "rejected": 105,
+    "passed": 2042,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-null.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/coalesce/tco-pos-undefined.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/object/__proto__-permitted-dup-shorthand.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "d6e9d31a2797ded5c48a2d5f10c3e4e20c53fd22139437b6e79ac9265e7a3ee3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«[object Object]», «2») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/accessor-name-computed-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "d04bfac0270f5b4d267485b7163c95884cd98def15e88323e99261b45d163d9c",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (41..46, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "0af1d7bacd34afd754ca240d082b73362714888111e3f136c1fad6c7ba0f4670",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: break\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "1515e4b714c6ed482144cdfd8d7e9f1e88f5f65efe61c686e4df7c0cc636ddab",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: case\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "8f26b8725de70c833ac86413edf2a7554b96b7d04836c3c18ba8a68732f92129",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: catch\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5ae834e7bf036b2a848449c36e6574235426bd411c7ccce762794cf667cd5586",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: class\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "94fea7ee6c4c601e73e647dfd2030c80dd435b96791855341ce8d6fdc2fb1c23",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "94fea7ee6c4c601e73e647dfd2030c80dd435b96791855341ce8d6fdc2fb1c23",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e13023d36b48361b246c93499df562dd3ae61759bc296cd0119722ebd708c7b9",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: if\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "7c7bc91d9cd94be8461c2e30faa3da233c3846f6f5d373f3f5d5bbb6e1a18009",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: new\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "eef99d33e1e44f9ef36b774d39e9506854f90737a62cd1c2846f56e11a6992dd",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: return\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "f00511065af9472d91a12f468c4f92a015bd88ea833f43077f9fd1dd3ff18179",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: super\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "b3c573a71f2f7cf5dd742382f8cdf905a6ff9049dd45585b67ebd8d8ad7139c1",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: switch\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "d3d57329b57faaa993276e00ce2054f0d7a39d843a6194da5a7904d49f9b99fb",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: this\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "2e551024b9e413888956f927f2aef35608db0f0b4af1b46a3aab572f3c841149",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: throw\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "c6a288eb1619f0fb6e0869d7aa228a7a7001dbe4ced001140b8ca91db751582a",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: try\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e4ce6ebe09d36ff2b872a06e567f9ee66dea2ee2a19bf37e62fff4752445ec3b",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: typeof\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "04585856c6f8259a9c58b06b4602ab1f3f1eb2c7fcf3f6995ff220d085afafe9",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: var\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "0131e93e899a89780d42c931583b64395d8a147e9d11cef8f0867033a104ec85",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: void\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "4ec23486f9be155dad46ba6c04c56dfa3fd0fac00984192a0f61d4d57ced3ee1",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: while\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/covered-ident-name-prop-name-literal-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6880dae8664a97cd17f16aa367905df69422bd4430d5caa0d6d9873a9e2226c4",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: with\n    ,-[37:1]\n 34 |     A reserved word is an IdentifierName that cannot be used as an Identifier."
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "a08da83cd24a674ad2ea066fefd1cf52c2dda8c5cd12872918fcc4a4043df730",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "a08da83cd24a674ad2ea066fefd1cf52c2dda8c5cd12872918fcc4a4043df730",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "a08da83cd24a674ad2ea066fefd1cf52c2dda8c5cd12872918fcc4a4043df730",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "a08da83cd24a674ad2ea066fefd1cf52c2dda8c5cd12872918fcc4a4043df730",
+      "summary": "Error: sloppy: expected success, got runtime Error: Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "3e7dfe709200bcd15f56d1f678a80355155dafbdecd6c02bf12c9ddec1b28058",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: break\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6950d59504a65f2b9699af56a4a6509a5fb674ba6e1c4f2f9da946d5e52f0564",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: case\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a343861d2e7272d2b3a7389088165148eb7b494cb208402e26822277079da282",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: catch\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "4b9d2a1ef73c5040bcaf28c0a6828814592ff757b69a9d0b5631c5fbda523658",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: class\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "41d8f9fbf79cb86f446cd3d9979c9ffa9af7081d45500442c0d865b0e155d038",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "41d8f9fbf79cb86f446cd3d9979c9ffa9af7081d45500442c0d865b0e155d038",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "252effb60b761ddcf30612e6da61a0405f479c01c9c5b495ba85f2a0fe23c6fa",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: if\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e6144fdc753ab37cdcc0aed4ed131231564068e9aec53b67f716a80cfa8612f2",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: new\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "dae70263f52c654c16ea0eaf9e6945e2ad8f57c284448c6ebd28077945c6b741",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: return\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "97be05d3aeb596561cf42ec22b7cba99633a5efc7140fc50f0ff9fe3931c74b8",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: super\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "142d2144d4fa07b5f69db764c9a5e10e4157e09933f009d1418546de9ee09b3f",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: switch\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e833e1f51c997a88b43c8822589d36101d8c0e25b947a2128559d70166645929",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: this\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "40f79d0d89e2a1e75ef224de412700e5b0ebf1a7286c605e627a7b8ba55a7ae1",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: throw\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6e844487fc38d3e7edc9b1aa907c699bc2e57dda2b72cfef4c744c4ca56f05f1",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: try\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "dd51d29d6777c98af9354657125f2ef59412cfa5be4699e38349c6e5fe51235e",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: typeof\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "059f844dc6a40ac40b7465e1ff478d301fab4293e5ffc26648a11f14b2802521",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: var\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "431e924777be31b609c3e4a03389881ba2923525cee5b6354e788d746e4a9210",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: void\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "33bae67e65383e19e2075d39028b24e98ddfae13f4caba9d039f57e62d8c09bc",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: while\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-method-def-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "8224a30b7c8139797173dc6162d16edd58f2bcf808d707ef93cf7a7034a295cf",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: with\n    ,-[39:1]\n 36 | "
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "d8107bf2d5bc2beead44fc13efc916a90584982345405f8eb2f6dea88af4e24a",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: break\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "78a45140f2d0bb2bd82a5834317bc51ce49a47d6eee001035d80947fe5956562",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: case\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "598024d970d2c544df49eb5eaa52f06de598ebc5ca70595b53b5ad87b6da7ebc",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: catch\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "f672d5e59be62cae97162ae6ac4cb297a4bfdcf521876edb268c710e719d4d19",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: class\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "ab41919b256eee455dd50c35ab8edc873db0e9b783f35b7975e040eed30cb7e8",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "ab41919b256eee455dd50c35ab8edc873db0e9b783f35b7975e040eed30cb7e8",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: default\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "f90fab6f53254502d8f498fe0a0b6a01e613f8af45a52a5d066dfadd048626eb",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: if\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e9571f87c3509dbf65fe06b7db668c1ee64ca4930d5fb92bb7d09431968bf3dc",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: new\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "16317d52735ebca1143ac4067d1c0bbdfbea0afb9e72e403926c6442feb8fe10",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: return\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5cd5f2e1d187bf445508b94379f5309b54af4d99c61d1f0ebe2bd971df18076b",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: super\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "628368d4a3a28d46eb42d77fbe12df66f5eb7c4dcd9267881b1bdfbd32fa433d",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: switch\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "891c03f3f600ada5c7ae9364ee07152c2bc987b20850ac96c82d3d8b4447d610",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: this\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "4331f8a19b08de09d95aa2b931641bba7aaf7de82c3e2c83b8bdb642a2080f6c",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: throw\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "6446bada176e0ab2e445bec97ae83c3990cf1c66f2bb96a72a609b0f88fedc13",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: try\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "70e7f5be3777ffacee1dec1d438badf013311c1931aa612173972027741f2fc7",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: typeof\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a95a64f8eb9cad40e9dbebb55e0723d5a9de4493830286989132e5660d3a2cf2",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: var\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "289fd5dfefa84720b2b76bf67c6c2a0844a05bc4da5432e478c7c221f20067ef",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: void\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "5ebfe7844da2ced527f5d8908614906ab1c3e5c36dc66ef3732d5da9f4d92d03",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: while\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/ident-name-prop-name-literal-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "0a24dc634190707b8b8cec17d52aa7ae6f027b6320911fa601e2d193aad0bbc4",
+      "summary": "Error:   x Unexpected escape sequence in reserved word: with\n    ,-[38:1]\n 35 | ---*/"
+    },
+    {
+      "path": "test/language/expressions/object/identifier-shorthand-await-strict-mode.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/async-gen-yield-identifier-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "104f228b070528a6b05d271475209dcc2d3fc419d32685758a56fb15ad3f50ac",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (99..104, TS1109) }; <stdin>:1:80: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/async-gen-yield-identifier-spread-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "0cd820d6444770fc04e69895714c21c137b98e9853551f9d33cba401ebe9c857",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (135..140, WithLabel { inner: Error { error: (135..140, TS1109) }, span: 73..78, note: \"Tried to parse an argument of yield\" }) }; <stdin>:1:115: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/gen-yield-identifier-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "c12728f78cc2e148b47a4b0c14fefe0a0b7e91ee40d55642746b1f84ccbee6c1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (93..98, TS1109) }; <stdin>:1:74: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/gen-yield-identifier-spread-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "6e2f77c0e53ad5bb36660f351e9db10fec12a0454cd5b2aefd1a1eb537026056",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (129..134, WithLabel { inner: Error { error: (129..134, TS1109) }, span: 67..72, note: \"Tried to parse an argument of yield\" }) }; <stdin>:1:109: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/generator-prop-name-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "da57145af830e998c7e0181939d604d7e40e2368868a2d50433f45412d81a50e",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (33..38, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-param-id-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "4a3c5b75f94e295cc290b59e69c83950ce02b737294c10f5cb30e2d51e4f43d1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, TS1109) }; <stdin>:1:17: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-param-init-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "a95f9bece233ae9b040f4ed38366ff88a9a9f368897d5adf0955d7ff838decf5",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (39..44, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/name-prop-name-yield-id.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "47f3821c9b12e080a2e36b058fa2962ac67cad3baea83451b863f66e9c43b2f1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (32..37, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-accessor.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e40d67e09a4bf8d8c976435a0b3bc88ee738e84e46ece82d7762fac727603263",
+      "summary": "Error:   x Expected ident\n    ,-[16:1]\n 13 | "
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-generator.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e40d67e09a4bf8d8c976435a0b3bc88ee738e84e46ece82d7762fac727603263",
+      "summary": "Error:   x Expected ident\n    ,-[16:1]\n 13 | "
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-binding-normal.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "e40d67e09a4bf8d8c976435a0b3bc88ee738e84e46ece82d7762fac727603263",
+      "summary": "Error:   x Expected ident\n    ,-[16:1]\n 13 | "
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-accessor.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-generator.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/static-init-await-reference-normal.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/yield-as-function-expression-binding-identifier.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-function-name",
+      "fingerprint": "3d1c5632cbcfa614e418bdfd4171a8da3077a58665ffaab7988afe938dbd087a",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (36..41, Expected(\"(\", \"yield\")) }"
+    },
+    {
+      "path": "test/language/expressions/object/method-definition/yield-as-identifier-in-nested-function.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-ident",
+      "fingerprint": "124f44850fd8620ce15f0004ad54e4b25fc64c0904b5830ffea51c829faf41a0",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (39..44, TS1109) }"
+    },
+    {
+      "path": "test/language/expressions/optional-chaining/member-expression-async-identifier.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c9c2da1f20ea630e0761b1357c00f59e9b4b00421567b7b0f9ce5635df85b9ea",
+      "summary": "Error: sloppy: expected success, got runtime undefined: undefined"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "aba5886e06b2aa502962f977bf5b466118fb848f7b6e22f2838ed8c8450ed82b",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (40..45, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "19b5bbe18fef91a132977e472e29ed33a6fbbebbd8b09ad783cfddbb3ec29143",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (49..54, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "d04bfac0270f5b4d267485b7163c95884cd98def15e88323e99261b45d163d9c",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (41..46, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-target-yield-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "3595db12e4c80104139807d477c060364b8e4ffea75f7b153bdfee306d756b57",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (48..53, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-trlg-iter-elision-iter-abpt.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "1c1f27a3e33cae2d2eb22833454b9bbb2be353cd4dc794daa194a89a123de795",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error but got a TypeError"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-trlg-iter-elision-iter-nrml-close-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "913d3459bcd2b47b8df4c8154e2cd9288a9c8c476f5cb1b201609246f73d5453",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«1», «2») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-trlg-iter-elision-iter-nrml-close-skip.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "dc35434483bc60b600068159d7db8ae7734cc4ccc7d009693a26ff4436e81684",
+      "summary": "Error: sloppy: expected success, got runtime TypeError: Iterator result undefined is not an object"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elem-trlg-iter-elision-iter-nrml-close.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "913d3459bcd2b47b8df4c8154e2cd9288a9c8c476f5cb1b201609246f73d5453",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«1», «2») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elision-iter-abpt.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "1c1f27a3e33cae2d2eb22833454b9bbb2be353cd4dc794daa194a89a123de795",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error but got a TypeError"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elision-iter-nrml-close-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elision-iter-nrml-close-skip.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-elision-iter-nrml-close.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-iteration.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "47cab09b8aa1d2cd6151e59615291b9287d8cdefe18baea8a25de16d1cd6bc84",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «2») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "81e7ab8b76d8e746b6c0d7e9c042d72d6409e62dba954de7a8af1be547230143",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (52..57, WithLabel { inner: Error { error: (52..57, TS1109) }, span: 46..49, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "dd344ccaf4681915f606130148c2a72704bd6cd40142396f50c13ccdf6bad951",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (44..49, WithLabel { inner: Error { error: (44..49, TS1109) }, span: 38..41, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/array-rest-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "3f019b54a99b3bd1331e6d9591e6b1322d57ff13175f81c3c2647c42101dbc69",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (51..56, WithLabel { inner: Error { error: (51..56, TS1109) }, span: 46..49, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/const-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/let-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-identifier-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "bfc6fd135eb1cee4a136d59a1ea4d10010beb3b45ece2bac0d34d66af40a1b64",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (68..73, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-id-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "aba5886e06b2aa502962f977bf5b466118fb848f7b6e22f2838ed8c8450ed82b",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (40..45, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "fd4885bb1968d637643fbcb0dba2b9415f46e610be97da0a6551851e5bdeb3b9",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (42..47, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-elem-target-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "ef67070c6bfd5c1a7b0f62413ca92574d8d81f845a62c9ea49027134b9d7ffeb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (50..55, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "43c38b5e8c5137bb3b648d911042ae8830785a7b5a02253306c1a82a4df9ac36",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (44..49, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/obj-prop-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "ef67070c6bfd5c1a7b0f62413ca92574d8d81f845a62c9ea49027134b9d7ffeb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (50..55, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-of/dstr/var-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for-of/head-await-using-bound-names-fordecl-tdz.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "58fb896f5eec569e2b3cefbc8859de30f6a71667f1b16f2c8f578b2aefa6d8c6",
+      "summary": "Error:   x Expected ';', got 'x'\n    ,-[15:1]\n 12 | asyncTest(async function () {"
+    },
+    {
+      "path": "test/language/statements/for-of/head-await-using-fresh-binding-per-iteration.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a1375a63fa5eefa92c11680d5c741d6961adcaf20a97f6532082372d909a9c52",
+      "summary": "Error:   x Expected ';', got 'x'\n    ,-[18:1]\n 15 | const obj3 = { async [Symbol.asyncDispose]() { } };"
+    },
+    {
+      "path": "test/language/statements/for-of/head-lhs-async-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "7054d94cfd077f43f6463d337c02c39f2ee21c576f429d6f014006d2443c200d",
+      "summary": "Error:   x The left-hand side of a `for...of` statement may not be `async`\n    ,-[16:1]\n 13 | "
+    },
+    {
+      "path": "test/language/statements/for-of/head-using-bound-names-fordecl-tdz.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "fd6fe1ef502469ef08e37aaa96e42b236a1d91fabc3332098fcffc92e44f0bf4",
+      "summary": "Error:   x Expected ';', got 'x'\n    ,-[12:1]\n  9 | "
+    },
+    {
+      "path": "test/language/statements/for-of/head-using-fresh-binding-per-iteration.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "c4e380d7cc7ef2fe8241557514c871644dda7ce8dbd017f2e819337028383df0",
+      "summary": "Error:   x Expected ';', got 'x'\n    ,-[17:1]\n 14 | const obj3 = { [Symbol.dispose]() { } };"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/let/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/let/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/let/syntax/escaped-let.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "9b2d204debe76b95a0a953bb906ea66483e83b9a7fa797deb5673abf37b0c85d",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Identifier 'a' has already been declared"
+    }
+  ]
+}

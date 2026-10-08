@@ -1,0 +1,327 @@
+#!/usr/bin/env node
+
+import { runNodeBatchSync } from "../lib/tool-process.mjs";
+
+import {
+  runMatrix, batchRunner, terserBatch, withTerserVariants,
+  ensureNodeTool, ensureTerserTool, standardLowerers,
+} from "../lib/runner.mjs";
+import { mangleValidator } from "../lib/compare.mjs";
+
+// A recovered output should never still contain a helper *import path*: if it
+// does, an imported helper (`@swc/helpers`, `@babel/runtime`) was not folded and
+// its import not removed. This catches the "syntax recovered but helper import
+// lingers" class regardless of how the local binding was renamed.
+const HELPER_IMPORT_LEAKS = ["@swc/helpers/", "@babel/runtime/helpers/"];
+
+// Inlined helper *function* names for the array/spread/rest families (the
+// non-external lowering has no import path, only these bodies). Their presence
+// in recovered output means the top-level helper or one of its sub-helpers was
+// left behind. The two names per helper cover Babel camelCase and swc snake_case.
+const ARRAY_HELPER_LEAKS = [
+  "_toConsumableArray", "_to_consumable_array",
+  "_toArray", "_to_array",
+  "_slicedToArray", "_sliced_to_array",
+  "_arrayWithoutHoles", "_array_without_holes",
+  "_arrayWithHoles", "_array_with_holes",
+  "_iterableToArrayLimit", "_iterable_to_array_limit",
+  "_iterableToArray", "_iterable_to_array",
+  "_unsupportedIterableToArray", "_unsupported_iterable_to_array",
+  "_arrayLikeToArray", "_array_like_to_array",
+  "_nonIterableSpread", "_non_iterable_spread",
+  "_nonIterableRest", "_non_iterable_rest",
+  // Babel's `arrayLikeIsIterable` assumption wraps the destructuring source in
+  // this helper instead of toArray/slicedToArray; wakaru does not yet recover it.
+  "_maybeArrayLike", "_maybe_array_like",
+];
+
+// Rest *parameters* lower to an `arguments` copy loop, not a helper; these names
+// only survive when that loop was not recovered back to `...rest`.
+const REST_PARAM_LEAKS = ["arguments", "_len", "_key"];
+
+const ARRAY_HELPER_REJECTED = [...HELPER_IMPORT_LEAKS, ...ARRAY_HELPER_LEAKS];
+
+const snippets = [
+  {
+    name: "array-spread-basic",
+    source: "const out = [head, ...items, tail];\nuse(out);\n",
+    expected: ["head", "...items", "tail"],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { head: 1, items: [2, 3], tail: 4 } },
+  },
+  {
+    name: "array-spread-multiple",
+    source: "const out = [...left_items, middle, ...right_items];\nuse(out);\n",
+    expected: ["...left_items", "middle", "...right_items"],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { left_items: [1], middle: 2, right_items: [3, 4] } },
+  },
+  {
+    name: "call-spread-free",
+    source: "const out = build(app_id, ...items, tail);\nuse(out);\n",
+    expected: ["build(app_id, ...items, tail)"],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { app_id: 7, items: [1, 2], tail: 3 } },
+  },
+  {
+    name: "call-spread-method",
+    source: "const out = app_info.build(prefix, ...items, tail);\nuse(out);\n",
+    expected: ["app_info.build(prefix, ...items, tail)"],
+    rejected: ARRAY_HELPER_REJECTED,
+  },
+  {
+    name: "rest-param-basic",
+    source: "function collect(first, ...rest_items) {\n  return use(first, rest_items);\n}\n",
+    expected: ["function collect(first, ...rest_items)", "return use(first, rest_items)"],
+    rejected: [...HELPER_IMPORT_LEAKS, ...REST_PARAM_LEAKS],
+  },
+  {
+    name: "rest-param-offset",
+    source:
+      "function collect(app_id, version, ...rest_items) {\n  return use(app_id, version, rest_items);\n}\n",
+    expected: ["function collect(app_id, version, ...rest_items)", "return use(app_id, version, rest_items)"],
+    rejected: [...HELPER_IMPORT_LEAKS, ...REST_PARAM_LEAKS],
+  },
+  {
+    name: "array-rest-basic",
+    source: "const [first, ...rest_items] = items;\nuse(first, rest_items);\n",
+    acceptForms: [
+      "const unused = undefined;\nconst [first, ...rest_items] = items;\nuse(first, rest_items);\n",
+      "const source = items;\nconst [first, ...rest_items] = source;\nuse(first, rest_items);\n",
+    ],
+    expectedAny: [
+      ["const [first, ...rest_items] = items", "use(first, rest_items)"],
+      ["const _items = items", "const [first, ...rest_items] = _items", "use(first, rest_items)"],
+    ],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { items: [1, 2, 3] } },
+  },
+  {
+    name: "array-rest-default-hole",
+    source: "const [first, , second = fallback, ...rest_items] = items;\nuse(first, second, rest_items);\n",
+    acceptForms: [
+      "const unused = undefined;\nconst [first, , second = fallback, ...rest_items] = items;\nuse(first, second, rest_items);\n",
+    ],
+    expected: ["first", "second = fallback", "...rest_items"],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { items: [1, 2], fallback: 7 } },
+  },
+  {
+    name: "array-rest-nested-pattern",
+    source:
+      "const [first, [nested, ...inner_rest] = [], ...outer_rest] = items;\nuse(first, nested, inner_rest, outer_rest);\n",
+    expected: ["[nested, ...inner_rest] = []", "...outer_rest", "use(first, nested, inner_rest, outer_rest)"],
+    rejected: ARRAY_HELPER_REJECTED,
+    execute: { env: { items: [1, [2, 3, 4], 5, 6] } },
+  },
+  {
+    name: "array-destructure-tuple",
+    source:
+      'import { useState } from "react";\nconst [current, setCurrent] = useState(value);\nuse(current, setCurrent);\n',
+    acceptForms: [
+      'import { useState } from "react";\nconst unused = undefined;\nconst [current, setCurrent] = useState(value);\nuse(current, setCurrent);\n',
+    ],
+    expected: ["const [current, setCurrent]", "use(current, setCurrent)"],
+    rejected: [...ARRAY_HELPER_REJECTED, "_useState[0]", "_useState[1]"],
+  },
+  {
+    name: "array-destructure-callback",
+    source:
+      "const out = items.filter(([, value]) => value != null);\nuse(out);\n",
+    expected: ["filter(([,", "!= null"],
+    rejected: [...ARRAY_HELPER_REJECTED, ")[1]"],
+    execute: { env: { items: [["a", null], ["b", 2], ["c", 3]] } },
+    // This row targets the helper-backed callback shape. Loose/direct-index
+    // lowerings are a different recovery problem and would dilute this oracle.
+    transformerFilter: ({ name }) => name.includes("-spec-terser-compress"),
+  },
+  {
+    name: "array-destructure-assignment",
+    source:
+      'import { useState } from "react";\nfunction Component() {\n  var current;\n  var setCurrent;\n  [current, setCurrent] = useState(value);\n  use(current, setCurrent);\n}\nComponent();\n',
+    acceptForms: [
+      'import { useState } from "react";\nfunction Component() {\n  const [current, setCurrent] = useState(value);\n  use(current, setCurrent);\n}\nComponent();\n',
+      'import { useState } from "react";\nfunction Component() {\n  let current;\n  let setCurrent;\n  [current, setCurrent] = useState(value);\n  use(current, setCurrent);\n}\nComponent();\n',
+    ],
+    expected: ["useState(value)", "use(current, setCurrent)"],
+    rejected: [...ARRAY_HELPER_REJECTED, "[0]", "[1]"],
+  },
+];
+
+const babelProfiles = [
+  {
+    name: "babel-7.8",
+    core: "7.8.7",
+    spreadPlugin: ["@babel/plugin-transform-spread", "7.8.3"],
+    destructuringPlugin: ["@babel/plugin-transform-destructuring", "7.8.3"],
+    parametersPlugin: ["@babel/plugin-transform-parameters", "7.8.7"],
+    modes: ["spec", "loose"],
+  },
+  {
+    name: "babel-7.13",
+    core: "7.13.16",
+    spreadPlugin: ["@babel/plugin-transform-spread", "7.13.0"],
+    destructuringPlugin: ["@babel/plugin-transform-destructuring", "7.13.17"],
+    parametersPlugin: ["@babel/plugin-transform-parameters", "7.13.0"],
+    modes: ["spec", "loose", "iterableIsArray", "arrayLikeIsIterable"],
+  },
+  {
+    name: "babel-7.28",
+    core: "7.28.5",
+    spreadPlugin: ["@babel/plugin-transform-spread", "7.28.6"],
+    destructuringPlugin: ["@babel/plugin-transform-destructuring", "7.28.5"],
+    parametersPlugin: ["@babel/plugin-transform-parameters", "7.27.7"],
+    modes: ["spec", "loose", "iterableIsArray", "arrayLikeIsIterable"],
+  },
+  {
+    name: "babel-8",
+    core: "8.0.6",
+    spreadPlugin: ["@babel/plugin-transform-spread", "8.0.5"],
+    destructuringPlugin: ["@babel/plugin-transform-destructuring", "8.0.5"],
+    parametersPlugin: ["@babel/plugin-transform-parameters", "8.0.5"],
+    modes: ["spec", "loose", "iterableIsArray", "arrayLikeIsIterable"],
+  },
+];
+
+function babelModeOptions(mode) {
+  switch (mode) {
+    case "spec":
+      return { assumptions: {}, pluginOptions: {} };
+    case "loose":
+      return { assumptions: {}, pluginOptions: { loose: true } };
+    case "iterableIsArray":
+      return { assumptions: { iterableIsArray: true }, pluginOptions: {} };
+    case "arrayLikeIsIterable":
+      return { assumptions: { arrayLikeIsIterable: true }, pluginOptions: {} };
+    default:
+      throw new Error(`unsupported Babel mode ${mode}`);
+  }
+}
+
+function babelSpreadRestBatch(sources, profile, options) {
+  const [spreadName, spreadVersion] = profile.spreadPlugin;
+  const [destructuringName, destructuringVersion] = profile.destructuringPlugin;
+  const [parametersName, parametersVersion] = profile.parametersPlugin;
+  const packages = [
+    `@babel/core@${profile.core}`,
+    `${spreadName}@${spreadVersion}`,
+    `${destructuringName}@${destructuringVersion}`,
+    `${parametersName}@${parametersVersion}`,
+  ];
+  const toolKey = `babel-${profile.core}-spread-destructuring-parameters`;
+  const toolDir = ensureNodeTool(toolKey, packages);
+  const helperSource = `
+import fs from "node:fs";
+const babelModule = await import("@babel/core");
+const spreadModule = await import(${JSON.stringify(spreadName)});
+const destructuringModule = await import(${JSON.stringify(destructuringName)});
+const parametersModule = await import(${JSON.stringify(parametersName)});
+const babel = babelModule.default ?? babelModule;
+const spread = spreadModule.default ?? spreadModule;
+const destructuring = destructuringModule.default ?? destructuringModule;
+const parameters = parametersModule.default ?? parametersModule;
+const options = JSON.parse(process.env.MATRIX_BABEL_OPTIONS || "{}");
+const sources = JSON.parse(fs.readFileSync(0, "utf8"));
+const results = sources.map(source => {
+  try {
+    const transformOptions = {
+      filename: "input.js", babelrc: false, configFile: false, comments: false, compact: false,
+      plugins: [
+        [spread, options.pluginOptions || {}],
+        [destructuring, options.pluginOptions || {}],
+        [parameters, options.pluginOptions || {}],
+      ],
+    };
+    if (options.assumptions && Object.keys(options.assumptions).length > 0) {
+      transformOptions.assumptions = options.assumptions;
+    }
+    return { code: babel.transformSync(source, transformOptions).code };
+  } catch (e) { return { error: e.message }; }
+});
+process.stdout.write(JSON.stringify(results));
+`;
+  return runNodeBatchSync(helperSource, sources, {
+    label: "babel-spread-rest-batch.mjs",
+    cwd: toolDir,
+    env: { MATRIX_BABEL_OPTIONS: JSON.stringify(options) },
+  });
+}
+
+const allSources = snippets.map((s) => s.source);
+
+// Custom terser-inline transformer for array-destructure-tuple snippet
+function terserInlineBatch(sources) {
+  const toolDir = ensureTerserTool();
+  const helperSource = `
+import fs from "node:fs";
+import { minify } from "terser";
+const sources = JSON.parse(fs.readFileSync(0, "utf8"));
+const results = [];
+for (const source of sources) {
+  try {
+    const result = await minify(source, {
+      module: true,
+      toplevel: true,
+      compress: {
+        defaults: true,
+        passes: 3,
+        inline: true,
+        reduce_funcs: true,
+        unused: true,
+      },
+      mangle: { reserved: ["useState", "current", "setCurrent", "use", "value"] },
+      format: { comments: false },
+    });
+    results.push({ code: result.code });
+  } catch (e) { results.push({ error: e.message }); }
+}
+process.stdout.write(JSON.stringify(results));
+`;
+  return runNodeBatchSync(helperSource, sources, {
+    label: "terser-inline-batch.mjs",
+    cwd: toolDir,
+  });
+}
+
+const babelSpecRunner = batchRunner(() => babelSpreadRestBatch(allSources, babelProfiles[2], babelModeOptions("spec")));
+
+const transformers = [
+  ...babelProfiles.flatMap((profile) =>
+    profile.modes.flatMap((mode) =>
+      withTerserVariants(
+        `${profile.name}-${mode}`,
+        allSources,
+        batchRunner(() => babelSpreadRestBatch(allSources, profile, babelModeOptions(mode))),
+      ),
+    ),
+  ),
+  ...standardLowerers(allSources, { swcExternalHelpers: true }),
+];
+
+// Extra per-snippet transformer for terser-inline on array-destructure-tuple
+const tupleSnippet = snippets.find((s) => s.name === "array-destructure-tuple");
+if (tupleSnippet) {
+  tupleSnippet.extraTransformers = [
+    {
+      name: "babel-7.28-spec-terser-inline",
+      run: batchRunner(() => {
+        const rawOutputs = allSources.map((s) => { try { return babelSpecRunner(s); } catch { return null; } });
+        const valid = rawOutputs.filter((r) => r !== null);
+        if (valid.length === 0) return new Map();
+        const batchResult = terserInlineBatch(valid);
+        const map = new Map();
+        for (let i = 0; i < allSources.length; i++) {
+          if (rawOutputs[i] !== null) map.set(allSources[i], batchResult.get(rawOutputs[i]));
+        }
+        return map;
+      }),
+    },
+  ];
+}
+
+runMatrix({
+  name: "array-spread-rest",
+  snippets,
+  transformers,
+  ...mangleValidator(),
+});

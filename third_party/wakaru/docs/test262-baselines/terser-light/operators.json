@@ -1,0 +1,1532 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "operators"
+    ],
+    "paths": [
+      "test/language/expressions/addition",
+      "test/language/expressions/subtraction",
+      "test/language/expressions/multiplication",
+      "test/language/expressions/division",
+      "test/language/expressions/modulus",
+      "test/language/expressions/exponentiation",
+      "test/language/expressions/bitwise-and",
+      "test/language/expressions/bitwise-or",
+      "test/language/expressions/bitwise-xor",
+      "test/language/expressions/bitwise-not",
+      "test/language/expressions/left-shift",
+      "test/language/expressions/right-shift",
+      "test/language/expressions/unsigned-right-shift",
+      "test/language/expressions/logical-not",
+      "test/language/expressions/unary-minus",
+      "test/language/expressions/unary-plus",
+      "test/language/expressions/typeof",
+      "test/language/expressions/void",
+      "test/language/expressions/delete",
+      "test/language/expressions/postfix-decrement",
+      "test/language/expressions/postfix-increment",
+      "test/language/expressions/prefix-decrement",
+      "test/language/expressions/prefix-increment",
+      "test/language/expressions/equals",
+      "test/language/expressions/does-not-equals",
+      "test/language/expressions/strict-equals",
+      "test/language/expressions/strict-does-not-equals",
+      "test/language/expressions/greater-than",
+      "test/language/expressions/greater-than-or-equal",
+      "test/language/expressions/less-than",
+      "test/language/expressions/less-than-or-equal",
+      "test/language/expressions/in",
+      "test/language/expressions/instanceof",
+      "test/language/expressions/relational",
+      "test/language/expressions/assignment",
+      "test/language/expressions/compound-assignment",
+      "test/language/expressions/logical-assignment"
+    ]
+  },
+  "totals": {
+    "discovered": 2200,
+    "runnable": 2200,
+    "skipped": 0,
+    "unsupported": 108,
+    "rejected": 74,
+    "passed": 2018,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2bb1df0045463eb7e008a861ce31b3ee255ab034be0eb82eadb9151e13c5cfba",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A6_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "58d02e73da29d37acf7a1ca0e697f52a5e09f0570155ed3faf68283bed3974f9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === undefined. Actual: 1"
+    },
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A6_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "b51d7150f384e6fb8daf6bf35b66c642667b1ca2fcb8f1cb302706b21637ff78",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 1"
+    },
+    {
+      "path": "test/language/expressions/assignment/S11.13.1_A6_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "f1688e70388a0253fd26262f40cc4418b67c9af77c8f1c1e5c7d515377c0175f",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: 1"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "43daa4e93ecb8694f9341f19ee0af4cef454b488bf63e6dcce265f377abcc161",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (52..57, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-elem-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "697703e42ad885247d96d340998ad3dae259b122ec5c21f22056e8f9088c7425",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (65..70, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-elem-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "d2ccb6d2521943d0a9786df01fe43d3558c54ba48110dc5aedfa166519004c05",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (57..62, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-elem-target-yield-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "3b5b66a086b0b5dcafd23d55631b563bf6c8e50ec3fb05f63a853cb17f95a8f6",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (62..67, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-rest-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "a7a5ad921e4471ac72a7c2908ec5dcaaf961606e2510818c1aa05259436f6b45",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (66..71, WithLabel { inner: Error { error: (66..71, TS1109) }, span: 60..63, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-rest-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "c19281c16b21173008917f5650e3da2301417b046527bde2342510791118c3b1",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (60..65, WithLabel { inner: Error { error: (60..65, TS1109) }, span: 52..55, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/array-rest-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "39e3b791b98380130954dcd27520e43748d051261604319a8772a20af0154ada",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (71..76, WithLabel { inner: Error { error: (71..76, TS1109) }, span: 66..69, note: \"An expression should follow '...'\" }) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-const-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-continue-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-debugger-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-delete-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-do-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-else-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-enum-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-export-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-extends-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-extends-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-finally-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-for-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-function-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-import-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-in-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-instanceof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-let-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/ident-name-prop-name-literal-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-id-identifier-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "4899ffca907bd2b6effccd9ac9f10014499928f71297255bdf8c38618796b8c8",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (56..61, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-id-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "11dd05a945decadb0e7b8bd42151aa2b7e202895f30ff55bc83df0317a921fbb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (55..60, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-prop-elem-init-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "11dd05a945decadb0e7b8bd42151aa2b7e202895f30ff55bc83df0317a921fbb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (55..60, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-prop-elem-target-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "e5733343c3c7cc507c0b86974215a2f8c25dcbcab08adb33c1e46811afa5e4cb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (67..72, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-prop-nested-array-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "ca049c18992a2a51d8f2b7cf9fcb8f59ce644c5cbedadb9ab7291b10ab17ebee",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (61..66, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/dstr/obj-prop-nested-obj-yield-ident-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "a786c47ed91dc91de775412cc42f610e0404711dae2da9a18e6a013151caa0f8",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (69..74, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/assignment/fn-name-lhs-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "ac08578444a37a636397e105f0ec44b3a62363e654bf95ad48ebfba8cd37b148",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: name descriptor value should be ; name value should be "
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-break-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-case-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-catch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-class-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-const-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-continue-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-debugger-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-default-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-default-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-delete-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-do-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-else-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-enum-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-export-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-extends-escaped-ext.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-extends-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-finally-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-for-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-function-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-if-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-import-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-in-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-instanceof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-let-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-new-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-return-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-super-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-switch-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-this-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-throw-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-try-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-typeof-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-var-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-void-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-while-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/assignment/member-expr-ident-name-with-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a6244ed5bcab9f9ef58b24242db58c6c56622db42ec21ad166ef6ee1cb36f425",
+      "summary": "SyntaxError: Escaped characters are not allowed in keywords"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.10_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.10_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.10_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "519a3c2bf44558cc0583e5fd0e9660ea8d59434ae16e146db2a96b4f1294b824",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.11_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c15f2a6aaa8b739431f975dca6aa5a8bc42550cbd3e9f81b3d91133878869f37",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.11_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c15f2a6aaa8b739431f975dca6aa5a8bc42550cbd3e9f81b3d91133878869f37",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.11_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "1a64b800c0e5f04b588d9cde7aab2321ac00b14e271b2506d1fe45e5b27c41ac",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.1_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c15f2a6aaa8b739431f975dca6aa5a8bc42550cbd3e9f81b3d91133878869f37",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.1_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c15f2a6aaa8b739431f975dca6aa5a8bc42550cbd3e9f81b3d91133878869f37",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.1_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "1a64b800c0e5f04b588d9cde7aab2321ac00b14e271b2506d1fe45e5b27c41ac",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 6. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.2_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.2_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.2_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2bb1df0045463eb7e008a861ce31b3ee255ab034be0eb82eadb9151e13c5cfba",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.3_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.3_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.3_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2bb1df0045463eb7e008a861ce31b3ee255ab034be0eb82eadb9151e13c5cfba",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.4_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.4_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.4_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "005385b23d000eb836d05eb4f0893247c2c1b49327979eaa48d4540c2223d50c",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "519a3c2bf44558cc0583e5fd0e9660ea8d59434ae16e146db2a96b4f1294b824",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.6_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a0e2f988838c5dd1eae179ee18e457e374e2890de2bec219c749849a9cf0d989",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 16. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.6_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a0e2f988838c5dd1eae179ee18e457e374e2890de2bec219c749849a9cf0d989",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 16. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.6_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "06ff5b976a08d602ecbee94c7b7bbbbe5a552a8e31347454ee26183ff6c3db3a",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 16. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.7_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.7_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.7_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2bb1df0045463eb7e008a861ce31b3ee255ab034be0eb82eadb9151e13c5cfba",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.8_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.8_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eac6366b7eeba2d6c51a5827d5b0c0dd49dad528ee5a10b1b269fd20ba8f008e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.8_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2bb1df0045463eb7e008a861ce31b3ee255ab034be0eb82eadb9151e13c5cfba",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 2. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.9_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.9_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A5.9_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "519a3c2bf44558cc0583e5fd0e9660ea8d59434ae16e146db2a96b4f1294b824",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.10_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "f685c3e7f9d19b92c09eda69320418324926c7ab66c91f5a61404ef3d5f5d1ec",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 5"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.11_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "f685c3e7f9d19b92c09eda69320418324926c7ab66c91f5a61404ef3d5f5d1ec",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 5"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.1_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "032181daafa7bc7db1b7cc6004cd3653359582acddff30ce5f3cb684e52f292e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 12"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.2_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "f685c3e7f9d19b92c09eda69320418324926c7ab66c91f5a61404ef3d5f5d1ec",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 5"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.3_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c2f3e1037715f81427bbe0f5e9fda93e7e5de7618e03d936a11662cdfcf066df",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 3"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.4_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "771cb657b4722908617b8bf640499eb39090d3fef4d1682668f9eb11b434aaf3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 4"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "771cb657b4722908617b8bf640499eb39090d3fef4d1682668f9eb11b434aaf3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 4"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.6_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "6a525043cb0e0f1ac6dbb53eaa49a1c3741da9ff9607797299c2c9ab975279eb",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 8"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.7_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "771cb657b4722908617b8bf640499eb39090d3fef4d1682668f9eb11b434aaf3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 4"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.8_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "771cb657b4722908617b8bf640499eb39090d3fef4d1682668f9eb11b434aaf3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 4"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A6.9_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "b51d7150f384e6fb8daf6bf35b66c642667b1ca2fcb8f1cb302706b21637ff78",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerX === 2. Actual: 1"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.10_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.11_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.1_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.2_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.3_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.4_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.5_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.6_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.7_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.8_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/S11.13.2_A7.9_T4.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--11.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--13.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--15.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--17.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--19.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--21.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--5.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--7.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v--9.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/delete/super-property-uninitialized-this.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "d5fcd5e658bd32056101a910a4d212db880a4f28d30520d8c158384424e145e3",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a Test262Error"
+    },
+    {
+      "path": "test/language/expressions/in/private-field-rhs-await-absent.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "93ce9dbc30f644cebd1a7595a469f1a279380f1e4a0ba65978558c9b6d834811",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (20..25, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/expressions/in/private-field-rhs-yield-present.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "647389d72b96b832ce5e294ce5e568ab69082b58e6c261f9a251fbcc0a1060da",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Unexpected strict mode reserved word"
+    },
+    {
+      "path": "test/language/expressions/in/rhs-yield-absent-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "91f918dd2dc38444a9956e3f61469ad07c6862eaef94a35f7f7be742bd221fc6",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (11..16, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/postfix-decrement/S11.3.2_A5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-decrement/S11.3.2_A5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-decrement/S11.3.2_A5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "519a3c2bf44558cc0583e5fd0e9660ea8d59434ae16e146db2a96b4f1294b824",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-decrement/S11.3.2_A6_T3.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/postfix-decrement/operator-x-postfix-decrement-calls-putvalue-lhs-newvalue--1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/postfix-increment/S11.3.1_A5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-increment/S11.3.1_A5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-increment/S11.3.1_A5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "005385b23d000eb836d05eb4f0893247c2c1b49327979eaa48d4540c2223d50c",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/postfix-increment/S11.3.1_A6_T3.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/postfix-increment/operator-x-postfix-increment-calls-putvalue-lhs-newvalue--1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/prefix-decrement/S11.4.5_A5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-decrement/S11.4.5_A5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dac0484ff3a41b26167e6ff6484a9da1e2bda351087a24a4e4ee287150632ecc",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-decrement/S11.4.5_A5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "519a3c2bf44558cc0583e5fd0e9660ea8d59434ae16e146db2a96b4f1294b824",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 1. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-decrement/S11.4.5_A6_T3.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/prefix-decrement/operator-prefix-decrement-x-calls-putvalue-lhs-newvalue--1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/expressions/prefix-increment/S11.4.4_A5_T1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-increment/S11.4.4_A5_T2.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "e3f54deea3ce07552ed46bb4f2534c24c8613fdc995659ba9394de0745d91269",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: scope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-increment/S11.4.4_A5_T3.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "005385b23d000eb836d05eb4f0893247c2c1b49327979eaa48d4540c2223d50c",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #1: innerScope.x === 3. Actual: undefined"
+    },
+    {
+      "path": "test/language/expressions/prefix-increment/S11.4.4_A6_T3.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "2aebac7c38f259fa244742b7b886b253406cf549259e41f18a7712bbb08d4e45",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/expressions/prefix-increment/operator-prefix-increment-x-calls-putvalue-lhs-newvalue--1.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    }
+  ]
+}

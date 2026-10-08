@@ -1,0 +1,30 @@
+import type { EvidenceWriter } from "../application/investigation/InvestigationRecordPort.js";
+import type { McpServer } from "@modelcontextprotocol/server";
+
+import type { AnalysisOperationPort } from "../application/AnalysisProvider.js";
+import { ARTIFACT_TOOL_CONTRACTS } from "../contracts/artifactToolContracts.js";
+import type { BinaryTarget } from "../domain/binaryTarget.js";
+import type { Logger } from "../logger.js";
+import { registerEvidenceTools } from "./registerEvidenceTools.js";
+import { artifactInspectionResultSchema } from "../domain/artifactInspection.js";
+
+/** Register deterministic artifact inventory and safe extraction operations. */
+export const registerArtifactTools = (
+  server: McpServer,
+  analysis: AnalysisOperationPort,
+  options: {
+    readonly logger: Logger;
+    readonly activeTarget: (() => BinaryTarget | undefined) | undefined;
+    readonly recordEvidence: EvidenceWriter["recordEvidence"] | undefined;
+  },
+): void => {
+  registerEvidenceTools(server, analysis, ARTIFACT_TOOL_CONTRACTS, {
+    ...options,
+    sourceEvidence: (operation, result) =>
+      operation === "inspect_artifact"
+        ? artifactInspectionResultSchema
+            .parse(result)
+            .substeps.map(({ evidence }) => evidence)
+        : [],
+  });
+};

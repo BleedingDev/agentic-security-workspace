@@ -1,0 +1,592 @@
+# Testing
+
+See also: [Debugging](debugging.md) for investigating test failures and
+snapshot regressions, [Architecture](architecture.md) for pipeline stage
+ordering.
+
+## Running Tests
+
+Building the native CLI requires a C compiler in addition to the pinned Rust
+toolchain because its mimalloc allocator is compiled from source. MSVC targets
+use a C++17 compiler. A normal platform development toolchain (Xcode Command
+Line Tools on macOS, build-essential on Linux, or Visual Studio C++ Build Tools
+on Windows) provides this. The allocator dependency belongs only to the CLI;
+Rust library and WASM builds do not need it.
+
+```bash
+# Run the full suite — prefer nextest, the runner CI uses
+cargo nextest run -p wakaru-core      # core suite
+cargo nextest run --workspace         # everything
+
+# cargo test still works for everything, and for single-file / single-test focus
+cargo test --test my_rule_rule
+cargo test --test smart_inline_rule -- inline_single_use
+```
+
+Install nextest once with `cargo install cargo-nextest --locked` (or the
+prebuilt binary from <https://get.nexte.st>). CI runs `cargo nextest run
+--workspace --profile ci` (see `.config/nextest.toml`). nextest does not run
+doctests; there are none today, but CI keeps a `cargo test --doc` guard.
+
+nextest starts one process per test. On machines where security software
+(antivirus, endpoint protection) inspects every process launch, that startup
+cost dominates: the run is slow while CPU use stays low. There,
+`cargo test -p wakaru-core --tests --no-fail-fast` runs the same tests in far
+fewer processes and can finish sooner.
+
+Snapshot drift fails the test and writes a `.snap.new` (via `INSTA_UPDATE=new`
+in `.cargo/config.toml`); accept intentional changes with `cargo insta accept`,
+or without `cargo-insta` as described in
+[Snapshot Testing Workflow](#snapshot-testing-workflow).
+
+For semantic round-trip coverage with Test262, see
+[Test262 Round-Trip](test262-roundtrip.md).
+
+### Optional: shallow-fetch git dependencies
+
+The formatter depends on several OXC crates from a pinned git revision. With
+a fresh Cargo cache, fetching the OXC monorepo can take time.
+
+If you already use nightly Cargo, you can opt into its
+[unstable shallow git fetch mode](https://doc.rust-lang.org/cargo/reference/unstable.html#git)
+before building or testing:
+
+```bash
+cargo +nightly fetch -Zgit=shallow-deps
+```
+
+This is optional. Normal development uses the stable toolchain pinned in
+`rust-toolchain.toml`.
+
+## Required Verification Before Commit
+
+For code changes, run the full relevant checklist before committing. Do not
+count a snapshot update alone as coverage for a rule change; add or update the
+focused rule regression test as well.
+
+Apply the checklist to the changed surface:
+
+- Core/rule changes require the full core suite and the applicable reproduction
+  and fixture checks below.
+- Changes confined to other crates, the website, release tooling, or CI use
+  their relevant tests, lint, build, and behavior checks. Add core checks when
+  the change can affect core behavior or shared dependencies.
+- Documentation-only changes require checking local links, referenced commands
+  and APIs, consistency with related guidance, and `git diff --check`; they do
+  not require a Rust test run.
+
+For code changes, add or update focused tests using the existing harness where
+possible. A new test file or framework is not required merely because a file
+changed. Explain the failure a new test prevents and why its coverage belongs
+with this change.
+
+1. Focused regression test for the rule or behavior you touched:
+
+   ```bash
+   cargo test -p wakaru-core --test my_rule_rule
+   ```
+
+2. The full core suite — it covers the pipeline and unpack snapshot tests for
+   every supported bundler format, producer variant, and dialect (webpack4/5,
+   Vercel ncc, browserify, Cocos Creator 2.x, Closure ModuleManager, SystemJS,
+   esbuild/Bun, Metro, AMD/UMD, Rollup/Vite, multi-file), which is broader than
+   any hand-picked subset:
+
+   ```bash
+   cargo nextest run -p wakaru-core
+   ```
+
+3. Recovery-rate baseline, when you changed a rule that a reproduction matrix
+   covers (see "Reproduction Matrices" below):
+
+   ```bash
+   node scripts/repro/collect-stats.mjs --check
+   ```
+
+   If rates deliberately moved, regenerate without `--check` and commit the
+   `stats.json` diff with the change; the script also verifies the aggregate
+   cited in `README.md` and `website/index.html` and fails until those move
+   with it. CI re-verifies all of this only when `scripts/repro/**`, the
+   README, or the website page changes (`.github/workflows/repro-stats.yml`),
+   so rule changes rely on this local step.
+
+4. Formatting and linting:
+
+   ```bash
+   cargo fmt --check
+   cargo clippy -p wakaru-core --all-targets -- -D warnings
+   ```
+
+   If you touched non-core crates or shared workspace code, run the matching
+   package clippy command, or use:
+
+   ```bash
+   cargo clippy --workspace --all-targets -- -D warnings
+   ```
+
+5. Build an optimized CLI only when you need a standalone binary, such as
+   before running reproduction matrices with `WAKARU=target/dev-opt/wakaru`
+   or when validating CLI/build behavior directly:
+
+   ```bash
+   cargo build --profile dev-opt -p wakaru-cli
+   ```
+
+   `dev-opt` skips LTO and compiles incrementally, so it rebuilds much faster
+   than `dev-release` after an edit; use `dev-release` or `release` when you
+   need performance numbers. The fixture runner below builds `dev-opt` itself
+   (`dev-release` for `--perf`), so do not run this as a separate required
+   step only to prepare fixtures.
+
+6. Fixtures, when the change can affect decompile output, unpacking, bundler
+   behavior, rule ordering, helper detection, or CLI behavior. Run this only
+   if you have the sibling `wakaru-fixtures` repository checked out. Run it from
+   your worktree — it auto-detects and builds this checkout, decompiles every
+   fixture into a scratch dir, and diffs against the committed reference without
+   touching the working tree:
+
+   ```bash
+   ../wakaru-fixtures/run.sh --check     # exits non-zero on output drift
+   ```
+
+   On Windows, run the same script from Git Bash (it auto-detects `wakaru.exe`).
+   To accept a deliberate, reviewed output improvement into the reference, run
+   `../wakaru-fixtures/run.sh --update` and commit the `outputs/` change.
+
+7. Docs freshness: if your change makes any statement in `docs/` or
+   `AGENTS.md` false (a renamed flag, a moved file, a new rule ordering, a
+   changed workflow), fix the doc in the same commit. Agents and new
+   contributors trust the docs as reality — a wrong doc is worse than a
+   missing one.
+
+8. Final cleanliness checks:
+
+   ```bash
+   git diff --check
+   git status --short
+   ```
+
+   `.cargo/config.toml` sets `INSTA_UPDATE=new`, so a changed snapshot **fails**
+   the test and leaves a `.snap.new` instead of being silently accepted. Review
+   each one, then accept intentional changes (see
+   [Snapshot Testing Workflow](#snapshot-testing-workflow); `cargo-insta` is
+   optional). Make sure no `.snap.new` files remain before committing.
+
+Review every snapshot diff before committing. A snapshot change is acceptable
+only when the output is semantically better or the test fixture expectation is
+intentionally changing.
+
+When a change should only rename bindings (a rename rule or naming heuristic),
+check that claim mechanically before reading the hunks.
+`wakaru debug normalize --rename` ([cli-debug.md](cli-debug.md#debug-normalize))
+alpha-renames local bindings deterministically and keeps free names, so two
+outputs that differ only in local names normalize to identical text. For
+reference outputs tracked in git, run it after regenerating them, while the
+working tree holds the new output and `HEAD` holds the reference:
+
+```bash
+W=path/to/wakaru   # the build under test
+git diff --name-only | while IFS= read -r f; do
+  old=$(git show "HEAD:$f" | "$W" debug normalize --rename -) &&
+  new=$("$W" debug normalize --rename "$f") &&
+  [ "$old" = "$new" ] || echo "not rename-only: $f"
+done
+```
+
+A file that fails to parse also prints, because `debug normalize` exits non-zero.
+Equivalence only rules out changes beyond names. Still read a sample to judge
+whether the new names are better; a rename can shadow a global such as `Date`
+without changing behavior.
+
+## Sharing Verification Results
+
+Verification belongs to the tested source and environment, not to the person
+or agent that ran it. A reviewer may reuse completed results for the same
+source state. Record the worktree, commit (and any tested uncommitted diff),
+commands, results, and log locations when available. For fixture or reproduction
+checks, also identify the reference revision; for a standalone binary, record
+its source revision and build profile. Distinguish checks you ran from results
+reported by another agent or CI, and state any missing evidence.
+
+Re-run affected checks when implementation, relevant base code, dependencies,
+configuration, or references changed, or when a new counterexample or failure
+casts doubt on the evidence. Relevant core changes still require the full core
+suite. A commit-message-only change does not invalidate results. After rebase,
+inspect both the replayed patches and incoming base changes before deciding
+which results remain applicable; matching patches alone are not sufficient.
+
+When the user explicitly requests review without rerunning tests, inspect the
+code and supplied evidence, report any validation gap, and respect that limit.
+Do not describe pending checks as passed or rerun an unchanged suite merely
+because a new reviewer took over. This avoids duplicate execution; it does not
+remove the required verification for changed code.
+
+Verification evidence and commit messages are different audiences. The
+evidence record may name the inputs a bug was found in and cite counts; it
+stays in the handoff. The commit message describes the mechanism and the
+code shape: no bundle or module names, paths, ids, counts of affected
+modules or references, or test-run tallies.
+
+## Running Checks From a Worktree
+
+All Cargo commands should be run from the wakaru worktree that contains the
+changes you are validating, not from the main checkout by habit. The worktree
+root is the directory that contains this repo's `Cargo.toml` and `docs/`
+directory. (On Windows, use Git Bash so the same commands work.)
+
+```bash
+cd ../wakaru-my-worktree
+cargo nextest run -p wakaru-core
+cargo clippy -p wakaru-core --all-targets -- -D warnings
+```
+
+When a reproduction matrix needs a `WAKARU` binary, build and point to the
+binary in the same worktree:
+
+```bash
+cd ../wakaru-my-worktree
+cargo build --profile dev-opt -p wakaru-cli
+export WAKARU="$PWD/target/dev-opt/wakaru"   # wakaru.exe on Windows
+node scripts/repro/array-spread-rest-matrix/matrix.mjs --details
+```
+
+Without an explicit `WAKARU`, the shared matrix runner asks Cargo to refresh
+the current worktree's debug CLI once before using `target/debug/wakaru`.
+
+Do not reuse a `target/dev-opt/wakaru` binary from another checkout unless
+you are intentionally comparing against that checkout. A stale binary from
+`main` can make a matrix pass or fail for the wrong code.
+
+Fixtures are validated from the wakaru worktree under test. `run.sh`
+auto-detects the worktree you launch it from and builds *that* checkout, so you
+do not need to set `WAKARU` or worry about a stale binary:
+
+```bash
+cd ../wakaru-my-worktree
+../wakaru-fixtures/run.sh --check
+```
+
+By default this writes to a scratch dir and diffs against the committed reference,
+leaving both working trees clean — so it is safe to run from several worktrees
+at once. It only modifies `wakaru-fixtures/outputs/` (and `report.txt`) when you
+pass `--update` to accept a reviewed output improvement; commit that change in
+the fixtures repo.
+
+## Test Organization
+
+All test files live under `crates/core/tests/`.
+
+**Default: add your test to the existing test file for the rule you're changing.** Do not create a new file unless you're adding a new rule. Each rule has a corresponding test file.
+
+- `*_rule.rs` -- Per-rule unit tests. One file per rule (e.g., `un_iife_rule.rs`, `smart_inline_rule.rs`).
+- `noop_pipeline.rs` -- Stability tests: inputs that should pass through unchanged.
+- `webpack4_unpack.rs` -- Pipeline snapshot tests for final webpack4 decompile output.
+- `webpack4_unpack_raw.rs` -- Snapshot tests for webpack4 raw-unpack extraction, before the normal decompile pipeline.
+- `bundle_unpack.rs` -- Pipeline snapshot tests for webpack5 + browserify bundles.
+- `esbuild_unpack.rs` -- esbuild bundle detection and unpack tests.
+- `systemjs_unpack.rs` -- SystemJS unpack tests using generated compiler and bundler fixtures.
+- `closure_module_manager_unpack.rs` -- Closure ModuleManager/gstatic structural,
+  guard, raw/full, multi-file, provenance, and pinned Closure Compiler-generated
+  chunk tests.
+- `metro_unpack.rs` -- Metro detection, extraction-boundary, provenance, and pipeline snapshots.
+- `webpack5_chunk_unpack.rs` -- webpack5 chunk splitting tests.
+- `webpack_fixtures.rs` -- Checked-in bundles generated by webpack4/5 and
+  Vercel ncc, including runtime and wrapper variants.
+- `cocos_creator_unpack.rs` -- Cocos Creator 2.x Browserify-family detection,
+  dependency remapping, entry, provenance, and false-positive tests using a
+  checked-in generated fixture.
+- `multi_file_unpack.rs` -- Multi-input unpack tests for entry + chunk workflows.
+- `facts_rule.rs` -- Cross-module fact extraction tests.
+- `pipeline_helpers_rule.rs` -- Transpiler helper detection + restoration pipeline tests.
+- `decompile_options_rule.rs` -- Tests for `DecompileOptions` configuration.
+- `common/mod.rs` -- Shared test helpers (see below).
+- `snapshots/` -- Insta snapshot files (auto-generated, committed).
+
+### Generated bundler reproductions
+
+When a bug depends on output from a real bundler, keep the reproduction under
+`crates/core/tests/bundles/<bundler>-gen/`:
+
+1. Commit the smallest readable source inputs under `src/`.
+2. Add the generator command to `generate.sh`; pin the producer version when
+   its output shape may vary between releases.
+3. Commit the generated artifact under `dist/` so tests do not require the
+   producer toolchain or network access.
+4. Add focused coverage that reads the generated artifact. Do not replace it
+   with a hand-written approximation of the reported bundle shape.
+
+Generated artifacts should not be edited by hand. Regenerate them from the
+checked-in inputs, and verify deterministic output before committing when the
+producer permits it.
+
+A few fixtures under `webpack-gen/dist/` are hand-authored shapes no real
+bundler emits (e.g. `wp-path-traversal`, `wp5-require-s`); `generate.sh`
+deliberately leaves them alone — it removes and rebuilds only the outputs its
+own configs produce.
+
+## Writing Tests
+
+There are two test patterns: **full-pipeline tests** (run all rules) and **isolated rule tests** (run one rule only).
+
+**Name tests after the property, not the mechanism.** A name like
+`skips_exported_binding` becomes a lie the day the mechanism changes (it did:
+the behavior became "rename but alias-preserve the public name"). A name like
+`public_export_name_survives_rename` stays true across implementations and
+tells the reader what actually matters.
+
+**Pipeline property tests** (`crates/core/tests/pipeline_properties.rs`)
+assert invariants over full-pipeline output instead of exact strings: public
+export names survive, JSX tags never bind lowercase component bindings, and a
+decompiled module pair validates as a graph (via
+`wakaru_core::validate_output_modules`). Add a property here whenever a bug
+was caused by two individually-correct rules undoing each other's work —
+per-rule tests cannot see that class. Readability-only regressions (renames
+that stop happening without breaking anything) are still invisible to
+properties; the private fixture suite (`../wakaru-fixtures/run.sh --check`)
+covers those.
+
+**Full-pipeline test** — use `render(input)`:
+
+```rust
+mod common;
+use common::{assert_eq_normalized, render};
+
+#[test]
+fn my_feature_test() {
+    let input = r#"void 0"#;
+    let expected = r#"undefined"#;
+    assert_eq_normalized(&render(input), expected);
+}
+```
+
+**Isolated rule test** — use `render_rule(input, builder)`:
+
+```rust
+mod common;
+use common::{assert_eq_normalized, render_rule};
+use wakaru_core::rules::UnDoubleNegation;
+
+fn apply(input: &str) -> String {
+    render_rule(input, |_| UnDoubleNegation)
+}
+
+#[test]
+fn strips_double_bang_in_if() {
+    let input = "if (!!x) { a(); }";
+    let expected = "if (x) { a(); }";
+    assert_eq_normalized(&apply(input), expected);
+}
+```
+
+For rules that need `unresolved_mark`:
+
+```rust
+fn apply(input: &str) -> String {
+    render_rule(input, |unresolved_mark| MyRule::new(unresolved_mark))
+}
+```
+
+## Test Helpers (`crates/core/tests/common/mod.rs`)
+
+| Helper | Purpose |
+|---|---|
+| `render(source)` | Full decompile pipeline (all rules) |
+| `render_rule(source, builder)` | Single rule in isolation (resolver + one rule + fixer) |
+| `render_rule_with_filename(source, filename, builder)` | Same as `render_rule` but with custom filename (for `.ts`/`.tsx` parsing) |
+| `inspect_rule_output(source, builder, inspect)` | Single rule, then inspect the module instead of emitting; `SpanText::starting_at(span)` resolves a node's span to input text (for span-propagation tests) |
+| `render_pipeline_until(source, stop_after)` | Pipeline up to a specific rule (inclusive) |
+| `render_pipeline_between(source, start, stop)` | Pipeline from `start` through `stop` (inclusive) |
+| `trace_pipeline(source, options)` | Collect `RuleTraceEvent`s for debugging |
+| `changed_rules(source)` | List which rule names changed the output |
+| `normalize(input)` | Parse + re-emit to normalize whitespace |
+| `assert_eq_normalized(actual, expected)` | Compare after normalizing both sides |
+
+## Snapshot Testing Workflow
+
+Tests use [insta](https://insta.rs/) for snapshot testing. Snapshots are
+committed as `.snap` files under `crates/core/tests/snapshots/`.
+
+`.cargo/config.toml` sets `INSTA_UPDATE=new`, so a changed snapshot **fails** the
+test and writes a `.snap.new` (it is not silently accepted). This keeps a
+regression from landing green just because nobody eyeballed the `git diff`.
+
+To review and accept intentional changes, read each `.snap.new` against its
+`.snap` (`git diff --no-index x.snap x.snap.new`), then accept with one of:
+
+```bash
+cargo insta accept            # accept all pending .snap.new (needs cargo-insta)
+mv path/x.snap.new path/x.snap  # accept one file; no tool needed
+INSTA_UPDATE=always cargo test -p wakaru-core --test my_rule_rule  # rewrite during a run
+```
+
+`cargo-insta` is optional (`cargo install cargo-insta --locked`). Without it,
+use `mv` or `INSTA_UPDATE=always`; both produce the same `.snap` as
+`cargo insta accept`, because the tests have no inline snapshots.
+`INSTA_UPDATE=always` accepts every drift in that run, reviewed or not, so
+scope it to the tests whose diffs you already read. `cargo insta review` is
+interactive and does not work in an agent shell.
+
+**When snapshots change unexpectedly:** see the "Snapshot Layers" section in
+[debugging.md](debugging.md) for how to trace the cause.
+
+## Choosing `render` vs `render_rule`
+
+`render_rule` runs a single rule in isolation (resolver + one rule + fixer).
+`render` runs the full decompile pipeline. Most rule tests use `render_rule`,
+but some rules depend on earlier normalization:
+
+- **Helper-detection-dependent rules** (UnTemplateLiteral, UnAsyncAwait, etc.)
+  rely on `LocalHelperContext::collect` scanning function bodies. Body-shape
+  matchers may expect normalized forms — e.g. SimplifySequence splits comma
+  returns into separate statements before tagged template body matching runs.
+  If `render_rule` produces unchanged output but `render` works, the rule
+  depends on earlier normalization. Use `render` for the test.
+
+- **Rules after Stage 1 normalization** — if your test input has `void 0`,
+  bracket notation, indirect calls, or comma expressions, those are normalized
+  before your rule runs in the real pipeline. Either pre-normalize the test
+  input manually, or use `render` / `render_pipeline_until`.
+
+When in doubt, check with `debug trace` on the raw input to see what the AST
+looks like when your rule receives it.
+
+## Reproduction Matrices
+
+Reproduction matrices under `scripts/repro/` test recovery across transpiler
+versions, modes, and minification levels. Results are tracked in
+`scripts/repro/stats.json` — read this file to see the current recovery rates
+without re-running everything.
+
+```bash
+# Regenerate stats.json after rule/matrix changes
+node scripts/repro/collect-stats.mjs
+
+# Check whether stats.json matches a fresh run
+node scripts/repro/collect-stats.mjs --check
+
+# Both modes also fail if the aggregate cited in README.md, website/index.html,
+# or the docs-site Correctness page no longer matches (scripts/repro/lib/doc-stats.mjs)
+
+# Run a single matrix with details
+node scripts/repro/array-spread-rest-matrix/matrix.mjs --details
+
+# Force a clean reinstall of matrix npm tools when investigating registry drift
+WAKARU_REPRO_REFRESH_TOOLS=1 node scripts/repro/array-spread-rest-matrix/matrix.mjs --json
+
+# Dump one shape for debugging
+node scripts/repro/parameters-matrix/matrix.mjs --dump nested-default babel-7.8-loose
+```
+
+### Writing a new matrix
+
+Producer launchers use `lib/tool-process.mjs`: `runNodeBatch` for asynchronous
+batches, `runNodeBatchSync` for synchronous batches, and `runNodeJsonArraySync`
+for validators with a custom row schema. Pass the launcher source, the input
+array, a diagnostic label, and the installed tool directory as `cwd`. Set
+`format: "commonjs"` for launchers using `require`; the default is ESM.
+These helpers pass the launcher directly to Node and the batch input on stdin.
+Do not write a shared launcher into the tool cache: concurrent invocations can
+read an empty file during overwrite or execute another profile's complete
+launcher. JSON validation reports the producer, exit/signal, output size and
+bounded stderr instead of a bare parse error.
+
+Install tools with `ensureNodeTool` / `ensureLockedNodeTool` from
+`lib/runner.mjs`, never with a direct `npm install` into the repro tool cache.
+The cache is `target/repro-tools/` in the main checkout, found through
+`git rev-parse --git-common-dir`, so every worktree of a clone shares it and
+a fresh worktree does not reinstall the tools; `WAKARU_REPRO_TOOLS_DIR`
+overrides the location. Each tool directory name ends in a hash of its install
+marker (exact versions or lockfile hash), so worktrees pinning different
+contents for one tool get separate directories. `WAKARU_REPRO_REFRESH_TOOLS=1`
+therefore replaces the copy every worktree uses; stale directories from old
+pins are safe to delete when no run is active.
+Matrices, tests, and `node --test` workers share that cache and install the
+same tool concurrently, so `lib/node-tool.mjs` populates a staging directory
+and renames it into place; a complete install is never deleted from under a
+process that already returned it. Transient `<tool>.staging-*` and
+`<tool>.stale-*` siblings belong to a running installer.
+
+`ensureNodeTool` accepts only exact versions (`@swc/core@1.16.2`, not
+`@swc/core@1`) and installs with `npm --before` set to one day after the
+newest spec's publish time. The dependency tree then matches what a project
+installing that release got, instead of the pinned package plus the newest
+version of every dependency. This matters for Babel, whose helper bodies and
+plugins live in separate packages behind `^` ranges. Bumping a tool is an
+explicit version change; SWC and Terser, which several matrices share, are
+pinned once in `lib/runner.mjs` (`ensureSwcTool`, `ensureTerserTool`).
+
+This isolates launcher execution, not dependency installation. Populate caches
+before concurrent runs and avoid refreshing/reinstalling a tool while another
+process uses it. `WAKARU_REPRO_JOBS` limits one matrix process; it does not lock
+tool caches across sessions. `collect-stats.mjs` treats `--jobs N` (or
+`WAKARU_REPRO_JOBS`) as the budget for the whole run: it runs up to N matrices
+at once and splits the budget between them (`lib/matrix-jobs.mjs`), so
+`--jobs 1` still means one wakaru process at a time.
+
+By default, matrices should spread `...mangleValidator()` from
+`lib/compare.mjs` into their `runMatrix()` config. This uses alpha-renaming normalization to compare
+mangled shapes structurally rather than by substring needle matching — without
+it, correctly-recovered mangled shapes show as false negatives.
+
+```js
+import { mangleValidator } from "../lib/compare.mjs";
+
+runMatrix({
+  name: "my-feature",
+  snippets,
+  transformers,
+  ...mangleValidator(),
+});
+```
+
+For snippets with legitimate structural variants in the output, add
+`acceptForms` with the alternative full-program forms. For snippets where the
+expected needle has multiple acceptable forms, use `expectedAny` (array of
+needle-arrays — passes if any group is fully present).
+
+The [tslib helper matrix](../scripts/repro/tslib-helpers-matrix/README.md)
+compares complete modules structurally for every profile, using the same
+alpha-renaming comparison after canonicalizing local export spelling. It
+tests module sources across inline helpers, CommonJS `importHelpers`
+namespaces, and ESM named imports. Script sources alone cannot test this
+dimension: TypeScript keeps helpers inline for scripts even when
+`importHelpers` is enabled. Known misses remain `no` rows in the baseline.
+
+### Execution equivalence (`execute`)
+
+Substring and structural checks accept a *shape*; they cannot see a recovery
+that assigns to a `const`, evaluates a receiver twice, or reads a stale key.
+Rows that opt in with `execute` also run the lowered program and wakaru's
+recovery in isolated `node:vm` contexts (`lib/exec-harness.mjs`) with identical
+deterministic environments, and must produce the same effect log — otherwise
+the row reports `behavior diverged` and counts as `no`.
+
+```js
+{
+  name: "rest-computed-key",
+  source: "...",
+  expected: [...],
+  execute: {
+    env: { app_info: { size: 2, name: "app" } },  // JSON globals, cloned per run
+    returns: { get_key: "size" },                  // stubs with fixed return values
+  },
+}
+```
+
+Every other free identifier is auto-stubbed as a deterministic recording
+function, so sinks like `use(...)` need no declaration — their calls (with
+deeply serialized arguments) *are* the observable behavior. Stub call order
+and count are part of the log, which also pins single-evaluation contracts:
+a recovery that calls `get_key()` twice diverges even if the result is right.
+Shapes containing module syntax (e.g. `@swc/helpers` imports) skip the check
+and keep their substring verdict, noted as `exec skipped` in the row.
+
+Use `execute` on rows whose semantics have bitten before: declaration-kind
+(mutated bindings), evaluation-count, evaluation-order, and enumeration-order
+shapes. The check needs the debug binary to be current (`cargo build -p
+wakaru-cli`) like every other matrix run.
+
+## Test Pitfalls
+
+- When a test uses `render()` (full pipeline), other rules may transform the input before your rule runs. If your test fails unexpectedly, use `render_rule()` to isolate, or `render_pipeline_until()` to stop at a specific point. See [debugging.md](debugging.md) for more investigation workflows.
+- `stmts_reference_ident` in `un_parameters.rs` matches by **emitted name** (ignoring SyntaxContext). A parameter named `e` will collide with any `e` in a nested function. This is intentional (prevents invalid parameter lists after rewriting) but can cause fold functions to bail out unexpectedly when an alias is inlined to a short parameter name.

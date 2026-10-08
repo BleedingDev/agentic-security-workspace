@@ -1,0 +1,59 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+const hasOwnProperty = Object.prototype.hasOwnProperty;
+const propertyIsEnumerable = Object.prototype.propertyIsEnumerable;
+export default (()=>{
+    try {
+        if (!Object.assign) {
+            return false;
+        }
+        const e = new String("abc");
+        e[5] = "de";
+        if (Object.getOwnPropertyNames(e)[0] === "5") {
+            return false;
+        }
+        const t = {};
+        for(let n = 0; n < 10; n++){
+            t[`_${String.fromCharCode(n)}`] = n;
+        }
+        if (Object.getOwnPropertyNames(t).map((e)=>t[e]).join("") !== "0123456789") {
+            return false;
+        }
+        const r = {};
+        "abcdefghijklmnopqrst".split("").forEach((e)=>{
+            r[e] = e;
+        });
+        return Object.keys({
+            ...r
+        }).join("") === "abcdefghijklmnopqrst";
+    } catch (e) {
+        return false;
+    }
+})() ? Object.assign : function(e, t) {
+    let n;
+    let a;
+    const u = ((e)=>{
+        if (e === null || e === undefined) {
+            throw new TypeError("Object.assign cannot be called with null or undefined");
+        }
+        return Object(e);
+    })(e);
+    for(let l = 1; l < arguments.length; l++){
+        for(const c in n = Object(arguments[l])){
+            if (hasOwnProperty.call(n, c)) {
+                u[c] = n[c];
+            }
+        }
+        if (Object.getOwnPropertySymbols) {
+            a = Object.getOwnPropertySymbols(n);
+            for(let s = 0; s < a.length; s++){
+                if (propertyIsEnumerable.call(n, a[s])) {
+                    u[a[s]] = n[a[s]];
+                }
+            }
+        }
+    }
+    return u;
+};

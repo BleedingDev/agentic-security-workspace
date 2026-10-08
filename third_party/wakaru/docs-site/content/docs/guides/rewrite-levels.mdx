@@ -1,0 +1,92 @@
+---
+title: Rewrite levels
+icon: SlidersHorizontal
+description: Choose how far Wakaru rewrites your code.
+---
+
+Wakaru uses `standard` by default. Change the level when you want to stay
+closer to the input's behavior or try stronger recovery.
+
+## Choosing a level
+
+| Level | When to use it |
+| --- | --- |
+| `minimal` | You are auditing, debugging, or trying to run the recovered code. Behavioral fidelity comes first |
+| `standard` | You want readable code with modern syntax. This is the default |
+| `aggressive` | You want to try further recovery and can accept changes to edge-case behavior |
+
+```bash
+npx wakaru input.js --level minimal
+npx wakaru input.js                     # standard is the default
+npx wakaru input.js --level aggressive
+```
+
+## See the difference
+
+Consider a function that reads a user's name or falls back to `"Anonymous"`:
+
+```js title="Input"
+function displayName(user) {
+    return user.name != null ? user.name : "Anonymous";
+}
+```
+
+With `minimal`, Wakaru keeps the two property reads:
+
+```js title="minimal"
+function displayName(user) {
+    if (user.name != null) {
+        return user.name;
+    }
+    return "Anonymous";
+}
+```
+
+With `standard`, it recovers nullish coalescing:
+
+```js title="standard"
+function displayName(user) {
+    return user.name ?? "Anonymous";
+}
+```
+
+For a plain object such as `{ name: "Ada" }`, both return `"Ada"`.
+The difference matters when `name` is a getter: the first version reads it
+twice when the value is present, while the second reads it once. A getter
+can have side effects or return a different value on each read.
+
+Try each version separately with this `user`:
+
+```js
+let reads = 0;
+const user = {
+    get name() {
+        reads += 1;
+        return reads === 1 ? "Ada" : "Grace";
+    }
+};
+
+console.log(displayName(user)); // minimal: "Grace", standard: "Ada"
+```
+
+In `minimal`, the condition reads `"Ada"`, then the return reads `"Grace"`.
+In `standard`, `??` reads `"Ada"` once and returns it.
+
+`minimal` preserves that behavior. `standard` favors the familiar `??` form,
+assuming the property is stable and reading it has no side effects.
+`aggressive` produces the same result as `standard` in this example. A higher
+level does not always change the output.
+
+You can compare levels on your own code in the [playground](/guides/playground).
+The full [rewrite assumptions](https://github.com/pionxzh/wakaru/blob/main/docs/rewrite-assumptions.md)
+explain the recovery choices each level permits.
+
+## Dead code
+
+Dead-code removal is a separate choice. By default, Wakaru removes only the
+dead code its own transforms create. Dead code that already existed in the
+input stays. Opt into a full reachability sweep with:
+
+```bash
+npx wakaru input.js --dce
+```

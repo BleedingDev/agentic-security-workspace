@@ -1,0 +1,62 @@
+use swc_core::common::Mark;
+use swc_core::ecma::ast::{BinaryOp, Callee, Expr, MemberProp};
+use swc_core::ecma::utils::ExprFactory;
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
+
+use super::expr_utils::is_unresolved_ident;
+
+/// Converts `Math.pow(a, b)` → `a ** b`.
+pub struct Exponent {
+    unresolved_mark: Mark,
+}
+
+impl Exponent {
+    pub fn new(unresolved_mark: Mark) -> Self {
+        Self { unresolved_mark }
+    }
+}
+
+impl VisitMut for Exponent {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Call(call) = expr else {
+            return;
+        };
+
+        // Must have exactly 2 args with no spread
+        if call.args.len() != 2 || call.args[0].spread.is_some() || call.args[1].spread.is_some() {
+            return;
+        }
+
+        // Callee must be `Math.pow`
+        let Callee::Expr(callee_expr) = &call.callee else {
+            return;
+        };
+        let Expr::Member(member) = callee_expr.as_ref() else {
+            return;
+        };
+        let Expr::Ident(obj_ident) = member.obj.as_ref() else {
+            return;
+        };
+        if !is_unresolved_ident(obj_ident, "Math", self.unresolved_mark) {
+            return;
+        }
+        let MemberProp::Ident(prop_ident) = &member.prop else {
+            return;
+        };
+        if prop_ident.sym != "pow" {
+            return;
+        }
+
+        // Take ownership and build the ** expression
+        let Expr::Call(mut call_owned) = std::mem::replace(expr, Expr::Invalid(Default::default()))
+        else {
+            unreachable!()
+        };
+        let b = *call_owned.args.pop().unwrap().expr;
+        let a = *call_owned.args.pop().unwrap().expr;
+
+        *expr = a.make_bin(BinaryOp::Exp, b);
+    }
+}

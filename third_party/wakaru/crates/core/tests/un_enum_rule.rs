@@ -1,0 +1,1858 @@
+mod common;
+
+use common::{assert_eq_normalized, render_pipeline, render_pipeline_until};
+use swc_core::common::{sync::Lrc, FileName, Mark, SourceMap, SyntaxContext, GLOBALS};
+use swc_core::ecma::ast::{BindingIdent, Decl, EsVersion, ModuleItem, Pat, Stmt};
+use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
+use swc_core::ecma::transforms::base::resolver;
+use swc_core::ecma::visit::VisitMutWith;
+use wakaru_core::rules::UnEnum;
+
+fn apply(input: &str) -> String {
+    apply_rule(input, false)
+}
+
+fn apply_resolved(input: &str) -> String {
+    apply_rule(input, true)
+}
+
+fn apply_rule(input: &str, resolve_bindings: bool) -> String {
+    GLOBALS.set(&Default::default(), || {
+        use swc_core::common::{sync::Lrc, FileName, SourceMap};
+        use swc_core::ecma::codegen::{text_writer::JsWriter, Config, Emitter};
+        use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
+
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            FileName::Custom("test.js".to_string()).into(),
+            input.to_string(),
+        );
+        let lexer = Lexer::new(
+            Syntax::Es(EsSyntax {
+                jsx: true,
+                ..Default::default()
+            }),
+            Default::default(),
+            StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = Parser::new_from(lexer);
+        let mut module = parser.parse_module().expect("parse failed");
+
+        if resolve_bindings {
+            let unresolved_mark = Mark::new();
+            let top_level_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+            module.visit_mut_with(&mut UnEnum::new_with_mark(unresolved_mark));
+        } else {
+            module.visit_mut_with(&mut UnEnum::new());
+        }
+
+        let mut output = Vec::new();
+        {
+            let mut emitter = Emitter {
+                cfg: Config::default().with_minify(false),
+                cm: cm.clone(),
+                comments: None,
+                wr: JsWriter::new(cm, "\n", &mut output, None),
+            };
+            emitter.emit_module(&module).expect("emit failed");
+        }
+        String::from_utf8(output).expect("utf-8")
+    })
+}
+
+#[test]
+fn recovers_exported_commonjs_enum() {
+    let input = r#"
+var LocalMode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+  e["Prod"] = "prod";
+})(LocalMode = exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+var LocalMode = {
+  Dev: 0,
+  0: "Dev",
+  Prod: "prod"
+};
+export { LocalMode as Mode };
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn recovers_collapsed_exported_commonjs_enum() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export var Mode = {
+  Dev: "dev"
+};
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn recovers_collapsed_exported_numeric_enum() {
+    let input = r#"
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export var Mode = {
+  Dev: 0,
+  0: "Dev"
+};
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn recovers_collapsed_exported_enum_mangled_param() {
+    let input = r#"
+(function (t) {
+  t["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export var Mode = {
+  Dev: "dev"
+};
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+const CC_RF_PUSH: &str = r#"cc._RF.push(module, "uuid", "ScriptName");"#;
+const CC_RF_POP: &str = r#"cc._RF.pop();"#;
+
+fn collapsed_numeric_mode_iife() -> &'static str {
+    r#"(function (e) {
+  e[e.None = 0] = "None";
+})(exports.Mode || (exports.Mode = {}));"#
+}
+
+fn wrap_cc_rf(body: &str) -> String {
+    format!("{CC_RF_PUSH}\n{body}\n{CC_RF_POP}\n")
+}
+
+#[test]
+fn recovers_collapsed_enum_beside_cc_rf_push_module() {
+    let input = wrap_cc_rf(collapsed_numeric_mode_iife());
+    let expected = wrap_cc_rf(
+        r#"export var Mode = {
+  None: 0,
+  0: "None"
+};"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &expected);
+}
+
+#[test]
+fn recovers_collapsed_arrow_enum_beside_cc_rf_push_module() {
+    let input = wrap_cc_rf(
+        r#"((t) => {
+  t[t.None = 0] = "None";
+})(exports.Mode || (exports.Mode = {}));"#,
+    );
+    let expected = wrap_cc_rf(
+        r#"export var Mode = {
+  None: 0,
+  0: "None"
+};"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &expected);
+}
+
+#[test]
+fn collapsed_enum_rejects_nested_cc_rf_marker_pair() {
+    let input = format!(
+        "function registerLater() {{\n  {CC_RF_PUSH}\n  {CC_RF_POP}\n}}\n{}\nregisterLater();\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_marker_pair_after_enum() {
+    let input = format!(
+        "{}\n{CC_RF_PUSH}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_closed_cc_rf_marker_pair_before_enum() {
+    let input = format!(
+        "{CC_RF_PUSH}\n{CC_RF_POP}\n{}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cclegacy_rf_push_module() {
+    let input = r#"
+cclegacy._RF.push(module, "uuid", "ScriptName");
+(function (e) {
+  e[e.None = 0] = "None";
+})(exports.Mode || (exports.Mode = {}));
+cclegacy._RF.pop();
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_push_module_exports() {
+    let input = format!(
+        "cc._RF.push(module.exports, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_push_exports() {
+    let input = format!(
+        "cc._RF.push(exports, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_push_extra_exports_mode_arg() {
+    let input = format!(
+        "cc._RF.push(module, exports.Mode);\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_local_cc_rf_push_module() {
+    let input = format!(
+        "const cc = fake;\ncc._RF.push(module, \"uuid\", \"ScriptName\");\n{}\ncc._RF.pop();\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_other_rf_push_module() {
+    let input = format!(
+        "other._RF.push(module, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_unshift_module() {
+    let input = format!(
+        "cc._RF.unshift(module, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_comma_called_cc_rf_push_module() {
+    let input = format!(
+        "(0, cc._RF.push)(module, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_computed_cc_rf_push_keys() {
+    let input = r#"
+cc["_RF"]["push"](module, "uuid", "ScriptName");
+(function (e) {
+  e[e.None = 0] = "None";
+})(exports.Mode || (exports.Mode = {}));
+cc["_RF"].pop();
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_push_spread_module() {
+    let input = format!(
+        "cc._RF.push(...module, \"uuid\", \"ScriptName\");\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_rejects_cc_rf_push_second_module_arg() {
+    let input = format!(
+        "cc._RF.push(module, module);\n{}\n{CC_RF_POP}\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn pipeline_unbrackets_computed_cc_rf_push_then_recovers_enum() {
+    let input = r#"
+cc["_RF"]["push"](module, "uuid", "ScriptName");
+(function (e) {
+  e[e.None = 0] = "None";
+})(exports.Mode || (exports.Mode = {}));
+cc["_RF"].pop();
+"#;
+    let expected = r#"
+cc._RF.push(module, "uuid", "ScriptName");
+export const Mode = {
+  None: 0,
+  0: "None"
+};
+cc._RF.pop();
+"#;
+    assert_eq_normalized(&render_pipeline(input), expected);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_later_public_export_read() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(exports.Mode);",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_exports_escape() {
+    let input = wrap_cc_rf(&format!(
+        "const publicApi = exports;\n{}\nobserve(publicApi.Mode);",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_module_exports_read() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(module.exports.Mode);",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_other_bare_module() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nconst api = module;",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_surface_method_call() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(exports.hasOwnProperty(\"Mode\"));",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_module_identity_call() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(module.valueOf().exports.Mode);",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_direct_eval_reading_exports() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(eval(\"exports.Mode\"));",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_direct_eval_mentioning_name() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(eval(\"Mode\"));",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_unknown_direct_eval() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve(eval(source));",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_existing_local_name() {
+    let input = wrap_cc_rf(&format!("var Mode = 1;\n{}", collapsed_numeric_mode_iife()));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_import_collision() {
+    let input = format!(
+        "import {{ Mode }} from \"./dep.js\";\n{CC_RF_PUSH}\n{}\n{CC_RF_POP}\nuse(Mode);\n",
+        collapsed_numeric_mode_iife()
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_reserved_name() {
+    let input = wrap_cc_rf(
+        r#"(function (e) {
+  e["Dev"] = "dev";
+})(exports.class || (exports.class = {}));"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_invalid_identifier_name() {
+    let input = wrap_cc_rf(
+        "(function (e) {\n  e[\"Dev\"] = \"dev\";\n})(exports[\"a\u{B2}\"] || (exports[\"a\u{B2}\"] = {}));",
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_duplicate_exported_class_name() {
+    let input = wrap_cc_rf(&format!(
+        "export class Mode {{}}\n{}",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_duplicate_esm_export() {
+    let input = wrap_cc_rf(&format!(
+        "var Existing;\nexport {{ Existing as Mode }};\n{}",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_delete_exports_mode() {
+    let input = wrap_cc_rf(&format!(
+        "{}\ndelete exports.Mode;",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_inner_class_despite_sibling_export() {
+    let input = wrap_cc_rf(
+        r#"export class Config {}
+(function (e) {
+  class Inner {}
+  e[e.Dev = 0] = "Dev";
+})(exports.Mode || (exports.Mode = {}));"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_effectful_values() {
+    let input = wrap_cc_rf(
+        r#"(function (e) {
+  e[e.Dev = observe()] = "Dev";
+})(exports.Mode || (exports.Mode = {}));"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_for_in_exports() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nfor (const k in exports) {{\n  observe(k);\n}}",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_for_in_module_exports() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nfor (const k in module.exports) {{\n  observe(k);\n}}",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_spread_exports() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nobserve({{ ...exports }});",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_destructured_exports() {
+    let input = wrap_cc_rf(&format!(
+        "{}\nconst {{ Mode }} = exports;",
+        collapsed_numeric_mode_iife()
+    ));
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_enum_with_cc_rf_push_rejects_rest_param_iife() {
+    let input = wrap_cc_rf(
+        r#"(function (t, ...rest) {
+  t[t.Dev = 0] = "Dev";
+})(exports.Mode || (exports.Mode = {}));"#,
+    );
+    assert_eq_normalized(&apply_resolved(&input), &input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_later_public_export_read() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_existing_local_name() {
+    let input = r#"
+var Mode = 1;
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_import_collision() {
+    let input = r#"
+import { Mode } from "./dep.js";
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+use(Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_global_reference() {
+    // `observe(Mode)` reads a global; a synthesized `var Mode` would
+    // capture it (and throw via TDZ once promoted to `const`).
+    let input = r#"
+observe(Mode);
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_reserved_name() {
+    // `exports.class` is a legal property, but the synthesized binding
+    // `export var class` would be a SyntaxError.
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.class || (exports.class = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_earlier_public_export_read() {
+    // A function defined before the IIFE can defer its `exports.Mode` read
+    // until after the fold removed the only write.
+    let input = r#"
+function readMode() {
+  return exports.Mode;
+}
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(readMode());
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_enum_rejects_earlier_public_export_read() {
+    // Same deferred-read hazard for the local-alias form: the fold removes
+    // the `exports.Mode` write that `readMode` observes.
+    let input = r#"
+function readMode() {
+  return exports.Mode;
+}
+var LocalMode;
+(function (e) {
+  e["Dev"] = "dev";
+})(LocalMode = exports.Mode || (exports.Mode = {}));
+observe(readMode());
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_direct_eval_mentioning_name() {
+    // Direct eval resolves names lexically; the synthesized module binding
+    // would capture what used to be a global lookup.
+    let input = r#"
+observe(eval("Mode"));
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_unknown_direct_eval() {
+    let input = r#"
+observe(eval(source));
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_allows_unrelated_direct_eval() {
+    let input = r#"
+observe(eval("1 + 1"));
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+observe(eval("1 + 1"));
+export var Mode = {
+  Dev: "dev"
+};
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_invalid_identifier_name() {
+    // `a\u{B2}` (a²) passes a naive alphanumeric check but is not valid
+    // JavaScript identifier grammar; the synthesized binding would be a
+    // SyntaxError.
+    let input = "
+(function (e) {
+  e[\"Dev\"] = \"dev\";
+})(exports[\"a\u{B2}\"] || (exports[\"a\u{B2}\"] = {}));
+";
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_exports_escape() {
+    // The exports object escapes as a value; `publicApi.Mode` observes the
+    // write the fold would remove.
+    let input = r#"
+const publicApi = exports;
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(publicApi.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_dynamic_exports_access() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports[key]);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_module_exports_read() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(module.exports.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_allows_unrelated_static_export_write() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+exports.other = 1;
+"#;
+    let expected = r#"
+export var Mode = {
+  Dev: "dev"
+};
+exports.other = 1;
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn collapsed_exported_enum_allows_indirect_eval() {
+    // Indirect eval runs in global scope and cannot observe module
+    // bindings, so it does not block synthesis.
+    let input = r#"
+observe((0, eval)("Mode"));
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+observe((0, eval)("Mode"));
+export var Mode = {
+  Dev: "dev"
+};
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn enum_member_key_with_invalid_identifier_grammar_stays_string() {
+    // `a\u{B2}` passes a naive alphanumeric check; an ident key would emit
+    // invalid JavaScript.
+    let input = "
+var Mode;
+(function (e) {
+  e[\"a\u{B2}\"] = \"x\";
+})(Mode || (Mode = {}));
+";
+    let expected = "
+var Mode = {
+  \"a\u{B2}\": \"x\"
+};
+";
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_surface_method_call() {
+    // A call with the export surface as receiver can observe the property
+    // the fold would remove.
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports.hasOwnProperty("Mode"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_surface_identity_call() {
+    // `exports.valueOf()` returns the surface itself; the chained read
+    // bypasses static member matching.
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports.valueOf().Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_module_identity_call() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(module.valueOf().exports.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_optional_surface_call() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports?.hasOwnProperty("Mode"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_surface_tagged_template() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports.valueOf``.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_prototype_mutating_member() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(exports.__proto__);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_direct_eval_reading_exports() {
+    // The eval source never names `Mode`, but it reads the export surface.
+    let input = r#"
+const key = "Mode";
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(eval("exports[key]"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_enum_rejects_direct_eval_reading_exports() {
+    // The local-alias path shares the same public-export proof.
+    let input = r#"
+var LocalMode;
+(function (e) {
+  e["Dev"] = "dev";
+})(LocalMode = exports.Mode || (exports.Mode = {}));
+observe(eval("exports.Mode"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn collapsed_exported_enum_allows_unrelated_method_call() {
+    let input = r#"
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+observe(other.hasOwnProperty("Mode"));
+"#;
+    let expected = r#"
+export var Mode = {
+  Dev: "dev"
+};
+observe(other.hasOwnProperty("Mode"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn collapsed_exported_enum_rejects_prior_bare_var() {
+    // The collapsed form never assigns the local, so `var Mode` must stay
+    // `undefined` — folding into it would change what later reads observe.
+    let input = r#"
+var Mode;
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+use(Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn pipeline_promotes_adjacent_exported_enum_to_const() {
+    let input = r#"
+export let Mode;
+(function (e) {
+  e["Dev"] = "dev";
+})(Mode || (Mode = {}));
+use(Mode);
+"#;
+    let expected = r#"
+export const Mode = {
+  Dev: "dev"
+};
+use(Mode);
+"#;
+    assert_eq_normalized(&render_pipeline(input), expected);
+}
+
+#[test]
+fn pipeline_recovers_minified_cjs_enum() {
+    let input = r#"
+exports.Mode = void 0;
+(function (e) {
+  e["Dev"] = "dev";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export const Mode = {
+  Dev: "dev"
+};
+"#;
+    assert_eq_normalized(&render_pipeline(input), expected);
+}
+
+#[test]
+fn pipeline_recovers_minified_cjs_numeric_enum() {
+    let input = r#"
+exports.Mode = void 0;
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+  e[e.Prod = 1] = "Prod";
+})(exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export const Mode = {
+  Dev: 0,
+  0: "Dev",
+  Prod: 1,
+  1: "Prod"
+};
+"#;
+    assert_eq_normalized(&render_pipeline(input), expected);
+}
+
+#[test]
+fn pipeline_still_recovers_minified_cjs_enum_with_local_alias() {
+    // Same producer, but module-scope compress kept the local alias as a
+    // mangled name instead of collapsing it. This form already recovered
+    // before collapsed-form support; it must keep working.
+    let input = r#"
+exports.Mode = void 0;
+var r;
+(function (t) {
+  t["Dev"] = "dev";
+  t["Prod"] = "prod";
+})(r = exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+export const Mode = {
+  Dev: "dev",
+  Prod: "prod"
+};
+"#;
+    assert_eq_normalized(&render_pipeline(input), expected);
+}
+
+#[test]
+fn recovers_alternate_exported_commonjs_enum_form() {
+    let input = r#"
+var Mode;
+(function (e) {
+  e[e["Dev"] = -1] = "Dev";
+})(Mode || (exports.Mode = Mode = {}));
+"#;
+    let expected = r#"
+var Mode = {
+  Dev: -1,
+  [-1]: "Dev"
+};
+export { Mode };
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn exported_commonjs_enum_preserves_position_after_split_declarations() {
+    let input = r#"
+var Mode;
+var before = "initialized first";
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+var Mode;
+var before = "initialized first";
+Mode = {
+  Dev: 0,
+  0: "Dev"
+};
+export { Mode };
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn assign_of_exports_keeps_toplevel_read_and_function_body() {
+    // Top-level `use(Local)` runs before the IIFE and must still see the
+    // uninitialized binding. `readLater` only defines a read; it does not
+    // run in the gap. The object stays at the IIFE, not on `let Local`.
+    let input = r#"
+let Local;
+use(Local);
+function readLater() {
+  return Local.Dev;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    let expected = r#"
+let Local;
+export { Local as Public };
+use(Local);
+function readLater() {
+  return Local.Dev;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = {});
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn assign_of_exports_ignores_shadowed_parameter() {
+    // A parameter named Local is a different binding, so the older in-place
+    // object fold still applies. The object is not moved onto `let Local`.
+    let input = r#"
+let Local;
+function nested(Local) {
+  return Local;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    let expected = r#"
+let Local;
+function nested(Local) {
+  return Local;
+}
+Local = {
+  Dev: 0,
+  0: "Dev"
+};
+export { Local as Public };
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn assign_of_exports_keeps_cc_rf_push_module() {
+    let input = r#"
+cc._RF.push(module, "uuid", "ScriptName");
+let Local;
+function readLater() {
+  return Local.Dev;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+cc._RF.pop();
+"#;
+    let expected = r#"
+cc._RF.push(module, "uuid", "ScriptName");
+let Local;
+export { Local as Public };
+function readLater() {
+  return Local.Dev;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = {});
+cc._RF.pop();
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn assign_of_exports_rejects_string_member_with_local_read() {
+    let input = r#"
+let Local;
+use(Local);
+(function (e) {
+  e.Task = "1";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_mixed_members_with_local_read() {
+    let input = r#"
+let Local;
+use(Local);
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+  e.Task = "1";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_deferred_public_read() {
+    // `use(Local)` blocks the older object-literal fold, so only the
+    // keep-IIFE path could rewrite this. A deferred `exports.Public` read
+    // must still leave the argument alone.
+    let input = r#"
+let Local;
+use(Local);
+function later() {
+  return exports.Public;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_direct_eval_reading_exports() {
+    let input = r#"
+let Local;
+use(Local);
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+observe(eval("exports.Public"));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_nested_inner_enum() {
+    let input = r#"
+let Local;
+(function (t) {
+  (function (e) {
+    e[e.Dev = 0] = "Dev";
+  })(t.Inner || (t.Inner = {}));
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_gap_write_to_local() {
+    // `export { Local as Public }` is live from the declaration on, so a
+    // gap write would publish `1` where `exports.Public` was still unset.
+    let input = r#"
+var Local;
+Local = 1;
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_later_write_to_local() {
+    // `exports.Public` keeps the enum object after `Local = null`; a live
+    // export of `Local` would not.
+    let input = r#"
+var Local;
+use(Local);
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+Local = null;
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_deferred_write_to_local() {
+    let input = r#"
+var Local;
+use(Local);
+function reset() {
+  Local = undefined;
+}
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_direct_eval_naming_local() {
+    let input = r#"
+var Local;
+use(Local);
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+eval("Local = null");
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn assign_of_exports_rejects_redeclared_local() {
+    let input = r#"
+var Local;
+use(Local);
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local = exports.Public || (exports.Public = {}));
+var Local;
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn local_or_rejects_intervening_write() {
+    let input = r#"
+var Local;
+Local = {
+  keep: 1
+};
+(function (e) {
+  e[e.Dev = 0] = "Dev";
+})(Local || (exports.Public = Local = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_keeps_iife_when_gap_reads_local() {
+    // A top-level read in the gap still runs before the write. Rewriting the
+    // argument must not move the object onto the bare declaration.
+    let input = r#"
+var Mode;
+var before = observe(Mode);
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    let expected = r#"
+var Mode;
+export { Mode };
+var before = observe(Mode);
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = {});
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_intervening_public_export_use() {
+    let input = r#"
+var Mode;
+observe(exports.Mode);
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_later_public_export_read() {
+    let input = r#"
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+observe(exports.Mode);
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn split_exported_commonjs_enum_rejects_later_deferred_public_read() {
+    let input = r#"
+var Mode;
+prepare();
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode || (exports.Mode = Mode = {}));
+function later() {
+  return exports.Mode;
+}
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_allows_later_other_public_export_read() {
+    let input = r#"
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+observe(exports.Other);
+"#;
+    let expected = r#"
+var Mode = {
+  Dev: 0,
+  0: "Dev"
+};
+export { Mode };
+observe(exports.Other);
+"#;
+    assert_eq_normalized(&apply_resolved(input), expected);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_effectful_values() {
+    let input = r#"
+var Mode;
+(function (e) {
+  e[e["Dev"] = observe()] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_local_exports_binding() {
+    let input = r#"
+const exports = {};
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_mismatched_public_names() {
+    let input = r#"
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Other = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_esm_export() {
+    let input = r#"
+var Existing;
+export { Existing as Mode };
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Mode || (exports.Mode = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_exported_function_name() {
+    let input = r#"
+export function Existing() {}
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Existing || (exports.Existing = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_exported_class_name() {
+    let input = r#"
+export class Existing {}
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Existing || (exports.Existing = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_destructured_export_name() {
+    let input = r#"
+export var { Existing } = source;
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Existing || (exports.Existing = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_namespace_export_name() {
+    let input = r#"
+export * as Existing from "./dep.js";
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Existing || (exports.Existing = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_rejects_duplicate_string_export_name() {
+    let input = r#"
+const value = 1;
+export { value as "Existing" };
+var Mode;
+(function (e) {
+  e[e["Dev"] = 0] = "Dev";
+})(Mode = exports.Existing || (exports.Existing = {}));
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn exported_commonjs_enum_is_top_level_only() {
+    let input = r#"
+function make() {
+  var Mode;
+  (function (e) {
+    e[e["Dev"] = 0] = "Dev";
+  })(Mode = exports.Mode || (exports.Mode = {}));
+}
+"#;
+    assert_eq_normalized(&apply_resolved(input), input);
+}
+
+#[test]
+fn test_numeric_enum() {
+    let input = r#"
+var Direction;
+(function (Direction) {
+  Direction[Direction["Up"] = 1] = "Up";
+  Direction[Direction["Down"] = 2] = "Down";
+  Direction[Direction["Left"] = 3] = "Left";
+  Direction[Direction["Right"] = -4] = "Right";
+})(Direction || (Direction = {}));
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down",
+  Left: 3,
+  3: "Left",
+  Right: -4,
+  [-4]: "Right"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn numeric_enum_preserves_forward_reverse_overwrite_order() {
+    let input = r#"
+var Direction;
+(function (Direction) {
+  Direction[Direction["A"] = 1] = "A";
+  Direction[Direction["1"] = 2] = "1";
+})(Direction || (Direction = {}));
+"#;
+    let expected = r#"
+var Direction = {
+  A: 1,
+  1: "A",
+  "1": 2,
+  2: "1"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn preserves_enum_with_non_literal_member_value() {
+    let input = r#"
+var Direction;
+(function (Direction) {
+  Direction[Direction["Up"] = nextValue()] = "Up";
+})(Direction || (Direction = {}));
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn test_string_enum() {
+    let input = r#"
+var Direction;
+(function (Direction) {
+  Direction["Up"] = "UP";
+  Direction["Down"] = "DOWN";
+  Direction.Left = "LEFT";
+  Direction.Right = "RIGHT";
+})(Direction || (Direction = {}));
+"#;
+    let expected = r#"
+var Direction = {
+  Up: "UP",
+  Down: "DOWN",
+  Left: "LEFT",
+  Right: "RIGHT"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_mangled_enum() {
+    let input = r#"
+var Direction;
+(function (i) {
+  i[i["Up"] = 1] = "Up";
+  i[i["Down"] = 2] = "Down";
+})(Direction || (Direction = {}));
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_function_initializer_enum() {
+    let input = r#"
+var Direction = function (Direction) {
+  Direction[Direction["Up"] = 1] = "Up";
+  Direction[Direction["Down"] = 2] = "Down";
+  return Direction;
+}(Direction || {});
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_arrow_initializer_enum() {
+    let input = r#"
+var Direction = ((Direction2) => {
+  Direction2[Direction2["Up"] = 1] = "Up";
+  Direction2[Direction2["Down"] = 2] = "Down";
+  return Direction2;
+})(Direction || {});
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_concise_arrow_sequence_initializer_enum() {
+    let input = r#"
+var Direction = (Direction2 => (
+  Direction2[Direction2.Up = 1] = "Up",
+  Direction2[Direction2.Down = 2] = "Down",
+  Direction2[Direction2.Right = -4] = "Right",
+  Direction2
+))(Direction || {});
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down",
+  Right: -4,
+  [-4]: "Right"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn pipeline_recovers_sequence_return_enum_after_conditionals() {
+    let input = r#"
+var Direction=(Direction2=>(Direction2[Direction2.Up=1]="Up",Direction2[Direction2.Down=2]="Down",Direction2[Direction2.Left=4]="Left",Direction2[Direction2.Right=-4]="Right",Direction2))(Direction||{});use(1,Direction[2],-4);
+"#;
+    let expected = r#"
+var Direction = {
+  Up: 1,
+  1: "Up",
+  Down: 2,
+  2: "Down",
+  Left: 4,
+  4: "Left",
+  Right: -4,
+  [-4]: "Right"
+};
+use(1, Direction[2], -4);
+"#;
+    assert_eq_normalized(&render_pipeline_until(input, "UnEnum"), expected);
+}
+
+#[test]
+fn test_concise_arrow_sequence_string_enum() {
+    let input = r#"
+var Status = (Status2 => (
+  Status2.Ready = "ready",
+  Status2.Done = "done",
+  Status2
+))(Status || {});
+"#;
+    let expected = r#"
+var Status = {
+  Ready: "ready",
+  Done: "done"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_exported_function_initializer_enum() {
+    let input = r#"
+export let Mode = function (Mode) {
+  Mode["Dev"] = "dev";
+  Mode["Prod"] = "prod";
+  return Mode;
+}({});
+"#;
+    let expected = r#"
+export let Mode = {
+  Dev: "dev",
+  Prod: "prod"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_enum_invalid_identifier_keys() {
+    let input = r#"
+var RenderMode;
+(function (RenderMode) {
+  RenderMode[RenderMode["2D"] = 1] = "2D";
+  RenderMode[RenderMode["WebGL"] = 2] = "WebGL";
+})(RenderMode || (RenderMode = {}));
+"#;
+    let expected = r#"
+var RenderMode = {
+  "2D": 1,
+  1: "2D",
+  WebGL: 2,
+  2: "WebGL"
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_noop_not_an_enum() {
+    let input = r#"
+var x = 1;
+console.log(x);
+"#;
+    let expected = r#"
+var x = 1;
+console.log(x);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn bare_var_enum_preserves_binding_context() {
+    let input = r#"
+var Direction;
+(function(Direction) {
+    Direction[Direction["Up"] = 0] = "Up";
+    Direction[Direction["Down"] = 1] = "Down";
+})(Direction || (Direction = {}));
+console.log(Direction.Up);
+"#;
+
+    let (original_ctxt, output_ctxt) = enum_var_binding_context(input);
+
+    assert_eq!(
+        output_ctxt, original_ctxt,
+        "enum var declaration should preserve the original binding context"
+    );
+    assert_ne!(
+        output_ctxt,
+        SyntaxContext::empty(),
+        "regression input should use a scoped binding"
+    );
+}
+
+#[test]
+fn standalone_enum_preserves_binding_context() {
+    let input = r#"
+(function(Status) {
+    Status[Status["Active"] = 0] = "Active";
+    Status[Status["Inactive"] = 1] = "Inactive";
+})(Status || (Status = {}));
+console.log(Status.Active);
+"#;
+
+    let (original_ctxt, output_ctxt) = standalone_enum_binding_context(input);
+
+    assert_eq!(
+        output_ctxt, original_ctxt,
+        "standalone enum assignment should preserve the original binding context"
+    );
+    assert_ne!(
+        output_ctxt,
+        SyntaxContext::empty(),
+        "regression input should use a scoped binding"
+    );
+}
+
+fn enum_var_binding_context(input: &str) -> (SyntaxContext, SyntaxContext) {
+    GLOBALS.set(&Default::default(), || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            FileName::Custom("fixture.js".to_string()).into(),
+            input.to_string(),
+        );
+        let lexer = Lexer::new(
+            Syntax::Es(EsSyntax::default()),
+            EsVersion::latest(),
+            StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = Parser::new_from(lexer);
+        let mut module = parser.parse_module().expect("input should parse");
+
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+
+        let original_ctxt = first_var_decl_context(&module);
+
+        module.visit_mut_with(&mut UnEnum::new_with_mark(unresolved_mark));
+
+        let output_ctxt = first_var_decl_context(&module);
+
+        (original_ctxt, output_ctxt)
+    })
+}
+
+fn standalone_enum_binding_context(input: &str) -> (SyntaxContext, SyntaxContext) {
+    GLOBALS.set(&Default::default(), || {
+        let cm: Lrc<SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            FileName::Custom("fixture.js".to_string()).into(),
+            input.to_string(),
+        );
+        let lexer = Lexer::new(
+            Syntax::Es(EsSyntax::default()),
+            EsVersion::latest(),
+            StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = Parser::new_from(lexer);
+        let mut module = parser.parse_module().expect("input should parse");
+
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+
+        let original_ctxt = iife_arg_ident_context(&module);
+
+        module.visit_mut_with(&mut UnEnum::new_with_mark(unresolved_mark));
+
+        let output_ctxt = first_assign_target_context(&module);
+
+        (original_ctxt, output_ctxt)
+    })
+}
+
+fn first_var_decl_context(module: &swc_core::ecma::ast::Module) -> SyntaxContext {
+    let ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) = &module.body[0] else {
+        panic!("expected var declaration as first statement");
+    };
+    let Pat::Ident(BindingIdent { id, .. }) = &var.decls[0].name else {
+        panic!("expected identifier in var declaration");
+    };
+    id.ctxt
+}
+
+fn iife_arg_ident_context(module: &swc_core::ecma::ast::Module) -> SyntaxContext {
+    use swc_core::ecma::ast::{CallExpr, Expr, ExprStmt};
+    let ModuleItem::Stmt(Stmt::Expr(ExprStmt { expr, .. })) = &module.body[0] else {
+        panic!("expected expression statement");
+    };
+    let Expr::Call(CallExpr { args, .. }) = expr.as_ref() else {
+        panic!("expected call expression");
+    };
+    let arg = strip_parens_ref(&args[0].expr);
+    let Expr::Bin(bin) = arg else {
+        panic!("expected binary expression in arg");
+    };
+    let Expr::Ident(id) = bin.left.as_ref() else {
+        panic!("expected ident in left of LogicalOr");
+    };
+    id.ctxt
+}
+
+fn strip_parens_ref(expr: &swc_core::ecma::ast::Expr) -> &swc_core::ecma::ast::Expr {
+    use swc_core::ecma::ast::Expr;
+    let mut current = expr;
+    while let Expr::Paren(p) = current {
+        current = p.expr.as_ref();
+    }
+    current
+}
+
+fn first_assign_target_context(module: &swc_core::ecma::ast::Module) -> SyntaxContext {
+    use swc_core::ecma::ast::{AssignExpr, AssignTarget, Expr, ExprStmt, SimpleAssignTarget};
+    let ModuleItem::Stmt(Stmt::Expr(ExprStmt { expr, .. })) = &module.body[0] else {
+        panic!("expected expression statement after transformation");
+    };
+    let Expr::Assign(AssignExpr { left, .. }) = expr.as_ref() else {
+        panic!("expected assignment expression");
+    };
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent { id, .. })) = left else {
+        panic!("expected identifier assign target");
+    };
+    id.ctxt
+}

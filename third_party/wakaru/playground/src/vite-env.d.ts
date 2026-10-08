@@ -1,0 +1,77 @@
+/// <reference types="vite/client" />
+
+declare module "@babel/standalone" {
+  interface TransformResult {
+    code?: string | null;
+  }
+
+  export function transform(
+    source: string,
+    options: Record<string, unknown>
+  ): TransformResult;
+}
+
+interface ImportMetaEnv {
+  readonly VITE_WAKARU_VERSION: string;
+  readonly VITE_WAKARU_GIT_HASH: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
+declare module "wakaru-wasm" {
+  export default function init(
+    input?: RequestInfo | URL | Response | BufferSource | WebAssembly.Module
+  ): Promise<void>;
+
+  export function decompile(
+    source: string,
+    level?: string | null,
+    sourcemap?: Uint8Array | null,
+    diagnostics?: boolean | null,
+    formatter?: boolean | null,
+    emitSourceMap?: boolean | null,
+    vueSfc?: boolean | null
+  ): WakaruDecompileResult;
+
+  export function unpack(
+    source: string,
+    level?: string | null,
+    heuristicSplit?: boolean | null,
+    diagnostics?: boolean | null,
+    formatter?: boolean | null,
+    emitSourceMap?: boolean | null
+  ): WakaruUnpackResult;
+
+  export function ruleNames(): string[];
+
+  export interface WakaruDecompileResult {
+    code: string;
+    source_map?: string;
+    vue_sfc?: string;
+    warnings: WakaruWarning[];
+  }
+
+  export interface WakaruUnpackResult {
+    modules: WakaruModule[];
+    source_maps?: WakaruSourceMap[];
+    warnings: WakaruWarning[];
+  }
+
+  export interface WakaruSourceMap {
+    filename: string;
+    map: string;
+  }
+
+  export interface WakaruModule {
+    filename: string;
+    code: string;
+  }
+
+  export interface WakaruWarning {
+    filename: string;
+    kind: string;
+    message: string;
+  }
+}

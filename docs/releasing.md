@@ -1,0 +1,203 @@
+# Releasing from a checkpoint
+
+Pushes to main automatically open or refresh a Release Please proposal with
+the next version and changelog. This proposal cannot create a GitHub release
+or publish packages. It previews the next release as main continues changing.
+
+Publication uses an explicit source checkpoint. A maintainer selects a frozen
+release branch and dispatches preparation and publication, so main can keep
+accepting changes without changing the candidate being tested.
+
+## 1. Select the source
+
+Use the next minor version proposed by Release Please, including releases with
+breaking changes. Record the full source SHA and create `release/VERSION` at
+that commit. The selected version and Release Please's proposed version must
+agree before publication.
+
+Use the automatic main proposal to review the suggested version and notes.
+Keep that proposal unmerged: select the application commit from main, create
+the frozen branch, and prepare its own release PR using the steps below.
+Merging the proposal into main would advance the release baseline before
+publication. The reviewed frozen-branch PR is the publication candidate.
+
+`release/VERSION` also sets the expected version for the workflow. Use an exact
+SemVer such as `release/6.1.0` or `release/6.1.0-rc.1`, without build metadata.
+The checkpoint validator rejects a candidate whose package, lockfile, manifest,
+registry metadata or changelog disagrees with that version before creating a tag.
+
+### Compatibility and version selection
+
+REA uses Release Please's `always-bump-minor` strategy: every release increments
+minor and resets patch, including releases with breaking changes. For example,
+the next release after 6.0.0 is 6.1.0. Version numbers use the SemVer format,
+but a minor increment does not promise backward compatibility. Review the
+changelog's breaking-change section and migration notes before upgrading.
+
+The supported public surface includes documented CLI commands/options, MCP tool
+names and input/result contracts, saved evidence formats and supported runtime
+requirements. Before adding `!` or a `BREAKING CHANGE` footer, a PR must identify
+a previously valid call or configuration that will fail or change meaning,
+explain why compatibility cannot be preserved, and give its migration. Prefer
+optional additions, compatibility adapters and a documented deprecation period.
+Keep breaking markers so the bot includes migration notes without incrementing
+major. Maintainers review this impact before merging; the bot parses markers
+and cannot infer compatibility.
+
+For example, adding an optional inspection tool is a minor change. Rejecting a
+relative MCP path previously accepted by the public contract is breaking;
+rejecting an input that the existing contract already prohibited is a fix.
+Changing the version number alone does not restore compatibility.
+
+For example, after selecting a reviewed commit for 5.0.0:
+
+```bash
+git fetch origin main
+git branch release/5.0.0 SOURCE_SHA
+git push origin release/5.0.0
+```
+
+Replace `SOURCE_SHA` with the selected full commit SHA. The checkpoint must
+include this release workflow and CI support for release branches. For an
+older checkpoint, backport only the release infrastructure first and record
+that additional commit. Do not merge later implementation changes into the
+release branch or rebase the candidate onto a moving main.
+
+## 2. Prepare the bot PR
+
+Run the workflow definition from main and select the frozen source separately:
+
+```bash
+gh workflow run release.yml --ref main \
+  -f release_branch=release/5.0.0 -f phase=prepare
+```
+
+Release Please targets that branch and prepares its version, changelog, and
+registry metadata. The workflow uses an optional `RELEASE_PLEASE_TOKEN`
+repository secret and otherwise uses the built-in `GITHUB_TOKEN`. A dedicated
+GitHub App or personal access token can start PR CI automatically. With the
+built-in token, `opened`, `synchronize`, and `reopened` PR events create runs
+that require a maintainer with write access to approve them. See
+[GitHub's workflow trigger documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+The generation step normalizes the product catalog. Preparation cannot create
+a GitHub release or publish a package. Record the final bot PR head after
+normalization, then approve that head's blocked runs from the PR page. Updates
+to the bot branch can create new approval-required runs; approval of an older
+head does not verify the normalized candidate. Wait for the final head's CI.
+
+The validator reads the actual ancestry range from the published baseline tag
+to the selected checkpoint, including visible first-parent Conventional Commits
+and the PR titles in GitHub's default merge messages. The report preserves the
+original merge subject alongside the extracted Conventional Commit title.
+This matters after merging a side-branch release back into a newer main:
+Release Please's chronological history cutoff can omit unreleased mainline
+commits. Under `always-bump-minor`, unreleased breaking markers allow a minor
+increment and still require references in the new release's breaking-change
+migration section. Checkpoints using the default strategy retain the major
+increment requirement. Other omitted entries are reported for review.
+Historical notes from an older release cannot satisfy
+the new release's migration check. This audits declared markers and references;
+it does not prove API compatibility or the quality of a migration explanation.
+
+If preparation reports a mismatch or omitted breaking changes, inspect the
+recorded ancestry report, correct the release PR's version artifacts and notes,
+regenerate documentation, and review/test its final head. Do not repeatedly
+prepare over manual corrections. Publication independently checks the merged
+candidate again before Release Please can create a tag.
+
+Review the candidate's version, notes, generated metadata, and package
+contents. Wait for the candidate's CI and relevant real-provider checks.
+Routine local iterations need focused checks; CI owns full deterministic
+coverage and platform lanes. If an artifact or real-provider check is
+unavailable, report that limit before deciding to publish.
+
+Merge the reviewed PR into `release/5.0.0` with its head SHA matched. Further
+main commits do not change this candidate. A necessary release fix belongs
+on the release branch, must be reviewed and tested, and establishes a new
+recorded checkpoint.
+
+## 3. Publish the reviewed merge
+
+After the release PR has merged:
+
+```bash
+gh workflow run release.yml --ref release/5.0.0 \
+  -f release_branch=release/5.0.0 -f phase=publish
+```
+
+Publication creates the release from the merged bot PR without preparing or
+updating another PR. Both npm and MCP Registry jobs check out Release Please's
+exact release SHA. They do not build the current main tip or a mutable branch.
+Stable versions publish to npm's `latest` tag; prerelease versions publish to
+the `next` tag so they cannot replace the stable install by default.
+The publish dispatch runs from the frozen release branch so npm's provenance
+records the actual release commit. Before Release Please creates a tag, the
+workflow accepts only `prepare` or `publish` and requires the selected branch
+tip to equal the dispatch SHA. Registry jobs run only during `publish`. After
+a tag exists, a mismatch between that tag's SHA and the dispatch SHA stops
+both registry publishes.
+See [npm's provenance implementation](https://github.com/npm/cli/blob/v11.16.0/workspaces/libnpmpublish/lib/provenance.js)
+for the use of GitHub's workflow ref and commit SHA.
+
+The workflow builds the bundled Windows controls and verifies the packaged
+artifact before npm publication. It then verifies the published CLI, the
+capability-scoped MCP catalog, and the isolated package update path before
+publishing MCP Registry metadata.
+
+Record these outcomes separately:
+
+- GitHub release and tag, including the resolved commit SHA.
+- npm's exact version and integrity, with the published-package canary passed.
+- MCP Registry's exact server version and matching npm package version.
+
+A GitHub tag alone does not establish npm or MCP Registry publication.
+
+## 4. Sync metadata back to main
+
+Post-release synchronization is part of completing the release. Finish it
+before cutting the next checkpoint; otherwise main retains the previous
+release baseline and can propose an already-published version again.
+
+After publication, open a PR from the release branch back to main. Preserve
+main's later implementation changes and regenerate ignored build outputs from
+the combined contracts with the released package version.
+Review and test this synchronization PR, then use a merge commit so the release
+tag remains in main's ancestry. Keep the released tag unchanged.
+
+The synchronization must include `.release-please-manifest.json`,
+`package.json`, both root versions in `package-lock.json`, `CHANGELOG.md`,
+`server.json`, and the versioned documentation examples. Run
+`npm run docs:generate`, `npm run docs:check`, and the release configuration
+tests against the combined tree. After the merge, verify that the released
+tag is an ancestor of main:
+
+```bash
+git fetch origin main --tags
+git merge-base --is-ancestor rea-agents-5.0.0 origin/main
+```
+
+Close the superseded main proposal before merging the synchronization PR.
+That merge's main push opens a proposal for the following release using the
+updated baseline. Future publication repeats the checkpoint procedure;
+automatic proposals do not move frozen branches.
+Preparation generates and validates the catalog, portable conformance
+projections, and packaged skill from the candidate checkout without committing
+them. The checkpoint validator binds tracked version authority to the source
+SHA; generated-catalog and package checks validate the derived representation.
+No generated-metadata workflow pushes follow-up commits onto feature or release
+branches.
+
+## Partial publication and retries
+
+Inspect the failed job and public registry state before retrying. When npm is
+already published, the npm job verifies that exact version instead of
+publishing it again. Re-run failed jobs in the original publication run so its
+release SHA and outputs stay fixed. If only MCP publication failed, retry that
+job after checking that the npm canary succeeded.
+
+A branch tip that moved after dispatch fails before Release Please creates a
+tag. Do not dispatch a fresh publish phase to repair an already-created
+release: Release Please will not create the same release again. Do not move
+the tag, delete the release, or unpublish npm as a retry. A defective public
+package requires a reviewed correction and a new version.

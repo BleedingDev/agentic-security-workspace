@@ -1,0 +1,2070 @@
+mod common;
+
+use common::{assert_eq_normalized, render, render_rule};
+use wakaru_core::facts::{
+    HelperExportFact, HelperKind, ModuleFacts, ModuleFactsMap, TypeScriptHelperExportFact,
+    TypeScriptHelperKind,
+};
+use wakaru_core::rules::UnObjectRest;
+
+#[test]
+fn basic_object_without_properties_iife() {
+    // Simplest case: IIFE with no preceding destructuring
+    // Excluded keys get _prefix aliases to avoid collisions, but SmartInline
+    // removes unused bindings so they appear as shorthand in final output
+    let input = r#"
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["a", "b"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn with_preceding_destructuring() {
+    // Preceding destructuring from same source — merge into one
+    // "replace" has no preceding binding so gets _replace alias
+    let input = r#"
+const { to, innerRef } = props;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["replace", "to", "innerRef"]);
+use(to, innerRef, rest);
+"#;
+    let expected = r#"
+const { replace: _replace, to, innerRef, ...rest } = props;
+use(to, innerRef, rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn handles_tslib_named_rest_import() {
+    let input = r#"
+import { __rest } from "tslib";
+const a = props.a;
+const rest = __rest(props, ["a"]);
+use(a, rest);
+"#;
+    let expected = r#"
+const { a, ...rest } = props;
+use(a, rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn handles_cross_module_ts_rest_helper_fact() {
+    let mut facts = ModuleFactsMap::new();
+    facts.insert(
+        "helpers.js",
+        ModuleFacts {
+            ts_helper_exports: vec![TypeScriptHelperExportFact {
+                exported: "__rest".into(),
+                local: Some("__rest".into()),
+                kind: TypeScriptHelperKind::Rest,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let input = r#"
+import { __rest } from "./helpers.js";
+var label = props.label, rest = __rest(props, ["label"]);
+use(label, rest);
+"#;
+    let expected = r#"
+import { __rest } from "./helpers.js";
+var { label, ...rest } = props;
+use(label, rest);
+"#;
+    assert_eq_normalized(
+        &render_rule(input, |mark| UnObjectRest::new_with_facts(mark, &facts)),
+        expected,
+    );
+}
+
+#[test]
+fn handles_cross_module_ts_rest_helper_namespace_fact() {
+    let mut facts = ModuleFactsMap::new();
+    facts.insert(
+        "helpers.js",
+        ModuleFacts {
+            ts_helper_exports: vec![TypeScriptHelperExportFact {
+                exported: "__rest".into(),
+                local: Some("__rest".into()),
+                kind: TypeScriptHelperKind::Rest,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let input = r#"
+import * as helpers from "./helpers.js";
+var label = props.label, rest = helpers.__rest(props, ["label"]);
+use(label, rest);
+"#;
+    let expected = r#"
+import * as helpers from "./helpers.js";
+var { label, ...rest } = props;
+use(label, rest);
+"#;
+    assert_eq_normalized(
+        &render_rule(input, |mark| UnObjectRest::new_with_facts(mark, &facts)),
+        expected,
+    );
+}
+
+#[test]
+fn handles_tslib_namespace_rest_require() {
+    let input = r#"
+var tslib_1 = require("tslib");
+const a = props.a;
+const rest = tslib_1.__rest(props, ["a"]);
+use(a, rest);
+"#;
+    let expected = r#"
+import tslib_1 from "tslib";
+const { a, ...rest } = props;
+use(a, rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn with_preceding_prop_access() {
+    // const x = obj.prop before IIFE — absorbed into rest destructuring with alias
+    let input = r#"
+const x = props.a;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["a", "b"]);
+use(x, rest);
+"#;
+    // Test rule in isolation to verify alias handling
+    let rule_output = render_rule(input, UnObjectRest::new);
+    insta::assert_snapshot!("with_preceding_prop_access_rule", rule_output);
+
+    // Full pipeline: SmartInline runs after and may inline x
+    let pipeline_output = render(input);
+    insta::assert_snapshot!("with_preceding_prop_access_pipeline", pipeline_output);
+}
+
+#[test]
+fn plain_spreads_do_not_trigger_elided_rest_reattachment() {
+    let input = r#"
+var missing;
+var value = {
+    ...source
+};
+use(missing, value);
+"#;
+    assert_eq_normalized(&render_rule(input, UnObjectRest::new), input.trim());
+}
+
+#[test]
+fn with_bare_access() {
+    // props.replace; (bare access, no binding) is absorbed. The long `_replace`
+    // alias stays descriptive enough, while short `_to` can collapse to shorthand.
+    let input = r#"
+props.replace;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["replace", "to"]);
+use(rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn bare_string_key_generates_a_valid_destructuring_binding() {
+    let input = r#"
+props["onUpdate:visible"];
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["onUpdate:visible"]);
+use(rest);
+"#;
+    let expected = r#"
+const { "onUpdate:visible": _onUpdate_visible, ...rest } = props;
+use(rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn generated_string_alias_avoids_later_binding() {
+    let input = r#"
+props["onUpdate:visible"];
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["onUpdate:visible"]);
+const _onUpdate_visible = sentinel;
+use(rest, _onUpdate_visible);
+"#;
+    let expected = r#"
+const { "onUpdate:visible": _onUpdate_visible_1, ...rest } = props;
+const _onUpdate_visible = sentinel;
+use(rest, _onUpdate_visible);
+"#;
+    assert_eq_normalized(&render_rule(input, UnObjectRest::new), expected);
+}
+
+#[test]
+fn generated_string_alias_avoids_rest_binding() {
+    let input = r#"
+props["onUpdate:visible"];
+const _onUpdate_visible = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["onUpdate:visible"]);
+use(_onUpdate_visible);
+"#;
+    let expected = r#"
+const { "onUpdate:visible": _onUpdate_visible_1, ..._onUpdate_visible } = props;
+use(_onUpdate_visible);
+"#;
+    assert_eq_normalized(&render_rule(input, UnObjectRest::new), expected);
+}
+
+#[test]
+fn generated_string_alias_avoids_enclosing_parameter() {
+    let input = r#"
+function renderProps(_onUpdate_visible) {
+    props["onUpdate:visible"];
+    const rest = ((e, t) => {
+        const n = {};
+        for (const r in e) {
+            t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+        }
+        return n;
+    })(props, ["onUpdate:visible"]);
+    use(rest);
+}
+"#;
+    let expected = r#"
+function renderProps(_onUpdate_visible) {
+    const { "onUpdate:visible": _onUpdate_visible_1, ...rest } = props;
+    use(rest);
+}
+"#;
+    assert_eq_normalized(&render_rule(input, UnObjectRest::new), expected);
+}
+
+#[test]
+fn generated_string_alias_avoids_merged_binding() {
+    let input = r#"
+const _onUpdate_visible = props.value;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["value", "onUpdate:visible"]);
+use(_onUpdate_visible, rest);
+"#;
+    let expected = r#"
+const { value: _onUpdate_visible, "onUpdate:visible": _onUpdate_visible_1, ...rest } = props;
+use(_onUpdate_visible, rest);
+"#;
+    assert_eq_normalized(&render_rule(input, UnObjectRest::new), expected);
+}
+
+#[test]
+fn multi_declarator_comma_separated() {
+    // Babel output: var t = e.to, n = e.exact, d = IIFE(e, ["to","exact"]), p = expr
+    let input = r#"
+const f = (e) => {
+    var t = e.to, n = e.exact, d = (function(e, t) {
+        var n = {};
+        for (var r in e) {
+            t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+        }
+        return n;
+    })(e, ["to", "exact"]), p = "hello";
+    use(t, n, d, p);
+};
+"#;
+    let rule_output = render_rule(input, UnObjectRest::new);
+    insta::assert_snapshot!(rule_output);
+}
+
+#[test]
+fn with_many_keys_destructuring() {
+    // NavLink-like pattern: large destructuring before IIFE with same keys
+    let input = r#"
+const f = (e) => {
+    const { to, exact, strict } = e;
+    const d = ((e, t) => {
+        const n = {};
+        for (const r in e) {
+            t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+        }
+        return n;
+    })(e, ["to", "exact", "strict"]);
+    use(to, exact, strict, d);
+};
+"#;
+    let rule_output = render_rule(input, UnObjectRest::new);
+    insta::assert_snapshot!(rule_output);
+}
+
+#[test]
+fn with_string_key_in_destructuring() {
+    // "aria-current" is a string key — should still be absorbed
+    let input = r#"
+const f = (e) => {
+    const { to, "aria-current": ariaCurrent } = e;
+    const d = ((e, t) => {
+        const n = {};
+        for (const r in e) {
+            t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+        }
+        return n;
+    })(e, ["to", "aria-current"]);
+    use(to, ariaCurrent, d);
+};
+"#;
+    let rule_output = render_rule(input, UnObjectRest::new);
+    insta::assert_snapshot!(rule_output);
+}
+
+#[test]
+fn with_shadowed_iife_param() {
+    // IIFE param shadows outer variable — should still detect
+    let input = r#"
+const f = (e) => {
+    const { to } = e;
+    const d = ((e, t) => {
+        const n = {};
+        for (const r in e) {
+            t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+        }
+        return n;
+    })(e, ["to", "extra"]);
+    use(to, d);
+};
+"#;
+    let rule_output = render_rule(input, UnObjectRest::new);
+    insta::assert_snapshot!(rule_output);
+}
+
+#[test]
+fn no_match_arbitrary_for_in_iife() {
+    // P1 regression: IIFE with for-in but no indexOf/hasOwnProperty must NOT be matched
+    let input = r#"
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) { sideEffect(r); }
+    return fallback;
+})(props, ["a"]);
+use(rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn no_duplicate_binding_for_excluded_key() {
+    // P1 regression: excluded key with existing binding in scope must not create duplicate const
+    let input = r#"
+const replace = external;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["replace"]);
+use(replace, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn function_form_helper() {
+    // Function expression form (not arrow)
+    let input = r#"
+const rest = (function(e, t) {
+    var n = {};
+    for (var r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["x"]);
+"#;
+    let expected = r#"
+const { x, ...rest } = props;
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn alias_does_not_collide_with_existing_binding() {
+    // When _replace already exists in scope, the generated alias should not duplicate it
+    let input = r#"
+const _replace = sentinel;
+const rest = function(e, t) {
+    var n = {};
+    for (var r in e) t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    return n;
+}(props, ["replace"]);
+"#;
+    let result = render(input);
+    insta::assert_snapshot!(result);
+}
+
+// ── Named function helper (non-IIFE) ─────────────────────────────
+
+#[test]
+fn named_owp_helper_basic() {
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const x = props.a;
+const rest = m(props, ["a", "b"]);
+use(x, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_swc_external_import() {
+    let input = r#"
+import { _ as _object_without_properties } from "@swc/helpers/_/_object_without_properties";
+var name = app_info.name, rest_info = _object_without_properties(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_cross_module_default_object_helper_member() {
+    let mut facts = ModuleFactsMap::new();
+    facts.insert(
+        "helpers.js",
+        ModuleFacts {
+            default_object_helper_exports: vec![HelperExportFact {
+                exported: "_".into(),
+                local: Some("rest".into()),
+                kind: HelperKind::ObjectWithoutProperties,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let input = r#"
+import helpers from "./helpers.js";
+var name = app_info.name, rest_info = helpers._(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+import helpers from "./helpers.js";
+var { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(
+        &render_rule(input, |mark| UnObjectRest::new_with_facts(mark, &facts)),
+        expected,
+    );
+}
+
+#[test]
+fn named_owp_cross_module_direct_helper_keeps_import() {
+    let mut facts = ModuleFactsMap::new();
+    facts.insert(
+        "helpers.js",
+        ModuleFacts {
+            helper_exports: vec![HelperExportFact {
+                exported: "rest".into(),
+                local: Some("rest".into()),
+                kind: HelperKind::ObjectWithoutProperties,
+            }],
+            ..Default::default()
+        },
+    );
+
+    let input = r#"
+import { rest as objectWithoutProperties } from "./helpers.js";
+var name = app_info.name, rest_info = objectWithoutProperties(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+import { rest as objectWithoutProperties } from "./helpers.js";
+var { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(
+        &render_rule(input, |mark| UnObjectRest::new_with_facts(mark, &facts)),
+        expected,
+    );
+}
+
+#[test]
+fn named_owp_helper_with_preceding_destructuring() {
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const { to, exact } = props;
+const rest = m(props, ["to", "exact", "strict"]);
+use(to, exact, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_multiple_call_sites() {
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const rest1 = m(a, ["x"]);
+const rest2 = m(b, ["y", "z"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_absorbs_default_pairs() {
+    // Two-statement pattern: extraction + ternary default → destructuring with default
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const a = t;
+const a_name = a.name;
+const x = a_name === undefined ? "default" : a_name;
+const a_value = a.value;
+const y = a_value === undefined ? 42 : a_value;
+const rest = m(a, ["name", "value"]);
+use(x, y, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_undefined_default_omitted() {
+    // When default is `undefined`, no explicit default is needed in destructuring
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const a_prop = obj.prop;
+const x = a_prop === undefined ? undefined : a_prop;
+const rest = m(obj, ["prop"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn iife_absorbs_default_pairs() {
+    let input = r#"
+const a_name = props.name;
+const x = a_name === undefined ? "default" : a_name;
+const a_value = props.value;
+const y = a_value === undefined ? 42 : a_value;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["name", "value"]);
+use(x, y, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn iife_absorbs_boolean_defaults() {
+    let input = r#"
+const a_enabled = props.enabled;
+const x = a_enabled === undefined || a_enabled;
+const a_hidden = props.hidden;
+const y = a_hidden !== undefined && a_hidden;
+const rest = ((e, t) => {
+    const n = {};
+    for (const r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+})(props, ["enabled", "hidden"]);
+use(x, y, rest);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_boolean_default_true() {
+    // `tmp === undefined || tmp` is Babel's transpilation of `{ prop = true }`
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const a_enabled = obj.enabled;
+const x = a_enabled === undefined || a_enabled;
+const rest = m(obj, ["enabled"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_boolean_default_false() {
+    // `tmp !== undefined && tmp` is Babel's transpilation of `{ prop = false }`
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const a_withRef = obj.withRef;
+const R = a_withRef !== undefined && a_withRef;
+const rest = m(obj, ["withRef"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_inside_function_body() {
+    // Named helper defined at module level, called inside a function
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (!(t.indexOf(i[r]) >= 0)) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+export function foo(t = {}) {
+    const a_name = t.name;
+    const x = a_name === undefined ? "default" : a_name;
+    const rest = m(t, ["name"]);
+    use(x, rest);
+}
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_decompiled_object_keys_form() {
+    // Exact shape from webpack4 module-23 after Stage 1 normalization:
+    // separate temp vars, key assigned in loop, copy uses temp var
+    let input = r#"
+function m(e, t) {
+    if (e == null) {
+        return {};
+    }
+    let n;
+    let r;
+    const o = {};
+    const i = Object.keys(e);
+    for(r = 0; r < i.length; r++){
+        n = i[r];
+        if (!(t.indexOf(n) >= 0)) {
+            o[n] = e[n];
+        }
+    }
+    return o;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_minified_or_guard_object_keys_form() {
+    let input = r#"
+function m(e, t) {
+    if (e == null) {
+        return {};
+    }
+    let n;
+    let r;
+    const o = {};
+    const i = Object.keys(e);
+    for(r = 0; r < i.length; r++){
+        n = i[r];
+        t.indexOf(n) >= 0 || (o[n] = e[n]);
+    }
+    return o;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_in_variant() {
+    // The for-in + hasOwnProperty variant as a named function
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r in e) {
+        t.indexOf(r) >= 0 || Object.prototype.hasOwnProperty.call(e, r) && (n[r] = e[r]);
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_babel_loose_continue_form() {
+    let input = r#"
+function _objectWithoutPropertiesLoose(r, e) {
+    if (null == r) return {};
+    var t = {};
+    for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+        if (-1 !== e.indexOf(n)) continue;
+        t[n] = r[n];
+    }
+    return t;
+}
+const { name } = app_info, rest_info = _objectWithoutPropertiesLoose(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn preserves_unrelated_object_alias_when_babel_owp_helper_fires() {
+    // The recovered helper is a Babel loose form; the unused
+    // Object.prototype.hasOwnProperty alias is not part of any esbuild
+    // preamble and must survive the esbuild alias cleanup.
+    let input = r#"
+var unusedHasOwn = Object.prototype.hasOwnProperty;
+function _objectWithoutPropertiesLoose(r, e) {
+    if (null == r) return {};
+    var t = {};
+    for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+        if (-1 !== e.indexOf(n)) continue;
+        t[n] = r[n];
+    }
+    return t;
+}
+const { name } = app_info, rest_info = _objectWithoutPropertiesLoose(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("unusedHasOwn"),
+        "unrelated Object alias must not be swept by esbuild cleanup:\n{output}"
+    );
+    assert!(
+        output.contains("...rest_info"),
+        "rest helper call should still be recovered:\n{output}"
+    );
+}
+
+#[test]
+fn named_owp_helper_babel_spec_wrapper_form() {
+    let input = r#"
+function _objectWithoutProperties(e, t) {
+    if (null == e) return {};
+    var o, r, i = _objectWithoutPropertiesLoose(e, t);
+    if (Object.getOwnPropertySymbols) {
+        var n = Object.getOwnPropertySymbols(e);
+        for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]);
+    }
+    return i;
+}
+function _objectWithoutPropertiesLoose(r, e) {
+    if (null == r) return {};
+    var t = {};
+    for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+        if (-1 !== e.indexOf(n)) continue;
+        t[n] = r[n];
+    }
+    return t;
+}
+const { name } = app_info, rest_info = _objectWithoutProperties(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_spec_wrapper_with_hoisted_exclusion_array() {
+    let input = r#"
+var _excluded = ["name"];
+function _objectWithoutProperties(e, t) {
+    if (null == e) return {};
+    var o, r, i = _objectWithoutPropertiesLoose(e, t);
+    if (Object.getOwnPropertySymbols) {
+        var n = Object.getOwnPropertySymbols(e);
+        for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]);
+    }
+    return i;
+}
+function _objectWithoutPropertiesLoose(r, e) {
+    if (null == r) return {};
+    var t = {};
+    for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+        if (-1 !== e.indexOf(n)) continue;
+        t[n] = r[n];
+    }
+    return t;
+}
+const rest_info = _objectWithoutProperties(app_info, _excluded);
+use(rest_info);
+"#;
+    let expected = r#"
+const { name: _name, ...rest_info } = app_info;
+use(rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn iife_spec_wrapper_with_hoisted_exclusion_array() {
+    let input = r#"
+const excluded = ["label"];
+const component = (props) => {
+    const label = props.label;
+    const rest = ((e, t) => {
+        if (e == null) return {};
+        var o, r, i = ((r, e) => {
+            if (r == null) return {};
+            var t = {};
+            for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+                if (-1 !== e.indexOf(n)) continue;
+                t[n] = r[n];
+            }
+            return t;
+        })(e, t);
+        if (Object.getOwnPropertySymbols) {
+            var n = Object.getOwnPropertySymbols(e);
+            for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]);
+        }
+        return i;
+    })(props, excluded);
+    use(label, rest);
+};
+"#;
+
+    let expected = r#"
+const component = ({ label, ...rest }) => {
+    use(label, rest);
+};
+"#;
+
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn keeps_defaulted_prop_alias_used_as_jsx_tag() {
+    let input = r#"
+const component = (props) => {
+    const asProp = props.as;
+    const Tag = asProp === undefined ? "div" : asProp;
+    const rest = ((e, t) => {
+        if (e == null) return {};
+        var o, r, i = ((r, e) => {
+            if (r == null) return {};
+            var t = {};
+            for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+                if (-1 !== e.indexOf(n)) continue;
+                t[n] = r[n];
+            }
+            return t;
+        })(e, t);
+        if (Object.getOwnPropertySymbols) {
+            var n = Object.getOwnPropertySymbols(e);
+            for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]);
+        }
+        return i;
+    })(props, ["as"]);
+    return <Tag {...rest}/>;
+};
+"#;
+
+    let output = render(input);
+    assert!(
+        output.contains("const Tag = asProp === undefined ? \"div\" : asProp"),
+        "defaulted JSX tag alias should stay intact:\n{output}"
+    );
+    assert!(
+        output.contains("return <Tag {...rest}/>"),
+        "JSX tag should stay capitalized:\n{output}"
+    );
+    assert!(
+        output.contains("const rest ="),
+        "object-rest helper should not fold when it would remove the JSX tag alias:\n{output}"
+    );
+}
+
+#[test]
+fn keeps_defaulted_prop_alias_used_as_create_element_tag() {
+    let input = r#"
+const component = (props) => {
+    const asProp = props.as;
+    const Tag = asProp === undefined ? "div" : asProp;
+    const rest = ((e, t) => {
+        if (e == null) return {};
+        var o, r, i = ((r, e) => {
+            if (r == null) return {};
+            var t = {};
+            for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+                if (-1 !== e.indexOf(n)) continue;
+                t[n] = r[n];
+            }
+            return t;
+        })(e, t);
+        if (Object.getOwnPropertySymbols) {
+            var n = Object.getOwnPropertySymbols(e);
+            for (r = 0; r < n.length; r++) o = n[r], -1 === t.indexOf(o) && {}.propertyIsEnumerable.call(e, o) && (i[o] = e[o]);
+        }
+        return i;
+    })(props, ["as"]);
+    return React.createElement(Tag, rest);
+};
+"#;
+
+    let output = render(input);
+    assert!(
+        output.contains("const Tag = asProp === undefined ? \"div\" : asProp"),
+        "defaulted createElement tag alias should stay intact:\n{output}"
+    );
+    assert!(
+        output.contains("<Tag {...rest}/>"),
+        "createElement tag should keep the alias binding:\n{output}"
+    );
+    assert!(
+        output.contains("const rest ="),
+        "object-rest helper should not fold when it would remove the createElement tag alias:\n{output}"
+    );
+}
+
+#[test]
+fn swc_numeric_namespace_object_rest() {
+    let input = r#"
+const helpers = require(12345);
+const picked = input.picked;
+const rest = helpers._T(input, ["picked"]);
+use(picked, rest);
+"#;
+    let expected = r#"
+const { picked, ...rest } = input;
+use(picked, rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn preserves_shadowed_numeric_require_object_rest_namespace() {
+    let input = r#"
+function require(id) {
+    return load(id);
+}
+const helpers = require(12345);
+const picked = input.picked;
+const rest = helpers._T(input, ["picked"]);
+use(picked, rest);
+"#;
+
+    let output = render(input);
+    assert!(
+        output.contains("helpers._T(input"),
+        "shadowed numeric require namespace must not be rewritten:\n{output}"
+    );
+    assert!(
+        !output.contains("...rest"),
+        "shadowed numeric require namespace must not produce object rest:\n{output}"
+    );
+}
+
+#[test]
+fn preserves_unconsumed_numeric_require_decl() {
+    // A numeric-require binding is collected as a *candidate* swc helper
+    // namespace, but the cleanup may only delete declarations this rule's own
+    // rewrites orphaned: the require call carries a module side effect, and
+    // the numeric id is the user's join key for chunks missing from the input.
+    let input = r#"
+const ext = require(999);
+const picked = input.picked;
+use(picked);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("require(999)"),
+        "numeric require never consumed by object-rest must survive:\n{output}"
+    );
+}
+
+#[test]
+fn preserves_numeric_require_orphaned_by_other_rules() {
+    // UnJsx rewrites `r.createElement(...)` into JSX and orphans `r` before
+    // the later object-rest pass runs; that pass must not sweep the
+    // declaration it never consumed.
+    let input = r#"
+const r = require(999);
+const helper = require("./module-333.js");
+module.exports = function Widget() {
+    return r.createElement("span", null, helper.label);
+};
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("require(999)"),
+        "numeric require orphaned by UnJsx must survive the pipeline:\n{output}"
+    );
+}
+
+#[test]
+fn named_owp_helper_preserves_destructuring_defaults() {
+    let input = r#"
+function _objectWithoutPropertiesLoose(r, e) {
+    if (null == r) return {};
+    var t = {};
+    for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+        if (-1 !== e.indexOf(n)) continue;
+        t[n] = r[n];
+    }
+    return t;
+}
+const { name: app_name, version = fallback_version } = app_info,
+  rest_info = _objectWithoutPropertiesLoose(app_info, ["name", "version"]);
+use(app_name, version, rest_info);
+"#;
+    let expected = r#"
+const { name: app_name, version = fallback_version, ...rest_info } = app_info;
+use(app_name, version, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_ts_rest_helper() {
+    let input = r#"
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
+var name = app_info.name, rest_info = __rest(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_assignment_with_preceding_assignments() {
+    let input = r#"
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
+let id;
+let token;
+let options;
+id = source.id;
+token = source.token;
+options = __rest(source, ["id", "token"]);
+use(id, token, options);
+"#;
+    let expected = r#"
+let id;
+let token;
+let options;
+({ id, token, ...options } = source);
+use(id, token, options);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_assignment_absorbs_source_initializing_member_access() {
+    let input = r#"
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
+let source;
+let id;
+let token;
+let options;
+let tmp;
+tmp = config != null ? config : fallback();
+id = (source = tmp).id;
+token = source.token;
+options = __rest(source, ["id", "token"]);
+use(source, id, token, options);
+"#;
+    let expected = r#"
+let source;
+let id;
+let token;
+let options;
+source = config ?? fallback();
+({ id, token, ...options } = source);
+use(source, id, token, options);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_assignment_absorbs_source_initializing_member_access_in_function_body() {
+    let input = r#"
+var excluded = ["id", "token"];
+function objectWithoutProperties(source, excluded) {
+    if (source == null) return {};
+    var key, index, rest = objectWithoutPropertiesLoose(source, excluded);
+    if (Object.getOwnPropertySymbols) {
+        var symbols = Object.getOwnPropertySymbols(source);
+        for (index = 0; index < symbols.length; index++)
+            key = symbols[index], -1 === excluded.indexOf(key) && {}.propertyIsEnumerable.call(source, key) && (rest[key] = source[key]);
+    }
+    return rest;
+}
+function objectWithoutPropertiesLoose(source, excluded) {
+    if (source == null) return {};
+    var rest = {};
+    for (var key in source) if ({}.hasOwnProperty.call(source, key)) {
+        if (-1 !== excluded.indexOf(key)) continue;
+        rest[key] = source[key];
+    }
+    return rest;
+}
+const load_user = async (config) => {
+    let source;
+    let id;
+    let token;
+    let options;
+    let tmp;
+    tmp = config != null ? config : await load_config();
+    id = (source = tmp).id;
+    token = source.token;
+    options = objectWithoutProperties(source, excluded);
+    return fetch_user(id, token, options);
+};
+use(load_user);
+"#;
+    let expected = r#"
+const load_user = async (config) => {
+    let source;
+    let id;
+    let token;
+    let options;
+    source = config ?? await load_config();
+    ({ id, token, ...options } = source);
+    return fetch_user(id, token, options);
+};
+use(load_user);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_swc_rest_helper() {
+    let input = r#"
+function _object_without_properties(source, excluded) {
+    if (source == null) return {};
+    var target = {}, sourceKeys, key, i;
+    if (typeof Reflect !== "undefined" && Reflect.ownKeys) {
+        sourceKeys = Reflect.ownKeys(Object(source));
+        for (i = 0; i < sourceKeys.length; i++) {
+            key = sourceKeys[i];
+            if (excluded.indexOf(key) >= 0) continue;
+            if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+            target[key] = source[key];
+        }
+        return target;
+    }
+    target = _object_without_properties_loose(source, excluded);
+    if (Object.getOwnPropertySymbols) {
+        sourceKeys = Object.getOwnPropertySymbols(source);
+        for (i = 0; i < sourceKeys.length; i++) {
+            key = sourceKeys[i];
+            if (excluded.indexOf(key) >= 0) continue;
+            if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+            target[key] = source[key];
+        }
+    }
+    return target;
+}
+function _object_without_properties_loose(source, excluded) {
+    if (source == null) return {};
+    var target = {}, sourceKeys = Object.getOwnPropertyNames(source), key, i;
+    for (i = 0; i < sourceKeys.length; i++) {
+        key = sourceKeys[i];
+        if (excluded.indexOf(key) >= 0) continue;
+        if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+        target[key] = source[key];
+    }
+    return target;
+}
+var name = app_info.name, rest_info = _object_without_properties(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+use(name, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_esbuild_rest_helper() {
+    let input = r#"
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+        if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+            target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+        for (var prop of __getOwnPropSymbols(source)) {
+            if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+                target[prop] = source[prop];
+        }
+    return target;
+};
+const _a = app_info, { name, version = fallback_version } = _a, rest_info = __objRest(_a, ["name", "version"]);
+use(name, version, rest_info);
+"#;
+    let expected = r#"
+const _a = app_info;
+const { name, version = fallback_version, ...rest_info } = _a;
+use(name, version, rest_info);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_mangled_esbuild_rest_helper() {
+    // Produced by esbuild ES2017 output minified with Terser compress+mangle.
+    let input = r#"
+var e=Object.getOwnPropertySymbols,r=Object.prototype.hasOwnProperty,o=Object.prototype.propertyIsEnumerable,t=(t,n)=>{var a={};for(var p in t)r.call(t,p)&&n.indexOf(p)<0&&(a[p]=t[p]);if(null!=t&&e)for(var p of e(t))n.indexOf(p)<0&&o.call(t,p)&&(a[p]=t[p]);return a};const n=app_info,{name:a}=n,p=t(n,["name"]);use(a,p);
+"#;
+    let expected = r#"
+const n = app_info;
+const { name, ...rest } = n;
+use(name, rest);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn reattaches_terser_elided_swc_rest_binding_from_later_spread() {
+    let input = r#"
+function _object_without_properties(source, excluded) {
+    if (source == null) return {};
+    var target = {}, sourceKeys, key, i;
+    if (typeof Reflect !== "undefined" && Reflect.ownKeys) {
+        sourceKeys = Reflect.ownKeys(Object(source));
+        for (i = 0; i < sourceKeys.length; i++)
+            key = sourceKeys[i], excluded.indexOf(key) >= 0 || Object.prototype.propertyIsEnumerable.call(source, key) && (target[key] = source[key]);
+        return target;
+    }
+    target = _object_without_properties_loose(source, excluded);
+    if (Object.getOwnPropertySymbols)
+        for (sourceKeys = Object.getOwnPropertySymbols(source), i = 0; i < sourceKeys.length; i++)
+            key = sourceKeys[i], excluded.indexOf(key) >= 0 || Object.prototype.propertyIsEnumerable.call(source, key) && (target[key] = source[key]);
+    return target;
+}
+function _object_without_properties_loose(source, excluded) {
+    if (source == null) return {};
+    var target = {}, sourceKeys = Object.getOwnPropertyNames(source), key, i;
+    for (i = 0; i < sourceKeys.length; i++)
+        key = sourceKeys[i], excluded.indexOf(key) >= 0 || Object.prototype.propertyIsEnumerable.call(source, key) && (target[key] = source[key]);
+    return target;
+}
+var name = app_info.name, rest_info, out = { ..._object_without_properties(app_info, ["name"]), name };
+use(out);
+"#;
+    let expected = r#"
+const { name, ...rest_info } = app_info;
+const out = { ...rest_info, name };
+use(out);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn reattaches_terser_elided_esbuild_rest_binding_from_later_spread() {
+    let input = r#"
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+        if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+            target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+        for (var prop of __getOwnPropSymbols(source))
+            if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+                target[prop] = source[prop];
+    return target;
+};
+const _a = app_info, { name } = _a, rest_info = undefined, out = { ...__objRest(_a, ["name"]), name };
+use(out);
+"#;
+    let expected = r#"
+const _a = app_info;
+const { name, ...rest_info } = _a;
+const out = { ...rest_info, name };
+use(out);
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn named_owp_helper_for_in_requires_guarded_copy() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r in e) {
+        t.indexOf(r);
+        Object.prototype.hasOwnProperty.call(e, r);
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_in_rejects_unguarded_copy() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r in e) {
+        t.indexOf(r);
+        Object.prototype.hasOwnProperty.call(e, r);
+        n[r] = e[r];
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_requires_copy() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r = 0; r < 1; r++) {
+        t.indexOf("a");
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_rejects_unguarded_copy() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r = 0; r < 1; r++) {
+        t.indexOf(r);
+        n[r] = e[r];
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_rejects_inverted_if_guard() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        if (t.indexOf(i[r]) >= 0) {
+            n[i[r]] = e[i[r]];
+        }
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_rejects_inverted_or_guard() {
+    let input = r#"
+function m(e, t) {
+    if (e == null) return {};
+    var n = {};
+    var i = Object.keys(e);
+    for (var r = 0; r < i.length; r++) {
+        t.indexOf(i[r]) < 0 || (n[i[r]] = e[i[r]]);
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn named_owp_helper_for_in_rejects_inverted_guarded_copy() {
+    let input = r#"
+function m(e, t) {
+    var n = {};
+    for (var r in e) {
+        Object.prototype.hasOwnProperty.call(e, r) && t.indexOf(r) >= 0 && (n[r] = e[r]);
+    }
+    return n;
+}
+const rest = m(obj, ["a"]);
+"#;
+    let output = render(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn preserves_unrelated_imported_define_property_helper() {
+    let input = r#"
+import d from "@babel/runtime/helpers/defineProperty";
+import owp from "@babel/runtime/helpers/objectWithoutProperties";
+var name = app_info.name, rest_info = owp(app_info, ["name"]);
+use(name, rest_info);
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("...rest_info"),
+        "should destructure: {output}"
+    );
+    assert!(
+        output.contains("@babel/runtime/helpers/defineProperty"),
+        "unrelated defineProperty import should survive: {output}"
+    );
+}
+
+#[test]
+fn computed_key_uses_body_proven_coercion_helper() {
+    let input = r#"
+import owp from "@babel/runtime/helpers/objectWithoutProperties";
+function coerce(input) {
+    return typeof input === "symbol" ? input : input + "";
+}
+const key = getKey();
+const { [key]: picked } = source;
+const rest = owp(source, [key].map(coerce));
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [key]: picked, ...rest } = source;"),
+        "renamed body-proven helper should recover computed object rest: {output}"
+    );
+}
+
+#[test]
+fn computed_key_rejects_helper_name_without_provenance() {
+    let input = r#"
+import owp from "@babel/runtime/helpers/objectWithoutProperties";
+function _toPropertyKey(input) {
+    return input;
+}
+const key = getKey();
+const { [key]: picked } = source;
+const rest = owp(source, [key].map(_toPropertyKey));
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        !output.contains("...rest"),
+        "a helper-like name without matching provenance must not recover: {output}"
+    );
+}
+
+#[test]
+fn computed_key_uses_runtime_import_path_provenance() {
+    let input = r#"
+import { _ as omit } from "@swc/helpers/_/_object_without_properties";
+import { _ as coerce } from "@swc/helpers/_/_to_property_key";
+const key = getKey();
+const picked = source[key];
+const rest = omit(source, [coerce(key)]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [key]: picked, ...rest } = source;"),
+        "runtime helper path should prove the renamed coercion binding: {output}"
+    );
+    assert!(
+        !output.contains("_to_property_key"),
+        "the unused pure runtime helper import should be removed: {output}"
+    );
+}
+
+#[test]
+fn computed_key_inline_coercion_uses_proven_typeof_helper() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+import inspect from "@babel/runtime/helpers/typeof";
+const key = getKey();
+const picked = source[key];
+const rest = omit(source, [inspect(key) === "symbol" ? key : String(key)]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [key]: picked, ...rest } = source;"),
+        "the inline coercion should use the proven typeof binding: {output}"
+    );
+}
+
+#[test]
+fn computed_key_recovers_typescript_inline_coercion() {
+    let input = r#"
+var __rest = (this && this.__rest) || function(source, excluded) {
+    var target = {};
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && excluded.indexOf(key) < 0) {
+            target[key] = source[key];
+        }
+    }
+    return target;
+};
+var propertyKey = getKey(), sourceAlias = source, keyAlias = propertyKey,
+    picked = sourceAlias[keyAlias],
+    rest = __rest(sourceAlias, [typeof keyAlias === "symbol" ? keyAlias : keyAlias + ""]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("var { [propertyKey]: picked, ...rest } = sourceAlias;"),
+        "TypeScript's inline property-key coercion should recover: {output}"
+    );
+}
+
+#[test]
+fn computed_key_preserves_typescript_key_alias_with_remaining_use() {
+    let input = r#"
+var __rest = (this && this.__rest) || function(source, excluded) {
+    var target = {};
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && excluded.indexOf(key) < 0) {
+            target[key] = source[key];
+        }
+    }
+    return target;
+};
+var propertyKey = getKey(), sourceAlias = source, keyAlias = propertyKey,
+    picked = sourceAlias[keyAlias],
+    rest = __rest(sourceAlias, [typeof keyAlias === "symbol" ? keyAlias : keyAlias + ""]);
+use(picked, rest, keyAlias);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("keyAlias = propertyKey"),
+        "a key alias with a remaining use must be preserved: {output}"
+    );
+    assert!(
+        output.contains("use(picked, rest, keyAlias);"),
+        "the remaining alias reference must survive: {output}"
+    );
+}
+
+#[test]
+fn computed_key_recovers_esbuild_rest_key_body_shape() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+const restKey = key => typeof key === "symbol" ? key : key + "";
+const key = getKey();
+const sourceAlias = source, { [key]: picked } = sourceAlias,
+    rest = omit(sourceAlias, [restKey(key)]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [key]: picked, ...rest } = sourceAlias;"),
+        "esbuild's renamed rest-key helper should recover by body shape: {output}"
+    );
+}
+
+#[test]
+fn computed_key_uses_body_proven_swc_typeof_dependency() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+function inspect(value) {
+    return value && typeof Symbol !== "undefined" && value.constructor === Symbol
+        ? "symbol"
+        : typeof value;
+}
+function primitive(value, hint) {
+    return value;
+}
+function coerce(value) {
+    const key = primitive(value, "string");
+    return inspect(key) === "symbol" ? key : String(key);
+}
+const key = getKey();
+const picked = source[key];
+const rest = omit(source, [coerce(key)]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [key]: picked, ...rest } = source;"),
+        "SWC's renamed nested typeof helper should be proven by body: {output}"
+    );
+}
+
+#[test]
+fn computed_key_rejects_unproven_swc_typeof_dependency() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+function _type_of(value) {
+    return "symbol";
+}
+function primitive(value, hint) {
+    return value;
+}
+function _to_property_key(value) {
+    const key = primitive(value, "string");
+    return _type_of(key) === "symbol" ? key : String(key);
+}
+const key = getKey();
+const picked = source[key];
+const rest = omit(source, [_to_property_key(key)]);
+use(picked, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        !output.contains("...rest"),
+        "SWC-like names cannot substitute for nested helper provenance: {output}"
+    );
+}
+
+#[test]
+fn computed_key_rest_binding_stays_mutable() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+import coerce from "@babel/runtime/helpers/toPropertyKey";
+var key = getKey();
+var picked = source[key], rest = omit(source, [coerce(key)]);
+rest = mutate(rest);
+use(picked, rest);
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("let { [key]: picked, ...rest } = source;"),
+        "a reassigned computed rest binding must not become const: {output}"
+    );
+}
+
+#[test]
+fn string_key_rest_binding_stays_mutable() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+var picked = source.name, rest = omit(source, ["name"]);
+rest = mutate(rest);
+use(picked, rest);
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("let { name: picked, ...rest } = source;"),
+        "a reassigned string-key rest binding must not become const: {output}"
+    );
+}
+
+#[test]
+fn computed_key_pick_separated_from_rest_is_preserved() {
+    // The recovered pattern performs the property read at the rest
+    // declarator's position. A declarator between the pick and the rest call
+    // originally evaluates after that read, so recovery would reorder it.
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+import coerce from "@babel/runtime/helpers/toPropertyKey";
+var picked = source[key], other = touch(), rest = omit(source, [coerce(key)]);
+use(picked, other, rest);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("omit(source"),
+        "a pick separated from the rest call must not be recovered: {output}"
+    );
+}
+
+#[test]
+fn computed_key_alias_is_not_collapsed_across_source_write() {
+    let input = r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+import coerce from "@babel/runtime/helpers/toPropertyKey";
+let key = initialKey;
+const keyAlias = key;
+key = otherKey();
+const picked = source[keyAlias];
+const rest = omit(source, [coerce(keyAlias)]);
+use(picked, rest, key);
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(
+        output.contains("const { [keyAlias]: picked, ...rest } = source;"),
+        "the frozen alias must remain the computed pattern key: {output}"
+    );
+    assert!(
+        output.contains("const keyAlias = key;"),
+        "the frozen alias declaration must remain: {output}"
+    );
+}
+
+#[test]
+fn direct_tslib_rest_restores_object_destructuring() {
+    let input = "var rest = require('tslib').__rest(source, ['x']); use(rest);";
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(output.contains("...rest"), "{output}");
+    assert!(!output.contains(".__rest("), "{output}");
+}
+
+#[test]
+fn direct_tslib_rest_preserves_shadowing_and_dynamic_lookup() {
+    for input in [
+        "function copy(require) { var rest = require('tslib').__rest(source, ['x']); use(rest); }",
+        "with (scope) { var rest = require('tslib').__rest(source, ['x']); use(rest); }",
+        "with (scope) { observe(); } var rest = require('tslib').__rest(source, ['x']); use(rest);",
+        "eval(code); var rest = require('tslib').__rest(source, ['x']); use(rest);",
+        "var rest = require('tslib').__rest(...args); use(rest);",
+    ] {
+        assert_eq_normalized(&render_rule(input, UnObjectRest::new), input);
+    }
+}
+
+#[test]
+fn compressed_returned_rest_recovers_the_complete_pattern() {
+    let input = r#"
+var ts = require("tslib");
+function rest(obj) {
+    var x = obj.x;
+    var tail;
+    return ts.__rest(obj, ["x"]);
+}
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(output.contains("...rest_1"), "{output}");
+    assert!(!output.contains(".__rest("), "{output}");
+    let compressed =
+        "var ts=require('tslib');function rest(obj){var x=obj.x,tail;return ts.__rest(obj,['x'])}";
+    assert!(!render(compressed).contains(".__rest("));
+}
+
+#[test]
+fn returned_rest_requires_all_preceding_reads() {
+    for body in [
+        "return ts.__rest(obj, ['x']);",
+        "var x = obj.x; effect(); return ts.__rest(obj, ['x']);",
+        "var x = obj.x; return ts.__rest(obj, ['x', 'y']);",
+        "var x = obj.x; var y = obj.y; return ts.__rest(obj, ['y', 'x']);",
+        "var x = other.x; return ts.__rest(obj, ['x']);",
+        "var x = obj.x; let tail; return ts.__rest(obj, ['x']);",
+    ] {
+        let input = format!("import * as ts from 'tslib'; function rest(obj) {{ {body} }}");
+        assert!(render_rule(&input, UnObjectRest::new).contains(".__rest("));
+    }
+}
+
+#[test]
+fn returned_rest_does_not_capture_existing_names() {
+    let input = r#"
+import * as ts from "tslib";
+function copy(obj, rest) {
+    use(rest, rest_1);
+    var x = obj.x;
+    return ts.__rest(obj, ["x"]);
+}
+"#;
+    let output = render_rule(input, UnObjectRest::new);
+    assert!(output.contains("...rest_2"), "{output}");
+    assert!(output.contains("use(rest, rest_1)"), "{output}");
+}
+
+#[test]
+fn untouched_nested_functions_keep_their_ast_allocations() {
+    use swc_core::common::Mark;
+    use swc_core::ecma::ast::{FnDecl, Function, Module};
+    use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+    #[derive(Default)]
+    struct Functions(Vec<*const Function>);
+    impl Visit for Functions {
+        fn visit_fn_decl(&mut self, decl: &FnDecl) {
+            self.0.push(decl.function.as_ref() as *const Function);
+            decl.visit_children_with(self);
+        }
+    }
+
+    struct CheckAllocations(Mark);
+    impl VisitMut for CheckAllocations {
+        fn visit_mut_module(&mut self, module: &mut Module) {
+            let mut before = Functions::default();
+            module.visit_with(&mut before);
+            module.visit_mut_with(&mut UnObjectRest::new(self.0));
+            let mut after = Functions::default();
+            module.visit_with(&mut after);
+            // Rebuilding each enclosing statement list must not deep-clone
+            // untouched function trees. That repeats work at every nesting level.
+            assert_eq!(before.0.len(), 3);
+            assert_eq!(before.0, after.0);
+        }
+    }
+
+    let input = r#"
+import { __rest } from "tslib";
+function outer(obj) {
+    function middle() {
+        function inner() { return obj.value; }
+        return inner();
+    }
+    var x = obj.x;
+    var rest = __rest(obj, ["x"]);
+    return [middle(), x, rest];
+}
+
+use(outer);
+"#;
+    let expected = r#"
+function outer(obj) {
+    function middle() {
+        function inner() { return obj.value; }
+        return inner();
+    }
+    var { x, ...rest } = obj;
+    return [middle(), x, rest];
+}
+use(outer);
+"#;
+    assert_eq_normalized(&render_rule(input, CheckAllocations), expected);
+}
+
+#[test]
+fn rest_assignment_keeps_local_var_declarations() {
+    for (prefix, suffix) in [("", ""), ("function extract(source) {", "}")] {
+        let input = format!(
+            r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+{prefix}
+var picked = (source = source === undefined ? {{}} : source).key;
+var other = source.other;
+source = omit(source, ["key", "other"]);
+use(picked, other, source);
+{suffix}
+"#
+        );
+        let expected = format!(
+            r#"
+{prefix}
+source = source === undefined ? {{}} : source;
+var picked;
+var other;
+({{ key: picked, other, ...source }} = source);
+use(picked, other, source);
+{suffix}
+"#
+        );
+        assert_eq_normalized(&render_rule(&input, UnObjectRest::new), &expected);
+    }
+}
+
+#[test]
+fn rest_assignment_preserves_lexical_initialization() {
+    for kind in ["let", "const"] {
+        let input = format!(
+            r#"
+import omit from "@babel/runtime/helpers/objectWithoutProperties";
+function extract(source) {{
+    {kind} picked = source.key;
+    source = omit(source, ["key"]);
+    use(picked, source);
+}}
+"#
+        );
+        assert_eq_normalized(&render_rule(&input, UnObjectRest::new), &input);
+    }
+}
+
+#[test]
+fn module_declarations_reset_rest_lookbehind() {
+    for boundary in ["import 'side-effect';", "export var marker = 0;"] {
+        let source = format!(
+            "import {{ __rest }} from 'tslib';\nvar a = obj.a;\n{boundary}\n\
+             var rest = __rest(obj, ['a']);\nuse(a, rest);"
+        );
+        let output = render_rule(&source, UnObjectRest::new);
+        assert!(output.contains("var a = obj.a;"), "{output}");
+        assert!(!output.contains("__rest("), "{output}");
+        assert!(output.contains("use(a, rest)"), "{output}");
+    }
+}
+
+#[test]
+fn rest_lookbehind_tracks_rebuilt_module_statements() {
+    let source = r#"
+import { __rest } from 'tslib';
+var x = obj.x;
+var first = __rest(obj, ['x']);
+var y = other.y;
+var second = __rest(other, ['y']);
+use(x, first, y, second);
+"#;
+    let expected = r#"
+var { x, ...first } = obj;
+var { y, ...second } = other;
+use(x, first, y, second);
+"#;
+    assert_eq_normalized(&render_rule(source, UnObjectRest::new), expected);
+}

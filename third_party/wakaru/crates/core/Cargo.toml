@@ -1,0 +1,30 @@
+[package]
+name = "wakaru-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wakaru core — JavaScript decompiler and bundle splitter"
+# Publish only the library sources: tests/ carries ~100MB of bundle fixtures
+# and generator node_modules that must never enter the .crate archive.
+include = ["/src"]
+
+[lib]
+name = "wakaru_core"
+
+[features]
+default = []
+
+[dependencies]
+anyhow.workspace = true
+rayon = "1.11"
+rustc-hash = "2"
+similar = "2"
+sourcemap.workspace = true
+swc_core.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta = "1"
+serde_json = "1"
+tracing-subscriber = "0.3"

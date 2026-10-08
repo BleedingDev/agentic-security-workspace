@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+let n;
+n = function() {
+    return this;
+}();
+try {
+    n = n || Function("return this")() || (0, eval)("this");
+} catch (e) {
+    if (typeof window === "object") {
+        n = window;
+    }
+}
+export default n;

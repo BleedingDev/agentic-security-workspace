@@ -1,0 +1,49 @@
+---
+title: Correctness
+description: How Wakaru measures that decompiled code still behaves the same.
+---
+
+Wakaru tests both JavaScript behavior and syntax recovery against real
+toolchain output. The two measurements answer different questions: does the
+result preserve the expected behavior, and did Wakaru recover the original
+construct?
+
+## Test262 round trips
+
+Test262 is the official ECMAScript conformance suite. The harness checks each
+test's expected result, including expected errors. For executable tests, it
+compares the original source, compiled or minified source, and Wakaru's output.
+Syntax-error tests check rejection at parsing.
+
+Current state: **62,155 passing round trips, with zero Wakaru correctness
+failures** across 66,729 runnable inputs. The remaining
+4,668 are classified as unsupported or rejected, including test-environment
+and toolchain limitations. They are not counted as passes. The results and
+source revision are recorded in
+[test262-stats.json](https://github.com/pionxzh/wakaru/blob/main/scripts/correctness/test262-stats.json).
+
+CI reruns the tests and compares them against the baseline to catch regressions.
+
+## Pattern recovery
+
+Reproduction matrices compile known inputs through real Babel, TypeScript,
+SWC, esbuild, and Terser version combinations, then verify that Wakaru
+recovers the original construct. Current rate: **93.9% across 2,606 test
+shapes**. Per-matrix results are recorded in
+[stats.json](https://github.com/pionxzh/wakaru/blob/main/scripts/repro/stats.json).
+
+## What this promises, and what it does not
+
+The measurements cover the constructs and toolchains in the matrices. That
+is strong evidence, not a formal equivalence proof. When behavioral fidelity
+matters most, use `--level minimal`, and treat decompiled output as
+something to verify rather than something verified.
+
+If you want the exact rules, the full semantic contract lives in
+[rewrite-assumptions.md](https://github.com/pionxzh/wakaru/blob/main/docs/rewrite-assumptions.md):
+every named assumption, and which levels may rely on it.
+
+And if you ever observe decompiled code behaving differently from its input,
+that is a bug we want.
+[Open an issue](https://github.com/pionxzh/wakaru/issues) with the input,
+reduced if you can.

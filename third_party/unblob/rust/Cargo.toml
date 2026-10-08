@@ -1,0 +1,40 @@
+[package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+name = "unblob-rust"
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = [
+  "cdylib", # for Python extension
+  "rlib",   # for benchmarking
+]
+name = "unblob"
+# disable Rust nightly benchmark feature. We use criterion
+# https://bheisler.github.io/criterion.rs/book/faq.html#cargo-bench-gives-unrecognized-option-errors-for-valid-command-line-options
+bench = false
+
+[dependencies]
+log = "0.4.22"
+pyo3 = "0.28.0"
+pyo3-log = "0.13.0"
+statrs = { version = "0.18.0", default-features = false }
+thiserror = "2.0.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.1"
+
+[dev-dependencies]
+approx = "0.5.0"
+criterion = "0.8.0"
+rand = { version = "0.10.0", features = ["sys_rng"] }
+
+[[bench]]
+harness = false
+name = "benches_main"
+
+[lints.rust]
+# Required for Rust >= 1.84 && pyo3 < 0.23
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(addr_of)'] }

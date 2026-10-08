@@ -1,0 +1,75 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { ForwardRef, Memo, isMemo } from "./module-43.js";
+const o = {
+    childContextTypes: true,
+    contextType: true,
+    contextTypes: true,
+    defaultProps: true,
+    displayName: true,
+    getDefaultProps: true,
+    getDerivedStateFromError: true,
+    getDerivedStateFromProps: true,
+    mixins: true,
+    propTypes: true,
+    type: true
+};
+const i = {
+    name: true,
+    length: true,
+    prototype: true,
+    caller: true,
+    callee: true,
+    arguments: true,
+    arity: true
+};
+const a = {
+    $$typeof: true,
+    compare: true,
+    defaultProps: true,
+    displayName: true,
+    propTypes: true,
+    type: true
+};
+const u = {};
+function l(e) {
+    if (isMemo(e)) {
+        return a;
+    }
+    return u[e.$$typeof] || o;
+}
+u[ForwardRef] = {
+    $$typeof: true,
+    render: true,
+    defaultProps: true,
+    displayName: true,
+    propTypes: true
+};
+u[Memo] = a;
+export default (function e(t, n, r) {
+    if (typeof n !== "string") {
+        if (Object.prototype) {
+            const o = Object.getPrototypeOf(n);
+            if (o && o !== Object.prototype) {
+                e(t, o, r);
+            }
+        }
+        let a = Object.getOwnPropertyNames(n);
+        if (Object.getOwnPropertySymbols) {
+            a = a.concat(Object.getOwnPropertySymbols(n));
+        }
+        const u = l(t);
+        const m = l(n);
+        for (const v of a){
+            if (!(i[v] || r && r[v] || m && m[v] || u && u[v])) {
+                const b = Object.getOwnPropertyDescriptor(n, v);
+                try {
+                    Object.defineProperty(t, v, b);
+                } catch (e) {}
+            }
+        }
+    }
+    return t;
+});

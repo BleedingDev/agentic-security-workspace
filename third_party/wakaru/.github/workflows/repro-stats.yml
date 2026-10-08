@@ -1,0 +1,59 @@
+name: Repro Stats
+
+# Verifies that scripts/repro/stats.json matches a fresh run of every
+# reproduction matrix, and that the README/website copy citing the aggregate
+# matches stats.json. Gated on scripts/repro/** (plus the two copy surfaces)
+# so routine rule changes do not pay the matrix cost in CI; after a rule
+# change that moves recovery rates, regenerate stats.json locally per the
+# Definition of Done.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/repro/**"
+      - "README.md"
+      - "website/index.html"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/repro/**"
+      - "README.md"
+      - "website/index.html"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Build wakaru CLI
+        run: cargo build -p wakaru-cli
+      - name: Test producer execution, TypeScript profiles and module comparison
+        run: >-
+          node --test
+          scripts/repro/lib/matrix-jobs.test.mjs
+          scripts/repro/lib/node-tool.test.mjs
+          scripts/repro/lib/tool-process.test.mjs
+          scripts/repro/lib/producer-batch.test.mjs
+          scripts/repro/lib/tsc-batch.test.mjs
+          scripts/repro/tslib-helpers-matrix/compare.test.mjs
+        env:
+          WAKARU: ${{ github.workspace }}/target/debug/wakaru
+      - name: Verify stats.json freshness
+        run: node scripts/repro/collect-stats.mjs --check
+        env:
+          WAKARU: ${{ github.workspace }}/target/debug/wakaru

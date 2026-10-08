@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "templates"
+    ],
+    "paths": [
+      "test/language/expressions/template-literal",
+      "test/language/expressions/tagged-template"
+    ]
+  },
+  "totals": {
+    "discovered": 84,
+    "runnable": 84,
+    "skipped": 0,
+    "unsupported": 3,
+    "rejected": 1,
+    "passed": 80,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/tagged-template/cache-realm.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "12df9c2fbf87fc55c4cbd0bc406ef274eab509baeff1dab90672151920b18db8",
+      "summary": "Error: sloppy: expected success, got runtime TypeError: other.eval is not a function"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/invalid-escape-sequences.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "0e111cd3228788414fc62452c50e6178fe2954bd5751e195aef257ad78dfea1e",
+      "summary": "SyntaxError: Unicode reference out of bounds"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/tco-call.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/tco-member.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    }
+  ]
+}
