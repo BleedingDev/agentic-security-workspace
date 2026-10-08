@@ -1,0 +1,35 @@
+---
+platform: ios
+title: Sensitive Data Not Marked For Backup Exclusion
+id: MASTG-TEST-0215
+type: [static, code]
+maswe: [MASWE-0006]
+best-practices: [MASTG-BEST-0023]
+knowledge: [MASTG-KNOW-0102]
+---
+
+## Overview
+
+This test verifies whether your app uses the `isExcludedFromBackup` API to instruct the system to exclude sensitive files from backups. This API [does not guarantee the actual exclusion](https://developer.apple.com/documentation/foundation/optimizing-your-app-s-data-for-icloud-backup). According to the documentation:
+
+> "The `isExcludedFromBackup` resource value exists only to provide guidance to the system about which files and directories it can exclude; it's not a mechanism to guarantee those items never appear in a backup or on a restored device."
+
+In this test, we identify all locations where the `isExcludedFromBackup` API is used to mark files that might still end up in a backup.
+
+!!! note
+    Files stored in an app's `/tmp` and `/Library/Caches` directories are **excluded** from iCloud backups. These directories are intended for temporary or cache data, and the system may automatically delete their contents at any time to free up space. Therefore, you don't need to mark these files with `isExcludedFromBackup`. For more details, see the [Apple documentation](https://developer.apple.com/documentation/foundation/optimizing-your-app-s-data-for-icloud-backup#Exclude-Purgeable-Data).
+
+## Steps
+
+1. Use @MASTG-TECH-0058 to extract the relevant binaries from app package.
+2. Use @MASTG-TECH-0066 to look for the relevant APIs in the app binaries.
+
+## Observation
+
+The output should contain the disassembled code of the functions using `isExcludedFromBackup`, and, if possible, the list of affected files.
+
+## Evaluation
+
+The test case fails if the `isExcludedFromBackup` API is used and any of the affected files are considered sensitive.
+
+For any sensitive files found, in addition to using `isExcludedFromBackup`, make sure to encrypt them, as `isExcludedFromBackup` does not guarantee exclusion.

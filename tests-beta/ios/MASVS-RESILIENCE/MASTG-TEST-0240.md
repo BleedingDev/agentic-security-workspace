@@ -1,0 +1,28 @@
+---
+platform: ios
+title: Jailbreak Detection in Code
+id: MASTG-TEST-0240
+type: [static, code]
+maswe: [MASWE-0051]
+false_negative_prone: true
+knowledge: [MASTG-KNOW-0084]
+---
+
+## Overview
+
+The test verifies that a mobile app can detect if the iOS device it is running on is jailbroken. It does so by statically analyzing the app binary for common jailbreak detection checks (@MASTG-KNOW-0084). For example, the app may check for the presence of a third-party app store (e.g. Sileo, Zebra, ...), or for the presence of certain files or directories that are indicative of a jailbroken device.
+
+The limitations of static analysis should be considered. It is possible that the app uses more sophisticated jailbreak detection techniques that are not detected by the used tool. In such cases, careful manual reverse engineering and deobfuscation are required to identify the jailbreak detection checks.
+
+## Steps
+
+1. Use @MASTG-TECH-0058 to extract the relevant binaries from app package.
+2. Use @MASTG-TECH-0066 to look for the relevant APIs in the app binaries.
+
+## Observation
+
+The output should include any instances of common jailbreak detection checks in the app binary.
+
+## Evaluation
+
+The test case fails if jailbreak detection is not implemented. However, note that this test is not exhaustive and may not detect all jailbreak detection checks. Manual reverse engineering and deobfuscation may be required to identify more sophisticated jailbreak detection checks.
