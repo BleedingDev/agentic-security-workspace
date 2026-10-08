@@ -1,0 +1,104 @@
+name: Markdown Terminology Lint Check
+
+on:
+  pull_request:
+    branches:
+    - master
+    paths:
+    - '**.md'
+    - '!.github/**'
+
+jobs:
+  textlint:
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout PR
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Checkout Base
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: OWASP/wstg
+        ref: master
+        path: base
+        persist-credentials: false
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      with:
+        node-version: 24
+    - name: Cache npm Global
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-npm-global-textlint
+    - name: Install Dependencies
+      run: |
+        npm install -g textlint
+        npm install -g textlint-rule-terminology
+    - name: Get Changed Files
+      # Use base/head SHAs from the PR event for fork-safe, PR-accurate changed-file detection.
+      # github.base_ref resolves differently for forks, while base.sha/head.sha are always correct.
+      id: files
+      uses: ./.github/actions/get-changed-files
+      with:
+        base_sha: ${{ github.event.pull_request.base.sha }}
+        head_sha: ${{ github.event.pull_request.head.sha }}
+        base_repo: ${{ github.event.pull_request.base.repo.full_name }}
+        repo_path: .
+    - name: Run textlint Check
+      env:
+        FILES: '${{ steps.files.outputs.files_updated }}'
+      shell: bash
+      run: |
+        set -uo pipefail
+        touch log.txt
+        TEXTLINT_FATAL=0
+        readarray -t files_arr <<< "$FILES"
+        # All markdown files, excluding .github and website (same as get-changed-files)
+        # Use fix flag so that it goes through all files
+        # textlint: exit 0 = ok, 1 = rule violations (terminology here), >=2 = fatal (config, parse, etc.)
+        for FILE in "${files_arr[@]}"; do
+          [ -z "$FILE" ] && continue
+          if printf '%s\n' "$FILE" | grep -Eq '^(\.github/|website/)'; then
+            continue
+          fi
+          textlint --config base/.github/configs/.textlintrc.json --fix "$FILE" 2>&1 | tee -a log.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ge 2 ]; then
+            printf 'textlint exited with code %s for file: %s\n' "$rc" "$FILE" >&2
+            TEXTLINT_FATAL=1
+          fi
+        done
+        if [ "$TEXTLINT_FATAL" -eq 1 ]; then
+          exit 2
+        fi
+        if grep -q 'Incorrect term' log.txt; then
+          exit 1
+        else
+          echo "No terminology issues found."
+        fi
+    - name: Show Mistakes
+      if: failure()
+      run: |
+        cat log.txt
+        cat log.txt | grep -v '✔ Fixed' | tr '✔' '✖' > mistakes.txt
+        sed -i 's/✖/❌/g' mistakes.txt
+    - name: Create Artifact for Comment
+      if: failure()
+      run: |
+        echo "**The following mistakes were identified:**" > artifact.txt
+        # Copy to generic name for commenting
+        cat mistakes.txt | tee -a artifact.txt
+    - name: Upload List of Mistakes
+      if: failure()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: artifact
+        path: artifact.txt
+
