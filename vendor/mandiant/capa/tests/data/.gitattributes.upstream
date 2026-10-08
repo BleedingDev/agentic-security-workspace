@@ -4,5 +4,3 @@
 *.py_ text eol=lf
 *.html_ text eol=lf
 *.sh_ text eol=lf
-# Preserved snapshot: retain raw bytes and embedded LFS payloads.
-** -text -filter

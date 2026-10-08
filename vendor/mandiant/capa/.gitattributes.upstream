@@ -3,8 +3,7 @@
 
 # Explicitly declare text files you want to always be normalized and converted
 # to native line endings on checkout.
+*.py text
 *.yml text
 *.md text
 *.txt text
-# Preserved snapshot: retain raw bytes and embedded LFS payloads.
-** -text -filter
