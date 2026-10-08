@@ -1,0 +1,8 @@
+*.swp
+*.swo
+.~lock*
+
+.DS_Store
+2019/.DS_Store
+2019/fr/.DS_Store
+2019/fr/src/.DS_Store
