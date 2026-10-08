@@ -1,0 +1,12 @@
+.DS_Store
+*.pyc
+node_modules
+*.out
+.idea
+Generated/
+*.pdf
+*.epub
+tmp_*.tex
+OWASP_MASVS-SNAPSHOT*.docx
+*.mobi
+*.docx
