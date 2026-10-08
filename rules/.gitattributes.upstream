@@ -6,5 +6,3 @@
 *.yml text
 *.md text
 *.txt text
-# Preserved snapshot: retain raw bytes and embedded LFS payloads.
-** -text -filter
