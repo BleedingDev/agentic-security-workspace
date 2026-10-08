@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "esbuild-minify",
+    "version": "0.23.1",
+    "configHash": "5cc7678984b5d2f567c58fa41b6aef47740bd1d8d00a72443d6b759eeeaf1a6f"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "templates"
+    ],
+    "paths": [
+      "test/language/expressions/template-literal",
+      "test/language/expressions/tagged-template"
+    ]
+  },
+  "totals": {
+    "discovered": 84,
+    "runnable": 84,
+    "skipped": 0,
+    "unsupported": 3,
+    "rejected": 1,
+    "passed": 80,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/tagged-template/cache-realm.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "12df9c2fbf87fc55c4cbd0bc406ef274eab509baeff1dab90672151920b18db8",
+      "summary": "Error: sloppy: expected success, got runtime TypeError: other.eval is not a function"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/call-expression-context-no-strict.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "7351cceac137a34fbc2104f87394b2d0ac53a579513ed16ebb2eafee8b424851",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«[object Object]», «[object Object]») to be true"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/tco-call.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/tagged-template/tco-member.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    }
+  ]
+}

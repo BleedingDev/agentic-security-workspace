@@ -1,0 +1,155 @@
+#![allow(
+    clippy::borrowed_box,
+    clippy::boxed_local,
+    clippy::ptr_arg,
+    clippy::type_complexity,
+    clippy::vec_box
+)]
+
+pub(crate) mod analysis;
+pub mod collections;
+pub(crate) mod commonjs_default_object_composition;
+pub mod driver;
+pub mod facts;
+pub(crate) mod js_names;
+pub(crate) mod module_path;
+pub mod namespace_decomposition;
+pub mod output_validate;
+pub(crate) mod provider_import_repair;
+pub(crate) mod provider_namespace_repair;
+pub mod reexport_consolidation;
+pub mod rules;
+pub mod sourcemap_rename;
+pub(crate) mod synthetic_import_cleanup;
+pub mod tdz_check;
+pub mod unpacker;
+pub mod utils;
+pub mod vue_recovery;
+pub mod vue_template;
+
+pub use driver::{
+    decompile, deduplicate_path, format_trace_events, is_detected_unpack_input, normalize,
+    safe_relative_module_path, trace_rules, BundleFormat, DceMode, DecompileOptions,
+    DecompileOutput, NormalizeOptions, RuleTraceEvent, RuleTraceOptions, UnpackWarning,
+    UnpackWarningKind,
+};
+pub use facts::{
+    collect_module_facts, ExportFact, ExportKind, HelperExportFact, HelperKind, ImportFact,
+    ImportKind, ModuleFacts, ModuleFactsMap, TypeScriptHelperExportFact, TypeScriptHelperKind,
+};
+pub use output_validate::{
+    validate_output_modules, validate_output_modules_with_inputs, OutputFinding, OutputFindingKind,
+};
+pub use rules::{
+    apply_rules, rule_descriptors, rule_names, RewriteAssumptions, RewriteLevel, RewritePolicy,
+    RuleDescriptor, RulePipelineOptions, RuleStage,
+};
+pub use sourcemap_rename::{extract_source_entries, parse_sourcemap, resolve_source_path};
+pub use tdz_check::{check_tdz, TdzViolation};
+pub use unpacker::{scope_hoist, unpack_webpack4, UnpackResult, UnpackedModule};
+pub use vue_recovery::{
+    decompile_vue_sfc, is_likely_vue_sfc_source, recover_vue_sfc_from_js,
+    recover_vue_sfc_source_from_js, recover_vue_sfcs_from_js, RecoveredVueSfc, VueImportResolver,
+    VueSfcDecompileOptions, VueSfcDecompileOutput, VueSfcRecoveryOptions,
+};
+
+/// Unpack a webpack4 bundle and return the raw (pre-decompile-rules) module code.
+/// Each element is `(filename, code)`. Returns `None` if the source is not recognized
+/// as a webpack4 bundle.
+pub fn unpack_webpack4_raw(source: &str) -> Option<Vec<(String, String)>> {
+    let result = unpacker::unpack_webpack4_raw(source)?;
+    Some(
+        result
+            .modules
+            .into_iter()
+            .map(|m| (m.filename, m.code))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) mod test_tracing {
+    use std::sync::{Arc, Mutex, Once};
+
+    use tracing::{span::Attributes, Dispatch, Id, Subscriber};
+    use tracing_subscriber::{layer::Context, prelude::*, Layer, Registry};
+
+    /// tracing-core caches per-callsite `Interest`, and its single-dispatcher
+    /// fast path (`Rebuilder::JustOne`) evaluates that interest against the
+    /// *registering thread's* default dispatcher. Under `cargo test`'s
+    /// in-process parallelism, a concurrent test thread with no dispatcher can
+    /// therefore register a callsite with a permanently cached
+    /// `Interest::never`, hiding that span from a `record_spans` capture
+    /// running on another thread (nextest runs one process per test and never
+    /// hits this). This subscriber is installed once as the global default: it
+    /// reports `Interest::sometimes` for every callsite — forcing the
+    /// per-thread `enabled` check instead of a poisoned cache — while enabling
+    /// nothing itself.
+    struct NeutralInterestSubscriber;
+
+    impl Subscriber for NeutralInterestSubscriber {
+        fn register_callsite(
+            &self,
+            _metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            false
+        }
+
+        fn new_span(&self, _attrs: &Attributes<'_>) -> Id {
+            Id::from_u64(u64::MAX)
+        }
+
+        fn record(&self, _id: &Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _id: &Id, _follows: &Id) {}
+
+        fn event(&self, _event: &tracing::Event<'_>) {}
+
+        fn enter(&self, _id: &Id) {}
+
+        fn exit(&self, _id: &Id) {}
+    }
+
+    fn install_neutral_global_default() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(NeutralInterestSubscriber);
+        });
+    }
+
+    #[derive(Clone)]
+    struct SpanNameRecorder(Arc<Mutex<Vec<String>>>);
+
+    impl<S> Layer<S> for SpanNameRecorder
+    where
+        S: Subscriber,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+            self.0
+                .lock()
+                .expect("span recorder lock should not be poisoned")
+                .push(attrs.metadata().name().to_string());
+        }
+    }
+
+    pub(crate) fn record_spans<T: Send>(f: impl FnOnce() -> T + Send) -> (T, Vec<String>) {
+        install_neutral_global_default();
+        let names = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = Registry::default().with(SpanNameRecorder(names.clone()));
+        let dispatch = Dispatch::new(subscriber);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("single-thread test pool should build");
+        let output = pool.install(|| tracing::dispatcher::with_default(&dispatch, f));
+        let recorded = names
+            .lock()
+            .expect("span recorder lock should not be poisoned")
+            .clone();
+        (output, recorded)
+    }
+}

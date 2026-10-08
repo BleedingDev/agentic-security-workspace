@@ -1,0 +1,32 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+      - docs
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true # required to call gh-deploy
+
+      - name: Install uv & Python
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.10"
+
+      - name: Install the project
+        run: uv sync --only-group docs
+
+      - name: Generate documentation
+        run: uv run mkdocs gh-deploy --force

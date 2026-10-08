@@ -1,0 +1,70 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import r from "./module-4.js";
+import i from "./module-5.js";
+import { Children, Component } from "./module-50.js";
+import c from "./module-1.js";
+export class a extends Component {
+    constructor(...i){
+        super(...i);
+        this.state = {
+            match: this.computeMatch(this.props.history.location.pathname)
+        };
+    }
+    getChildContext() {
+        return {
+            router: {
+                ...this.context.router,
+                history: this.props.history,
+                route: {
+                    location: this.props.history.location,
+                    match: this.state.match
+                }
+            }
+        };
+    }
+    computeMatch(e) {
+        return {
+            path: "/",
+            url: "/",
+            params: {},
+            isExact: e === "/"
+        };
+    }
+    componentWillMount() {
+        const e = this;
+        const props = this.props;
+        const { children, history } = props;
+        i(children == null || Children.count(children) === 1, "A <Router> may have only one child element");
+        this.unlisten = history.listen(()=>{
+            e.setState({
+                match: e.computeMatch(history.location.pathname)
+            });
+        });
+    }
+    componentWillReceiveProps(e) {
+        r(this.props.history === e.history, "You cannot change <Router history>");
+    }
+    componentWillUnmount() {
+        this.unlisten();
+    }
+    render() {
+        const children = this.props.children;
+        if (children) {
+            return Children.only(children);
+        }
+        return null;
+    }
+}
+a.propTypes = {
+    history: c.object.isRequired,
+    children: c.node
+};
+a.contextTypes = {
+    router: c.object
+};
+a.childContextTypes = {
+    router: c.object.isRequired
+};

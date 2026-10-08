@@ -1,0 +1,766 @@
+use crate::collections::HashSet;
+
+use swc_core::common::{Mark, Spanned, SyntaxContext, DUMMY_SP};
+use swc_core::ecma::ast::{
+    AssignExpr, AssignOp, AssignTarget, BinExpr, BinaryOp, Bool, ComputedPropName, CondExpr, Expr,
+    Ident, Lit, MemberExpr, MemberProp, Module, SimpleAssignTarget,
+};
+use swc_core::ecma::utils::ExprFactory;
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
+
+use super::binding_facts::TempIsolation;
+use super::dead_decls::remove_consumed_uninitialized_decls;
+use super::decl_utils::BindingId;
+pub(crate) use super::expr_utils::{exprs_structurally_equal, is_unresolved_undefined};
+use super::{RewriteLevel, RewritePolicy};
+
+use crate::utils::paren::strip_parens;
+
+pub struct UnNullishCoalescing {
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    consumed_uninitialized_bindings: HashSet<BindingId>,
+    isolation: TempIsolation,
+}
+
+impl UnNullishCoalescing {
+    pub fn new(unresolved_mark: Mark, level: RewriteLevel) -> Self {
+        Self {
+            unresolved_mark,
+            policy: RewritePolicy::from_level(level),
+            consumed_uninitialized_bindings: HashSet::default(),
+            isolation: TempIsolation::default(),
+        }
+    }
+}
+
+impl VisitMut for UnNullishCoalescing {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        // Temps are hoisted `var _a;`, or `let _a;` declared before every use
+        // in the same function (VarDeclToLetConst's rewrite of the former); an
+        // uninitialized `let` elsewhere may be in its TDZ where the pattern
+        // assigns it, and `TempIsolation` rejects it.
+        self.isolation = TempIsolation::collect(module);
+        self.consumed_uninitialized_bindings.clear();
+        module.visit_mut_children_with(self);
+        remove_consumed_uninitialized_decls(module, &self.consumed_uninitialized_bindings);
+    }
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        if let Some(mut result) =
+            try_nullish_coalescing(expr, self.unresolved_mark, self.policy, &self.isolation).filter(
+                |result| {
+                    self.isolation.accept_expr_rewrite(
+                        expr,
+                        result,
+                        &mut self.consumed_uninitialized_bindings,
+                    )
+                },
+            )
+        {
+            if let Expr::Bin(bin) = &mut result {
+                bin.span = expr.span();
+            }
+            *expr = result;
+        }
+    }
+}
+
+fn try_nullish_coalescing(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    // Temp-backed computed member shape:
+    // `(_obj = getObj())[_key = getKey()] ?? (_obj[_key] = fallback)`
+    // → `getObj()[getKey()] ??= fallback`.
+    //
+    // The isolated compiler temps preserve the single evaluation of both the
+    // object and key, so this recovery is safe at every rewrite level.
+    if let Some(result) = try_temp_backed_computed_member_nullish_assignment(expr, isolation) {
+        return Some(result);
+    }
+
+    // Native logical assignment shape: `target ?? (target = fallback)` → `target ??= fallback`.
+    if let Some(result) = try_nullish_assignment(expr, unresolved_mark, policy) {
+        return Some(result);
+    }
+
+    // Pattern C: `(tmp = X) === null || tmp === undefined || tmp` → `X ?? true`
+    // (||‐chain encoding of nullish coalescing with boolean `true` default)
+    if let Some(result) = try_pattern_c_coalescing(expr, unresolved_mark, policy, isolation) {
+        return Some(result);
+    }
+
+    let Expr::Cond(cond_expr) = expr else {
+        return None;
+    };
+
+    // Pattern D: `x != null ? x : fallback` / `x == null ? fallback : x`
+    // Temp-var form: `(tmp = expr) != null ? tmp : fallback` -> `expr ?? fallback`
+    if policy.assumptions.no_document_all {
+        if let Some(result) = try_loose_pattern_coalescing(cond_expr, unresolved_mark, isolation) {
+            return Some(result);
+        }
+    }
+
+    // Pattern B: `x === null || x === void 0 ? fallback : x`
+    if let Some(result) = try_pattern_b_coalescing(cond_expr, unresolved_mark, isolation) {
+        return Some(result);
+    }
+
+    // Pattern A: `x !== null && x !== void 0 ? x : fallback`
+    if let Some(result) = try_pattern_a_coalescing(cond_expr, unresolved_mark, isolation) {
+        return Some(result);
+    }
+
+    None
+}
+
+fn try_temp_backed_computed_member_nullish_assignment(
+    expr: &Expr,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::NullishCoalescing,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let Expr::Member(read_member) = strip_parens(left) else {
+        return None;
+    };
+    let (object_sym, object_ctxt, object) = extract_assign_parts(&read_member.obj)?;
+    let MemberProp::Computed(read_prop) = &read_member.prop else {
+        return None;
+    };
+    let (key_sym, key_ctxt, key) = extract_assign_parts(&read_prop.expr)?;
+
+    let Expr::Assign(write) = strip_parens(right) else {
+        return None;
+    };
+    if write.op != AssignOp::Assign {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Member(write_member)) = &write.left else {
+        return None;
+    };
+    if !expr_is_ident_binding(&write_member.obj, &object_sym, object_ctxt) {
+        return None;
+    }
+    let MemberProp::Computed(write_prop) = &write_member.prop else {
+        return None;
+    };
+    if !expr_is_ident_binding(&write_prop.expr, &key_sym, key_ctxt) {
+        return None;
+    }
+
+    // Each temp's only uses must be the two positions in this pattern: the
+    // read-side assignment and the write-side identifier.
+    if !isolation.is_isolated(&(object_sym.clone(), object_ctxt), 2)
+        || !isolation.is_isolated(&(key_sym.clone(), key_ctxt), 2)
+    {
+        return None;
+    }
+
+    Some(Expr::Assign(AssignExpr {
+        span: expr.span(),
+        op: AssignOp::NullishAssign,
+        left: AssignTarget::Simple(SimpleAssignTarget::Member(MemberExpr {
+            span: read_member.span,
+            obj: object.clone(),
+            prop: MemberProp::Computed(ComputedPropName {
+                span: read_prop.span,
+                expr: key.clone(),
+            }),
+        })),
+        right: write.right.clone(),
+    }))
+}
+
+fn expr_is_ident_binding(expr: &Expr, sym: &swc_core::atoms::Atom, ctxt: SyntaxContext) -> bool {
+    matches!(strip_parens(expr), Expr::Ident(ident) if ident.sym == *sym && ident.ctxt == ctxt)
+}
+
+fn try_nullish_assignment(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::NullishCoalescing,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let Expr::Assign(assign) = strip_parens(right) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+
+    if !assign_target_recoverable_as_nullish_assignment(&assign.left, unresolved_mark, policy) {
+        return None;
+    }
+    let left_target_expr = assign_target_to_expr(&assign.left)?;
+    if !exprs_structurally_equal(left, &left_target_expr) {
+        return None;
+    }
+
+    Some(Expr::Assign(AssignExpr {
+        span: expr.span(),
+        op: AssignOp::NullishAssign,
+        left: assign.left.clone(),
+        right: assign.right.clone(),
+    }))
+}
+
+fn assign_target_recoverable_as_nullish_assignment(
+    target: &AssignTarget,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> bool {
+    match target {
+        AssignTarget::Simple(SimpleAssignTarget::Ident(id)) => {
+            id.id.ctxt.outer() != unresolved_mark || policy.level >= RewriteLevel::Standard
+        }
+        AssignTarget::Simple(SimpleAssignTarget::Member(member)) => {
+            member_recoverable_as_nullish_assignment(member, unresolved_mark, policy)
+        }
+        _ => false,
+    }
+}
+
+fn member_recoverable_as_nullish_assignment(
+    member: &MemberExpr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> bool {
+    if is_static_member_with_local_base(member, unresolved_mark) {
+        return policy.level >= RewriteLevel::Standard;
+    }
+
+    policy.assumptions.pure_getters && is_member_chain_without_side_effectful_base(member)
+}
+
+fn is_static_member_with_local_base(member: &MemberExpr, unresolved_mark: Mark) -> bool {
+    matches!(member.obj.as_ref(), Expr::Ident(base) if base.ctxt.outer() != unresolved_mark)
+        && matches!(member.prop, MemberProp::Ident(_))
+}
+
+fn is_member_chain_without_side_effectful_base(member: &MemberExpr) -> bool {
+    if !matches!(member.prop, MemberProp::Ident(_) | MemberProp::Computed(_)) {
+        return false;
+    }
+
+    match member.obj.as_ref() {
+        Expr::Ident(_) | Expr::This(_) => true,
+        Expr::Member(base) => is_member_chain_without_side_effectful_base(base),
+        _ => false,
+    }
+}
+
+fn assign_target_to_expr(target: &AssignTarget) -> Option<Expr> {
+    match target {
+        AssignTarget::Simple(SimpleAssignTarget::Ident(id)) => Some(Expr::Ident(id.id.clone())),
+        AssignTarget::Simple(SimpleAssignTarget::Member(member)) => {
+            Some(Expr::Member(member.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn try_loose_pattern_coalescing(
+    cond: &CondExpr,
+    unresolved_mark: Mark,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = cond.test.as_ref()
+    else {
+        return None;
+    };
+
+    match op {
+        BinaryOp::NotEq => {
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            try_loose_pattern_parts(checked, &cond.cons, cond.alt.clone(), isolation)
+        }
+        BinaryOp::EqEq => {
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            try_loose_pattern_parts(checked, &cond.alt, cond.cons.clone(), isolation)
+        }
+        _ => None,
+    }
+}
+
+fn try_loose_pattern_parts(
+    checked: Box<Expr>,
+    value_branch: &Expr,
+    fallback: Box<Expr>,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    if let Some((tmp_sym, tmp_ctxt, real_rhs)) = extract_assign_parts(&checked) {
+        let tmp = Box::new(Expr::Ident(Ident::new(tmp_sym.clone(), DUMMY_SP, tmp_ctxt)));
+        if !exprs_structurally_equal(value_branch, &tmp) {
+            return None;
+        }
+        // Loose lowering uses the temp twice: the assignment and the value.
+        if !isolation.is_isolated(&(tmp_sym.clone(), tmp_ctxt), 2) {
+            return None;
+        }
+        return Some(make_nullish_coalescing(real_rhs.clone(), fallback));
+    }
+
+    if exprs_structurally_equal(value_branch, &checked) {
+        return Some(make_nullish_coalescing(checked, fallback));
+    }
+
+    None
+}
+
+/// Pattern A: `x !== null && x !== void 0 ? x : fallback`  →  `x ?? fallback`
+/// Temp-var form: `(tmp = expr) !== null && tmp !== void 0 ? tmp : fallback`  →  `expr ?? fallback`
+fn try_pattern_a_coalescing(
+    cond: &CondExpr,
+    unresolved_mark: Mark,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let NullCheckResult { value, real_value } =
+        extract_not_null_check(&cond.test, unresolved_mark)?;
+
+    // Temp-var form: consequent must equal `tmp` (the variable on the LHS of the assignment)
+    if let Some(real) = real_value {
+        if exprs_structurally_equal(&cond.cons, &value) {
+            if let Expr::Ident(ref tmp_ident) = *value {
+                if !is_safe_temp(&tmp_ident.sym, tmp_ident.ctxt, isolation) {
+                    return None;
+                }
+            }
+            return Some(make_nullish_coalescing(real, cond.alt.clone()));
+        }
+        return None;
+    }
+
+    // Plain form: consequent must equal the checked value
+    if exprs_structurally_equal(&cond.cons, &value) {
+        return Some(make_nullish_coalescing(value, cond.alt.clone()));
+    }
+
+    None
+}
+
+/// Pattern B: `x === null || x === void 0 ? fallback : x`  →  `x ?? fallback`
+/// Temp-var form: `(tmp = expr) === null || tmp === void 0 ? fallback : tmp`  →  `expr ?? fallback`
+fn try_pattern_b_coalescing(
+    cond: &CondExpr,
+    unresolved_mark: Mark,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let NullCheckResult { value, real_value } = extract_null_check(&cond.test, unresolved_mark)?;
+
+    // Temp-var form: alternate must equal `tmp`
+    if let Some(real) = real_value {
+        if exprs_structurally_equal(&cond.alt, &value) {
+            if let Expr::Ident(ref tmp_ident) = *value {
+                if !is_safe_temp(&tmp_ident.sym, tmp_ident.ctxt, isolation) {
+                    return None;
+                }
+            }
+            return Some(make_nullish_coalescing(real, cond.cons.clone()));
+        }
+        return None;
+    }
+
+    // Plain form: alternate must equal the checked value
+    if exprs_structurally_equal(&cond.alt, &value) {
+        return Some(make_nullish_coalescing(value, cond.cons.clone()));
+    }
+
+    None
+}
+
+/// Pattern C: `(tmp = X) === null || tmp === undefined || tmp`  →  `X ?? true`
+/// Also handles the plain identifier form: `x === null || x === undefined || x`  →  `x ?? true`
+///
+/// This is an ||‐chain encoding of nullish coalescing where the default is `true`.
+/// When X is null/undefined the `=== null` or `=== undefined` comparison yields `true`
+/// (short-circuiting the chain), otherwise the chain falls through to `|| X` itself.
+///
+/// The plain form with member expressions (`B.broadcast === null || ...`) reads
+/// the property up to 3 times, so collapsing to `B.broadcast ?? true` changes
+/// semantics for getters, proxies, or values that change between reads. This
+/// form requires `Aggressive` level. Plain identifiers may also differ under
+/// `with` or global accessor bindings (3 reads → 1), but this is acceptable
+/// under Wakaru's heuristic policy for Standard level.
+/// The real machine-generated pattern always uses a temp variable.
+fn try_pattern_c_coalescing(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    // Shape: `(A || B) || C` where A = null-check, B = undefined-check, C = value
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalOr,
+        left: outer_left,
+        right: tail,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    // outer_left must be another `||`
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalOr,
+        left: null_check_expr,
+        right: undef_check_expr,
+        ..
+    }) = outer_left.as_ref()
+    else {
+        return None;
+    };
+
+    // Extract the null-check value (possibly with assignment)
+    let null_val = extract_null_single(null_check_expr)?;
+    // Extract the undefined-check value
+    let undef_val = extract_undefined_single(undef_check_expr, unresolved_mark)?;
+
+    // Check for assignment pattern: null_val may be `(tmp = real_expr)`
+    if let Some((tmp_sym, tmp_ctxt, real_rhs)) = extract_assign_parts(&null_val) {
+        // undef_check must reference `tmp`
+        if let Expr::Ident(ri) = &*undef_val {
+            if ri.sym == tmp_sym && ri.ctxt == tmp_ctxt {
+                // tail must also be `tmp`
+                if let Expr::Ident(ti) = tail.as_ref() {
+                    if ti.sym == tmp_sym && ti.ctxt == tmp_ctxt {
+                        if !is_safe_temp(&tmp_sym, tmp_ctxt, isolation) {
+                            return None;
+                        }
+                        return Some(make_nullish_coalescing(
+                            real_rhs.clone(),
+                            Box::new(Expr::Lit(Lit::Bool(Bool {
+                                span: DUMMY_SP,
+                                value: true,
+                            }))),
+                        ));
+                    }
+                }
+            }
+        }
+        return None;
+    }
+
+    // Plain identifier form: identifiers may technically differ under `with` or
+    // global accessor bindings (3 reads → 1), but this is acceptable heuristically.
+    if matches!(&*null_val, Expr::Ident(_)) && policy.level < RewriteLevel::Standard {
+        return None;
+    }
+
+    // Member expressions and other complex forms require Aggressive level
+    // because collapsing 3 reads into 1 changes semantics for getters/proxies.
+    if !matches!(&*null_val, Expr::Ident(_)) && !policy.assumptions.pure_getters {
+        return None;
+    }
+
+    if !exprs_structurally_equal(&null_val, &undef_val) {
+        return None;
+    }
+    if !exprs_structurally_equal(&null_val, tail) {
+        return None;
+    }
+
+    Some(make_nullish_coalescing(
+        null_val,
+        Box::new(Expr::Lit(Lit::Bool(Bool {
+            span: DUMMY_SP,
+            value: true,
+        }))),
+    ))
+}
+
+/// Result of a null-check extraction.
+/// `value` is the expression that was checked (or the tmp var ident if assignment).
+/// `real_value` is `Some(rhs)` if the first operand was an assignment `(tmp = rhs)`.
+struct NullCheckResult {
+    /// The checked expression (ident/member/etc.). For assignment patterns, this is `tmp`.
+    value: Box<Expr>,
+    /// `Some(rhs)` when the left side of the null check was `(tmp = rhs)`.
+    real_value: Option<Box<Expr>>,
+}
+
+/// Extract from `x !== null && x !== void 0`.
+/// Also handles the assignment form `(tmp = expr) !== null && tmp !== void 0`.
+fn extract_not_null_check(expr: &Expr, unresolved_mark: Mark) -> Option<NullCheckResult> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalAnd,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let left_val = extract_not_null_single(left)?;
+    let right_val = extract_not_undefined_single(right, unresolved_mark)?;
+
+    // Check for assignment pattern: left_val may be `(tmp = real_expr)`
+    if let Some((tmp_sym, tmp_ctxt, real_rhs)) = extract_assign_parts(&left_val) {
+        // right side must reference `tmp`
+        if let Expr::Ident(ri) = &*right_val {
+            if ri.sym == tmp_sym && ri.ctxt == tmp_ctxt {
+                return Some(NullCheckResult {
+                    value: Box::new(Expr::Ident(ri.clone())),
+                    real_value: Some(real_rhs.clone()),
+                });
+            }
+        }
+        return None;
+    }
+
+    if !exprs_structurally_equal(&left_val, &right_val) {
+        return None;
+    }
+
+    Some(NullCheckResult {
+        value: left_val,
+        real_value: None,
+    })
+}
+
+/// Extract from `x === null || x === void 0`.
+/// Also handles the assignment form `(tmp = expr) === null || tmp === void 0`.
+fn extract_null_check(expr: &Expr, unresolved_mark: Mark) -> Option<NullCheckResult> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalOr,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let left_val = extract_null_single(left)?;
+    let right_val = extract_undefined_single(right, unresolved_mark)?;
+
+    // Check for assignment pattern: left_val may be `(tmp = real_expr)`
+    if let Some((tmp_sym, tmp_ctxt, real_rhs)) = extract_assign_parts(&left_val) {
+        // right side must reference `tmp`
+        if let Expr::Ident(ri) = &*right_val {
+            if ri.sym == tmp_sym && ri.ctxt == tmp_ctxt {
+                return Some(NullCheckResult {
+                    value: Box::new(Expr::Ident(ri.clone())),
+                    real_value: Some(real_rhs.clone()),
+                });
+            }
+        }
+        return None;
+    }
+
+    if !exprs_structurally_equal(&left_val, &right_val) {
+        return None;
+    }
+
+    Some(NullCheckResult {
+        value: left_val,
+        real_value: None,
+    })
+}
+
+/// Match `x !== null` or `null !== x` — return x.
+fn extract_not_null_single(expr: &Expr) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::NotEqEq | BinaryOp::NotEq) {
+        return None;
+    }
+    if matches!(&**right, Expr::Lit(Lit::Null(_))) {
+        return Some(left.clone());
+    }
+    if matches!(&**left, Expr::Lit(Lit::Null(_))) {
+        return Some(right.clone());
+    }
+    None
+}
+
+fn extract_loose_null_operand(
+    left: &Expr,
+    right: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Box<Expr>> {
+    if matches!(right, Expr::Lit(Lit::Null(_))) || is_unresolved_undefined(right, unresolved_mark) {
+        return Some(Box::new(left.clone()));
+    }
+    if matches!(left, Expr::Lit(Lit::Null(_))) || is_unresolved_undefined(left, unresolved_mark) {
+        return Some(Box::new(right.clone()));
+    }
+    None
+}
+
+/// Match `x !== void 0` or `x !== undefined` or flipped — return x.
+fn extract_not_undefined_single(expr: &Expr, unresolved_mark: Mark) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::NotEqEq | BinaryOp::NotEq) {
+        return None;
+    }
+    if is_unresolved_undefined(right, unresolved_mark) {
+        return Some(left.clone());
+    }
+    if is_unresolved_undefined(left, unresolved_mark) {
+        return Some(right.clone());
+    }
+    None
+}
+
+/// Match `x === null` or `null === x` — return x.
+fn extract_null_single(expr: &Expr) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::EqEqEq | BinaryOp::EqEq) {
+        return None;
+    }
+    if matches!(&**right, Expr::Lit(Lit::Null(_))) {
+        return Some(left.clone());
+    }
+    if matches!(&**left, Expr::Lit(Lit::Null(_))) {
+        return Some(right.clone());
+    }
+    None
+}
+
+/// Match `x === void 0` or `x === undefined` or flipped — return x.
+fn extract_undefined_single(expr: &Expr, unresolved_mark: Mark) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::EqEqEq | BinaryOp::EqEq) {
+        return None;
+    }
+    if is_unresolved_undefined(right, unresolved_mark) {
+        return Some(left.clone());
+    }
+    if is_unresolved_undefined(left, unresolved_mark) {
+        return Some(right.clone());
+    }
+    None
+}
+
+/// If `expr` is `(tmp = real_expr)` (parens allowed), return `(tmp_sym, tmp_ctxt, &real_expr)`.
+fn extract_assign_parts(expr: &Expr) -> Option<(swc_core::atoms::Atom, SyntaxContext, &Box<Expr>)> {
+    let Expr::Assign(assign) = strip_parens(expr) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left else {
+        return None;
+    };
+    Some((id.id.sym.clone(), id.id.ctxt, &assign.right))
+}
+
+fn make_nullish_coalescing(value: Box<Expr>, fallback: Box<Expr>) -> Expr {
+    (*value).make_bin(BinaryOp::NullishCoalescing, *fallback)
+}
+
+/// A declared temp whose uses are exactly the three a coalescing pattern
+/// consumes: the assignment and two reads.
+///
+/// Without a known declaration the temp is either an undeclared global (sloppy
+/// mode: erasing the assignment drops a global side effect) or an unresolved
+/// binding (strict/module mode: the original throws `ReferenceError` but the
+/// rewrite would not). Both cases are unsafe to erase.
+fn is_safe_temp(
+    sym: &swc_core::atoms::Atom,
+    ctxt: SyntaxContext,
+    isolation: &TempIsolation,
+) -> bool {
+    isolation.is_isolated(&(sym.clone(), ctxt), 3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swc_core::common::{Mark, DUMMY_SP, GLOBALS};
+    use swc_core::ecma::ast::{ComputedPropName, Ident, MemberProp};
+
+    fn ident(sym: &str, ctxt: SyntaxContext) -> Expr {
+        Expr::Ident(Ident::new(sym.into(), DUMMY_SP, ctxt))
+    }
+
+    #[test]
+    fn structural_expr_equality_distinguishes_identifier_contexts() {
+        GLOBALS.set(&Default::default(), || {
+            let first_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let second_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+
+            assert!(exprs_structurally_equal(
+                &ident("tmp", first_ctxt),
+                &ident("tmp", first_ctxt)
+            ));
+            assert!(!exprs_structurally_equal(
+                &ident("tmp", first_ctxt),
+                &ident("tmp", second_ctxt)
+            ));
+        });
+    }
+
+    #[test]
+    fn structural_member_equality_distinguishes_computed_identifier_contexts() {
+        GLOBALS.set(&Default::default(), || {
+            let first_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let second_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+
+            let first = Expr::Member(swc_core::ecma::ast::MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(ident("obj", SyntaxContext::empty())),
+                prop: MemberProp::Computed(ComputedPropName {
+                    span: DUMMY_SP,
+                    expr: Box::new(ident("key", first_ctxt)),
+                }),
+            });
+            let second = Expr::Member(swc_core::ecma::ast::MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(ident("obj", SyntaxContext::empty())),
+                prop: MemberProp::Computed(ComputedPropName {
+                    span: DUMMY_SP,
+                    expr: Box::new(ident("key", second_ctxt)),
+                }),
+            });
+
+            assert!(!exprs_structurally_equal(&first, &second));
+        });
+    }
+}

@@ -1,0 +1,520 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { Children, Component, forwardRef } from "./module-50.js";
+import u from "./module-1.js";
+import { a } from "./module-7.js";
+import y from "./module-32.js";
+import _b from "./module-5.js";
+import { isValidElementType } from "./module-43.js";
+import { bindActionCreators } from "./module-11.js";
+const c = u.shape({
+    trySubscribe: u.func.isRequired,
+    tryUnsubscribe: u.func.isRequired,
+    notifyNestedSubs: u.func.isRequired,
+    isSubscribed: u.func.isRequired
+});
+const s = u.shape({
+    subscribe: u.func.isRequired,
+    dispatch: u.func.isRequired,
+    getState: u.func.isRequired
+});
+forwardRef;
+export function createProvider(e = "store") {
+    const n = `${e}Subscription`;
+    class r extends Component {
+        constructor(n, r){
+            super(n, r);
+            this[e] = n.store;
+        }
+        getChildContext() {
+            return {
+                [e]: this[e],
+                [n]: null
+            };
+        }
+        render() {
+            return Children.only(this.props.children);
+        }
+    }
+    r.propTypes = {
+        store: s.isRequired,
+        children: u.element.isRequired
+    };
+    r.childContextTypes = {
+        [e]: s.isRequired,
+        [n]: c
+    };
+    return r;
+}
+export const Provider = createProvider();
+const E = null;
+const x = {
+    notify () {}
+};
+class k {
+    constructor(e, t, n){
+        this.store = e;
+        this.parentSub = t;
+        this.onStateChange = n;
+        this.unsubscribe = null;
+        this.listeners = x;
+    }
+    addNestedSub(e) {
+        this.trySubscribe();
+        return this.listeners.subscribe(e);
+    }
+    notifyNestedSubs() {
+        this.listeners.notify();
+    }
+    isSubscribed() {
+        return Boolean(this.unsubscribe);
+    }
+    trySubscribe() {
+        if (!this.unsubscribe) {
+            this.unsubscribe = this.parentSub ? this.parentSub.addNestedSub(this.onStateChange) : this.store.subscribe(this.onStateChange);
+            this.listeners = (()=>{
+                let e = [];
+                let t = [];
+                return {
+                    clear () {
+                        t = E;
+                        e = E;
+                    },
+                    notify () {
+                        for(let n = e = t, r = 0; r < n.length; r++){
+                            n[r]();
+                        }
+                    },
+                    get () {
+                        return t;
+                    },
+                    subscribe (n) {
+                        let r = true;
+                        if (t === e) {
+                            t = e.slice();
+                        }
+                        t.push(n);
+                        return ()=>{
+                            if (r && e !== E) {
+                                r = false;
+                                if (t === e) {
+                                    t = e.slice();
+                                }
+                                t.splice(t.indexOf(n), 1);
+                            }
+                        };
+                    }
+                };
+            })();
+        }
+    }
+    tryUnsubscribe() {
+        if (this.unsubscribe) {
+            this.unsubscribe();
+            this.unsubscribe = null;
+            this.listeners.clear();
+            this.listeners = x;
+        }
+    }
+}
+const T = forwardRef !== undefined;
+let S = 0;
+const O = {};
+function C() {}
+export function connectAdvanced(e, { getDisplayName = (e)=>`ConnectAdvanced(${e})`, methodName = "connectAdvanced", renderCountProp, shouldHandleStateChanges = true, storeKey = "store", withRef = false, ...rest } = {}) {
+    const M = `${storeKey}Subscription`;
+    const A = S++;
+    const L = {
+        [storeKey]: s,
+        [M]: c
+    };
+    const I = {
+        [M]: c
+    };
+    return function(WrappedComponent) {
+        _b(isValidElementType(WrappedComponent), `You must pass a component to the function returned by ${methodName}. Instead received ${JSON.stringify(WrappedComponent)}`);
+        const wrappedComponentName = WrappedComponent.displayName || WrappedComponent.name || "Component";
+        const displayName = getDisplayName(wrappedComponentName);
+        const a = {
+            ...rest,
+            getDisplayName,
+            methodName,
+            renderCountProp,
+            shouldHandleStateChanges,
+            storeKey,
+            withRef,
+            displayName,
+            wrappedComponentName,
+            WrappedComponent
+        };
+        class u extends Component {
+            constructor(e, t){
+                super(e, t);
+                this.version = A;
+                this.state = {};
+                this.renderCount = 0;
+                this.store = e[storeKey] || t[storeKey];
+                this.propsMode = Boolean(e[storeKey]);
+                this.setWrappedInstance = this.setWrappedInstance.bind(this);
+                _b(this.store, `Could not find "${storeKey}" in either the context or props of "${displayName}". Either wrap the root component in a <Provider>, or explicitly pass "${storeKey}" as a prop to "${displayName}".`);
+                this.initSelector();
+                this.initSubscription();
+            }
+            getChildContext() {
+                const t = this.propsMode ? null : this.subscription;
+                return {
+                    [M]: t || this.context[M]
+                };
+            }
+            componentDidMount() {
+                if (shouldHandleStateChanges) {
+                    this.subscription.trySubscribe();
+                    this.selector.run(this.props);
+                    if (this.selector.shouldComponentUpdate) {
+                        this.forceUpdate();
+                    }
+                }
+            }
+            componentWillReceiveProps(e) {
+                this.selector.run(e);
+            }
+            shouldComponentUpdate() {
+                return this.selector.shouldComponentUpdate;
+            }
+            componentWillUnmount() {
+                if (this.subscription) {
+                    this.subscription.tryUnsubscribe();
+                }
+                this.subscription = null;
+                this.notifyNestedSubs = C;
+                this.store = null;
+                this.selector.run = C;
+                this.selector.shouldComponentUpdate = false;
+            }
+            getWrappedInstance() {
+                _b(withRef, `To access the wrapped instance, you need to specify { withRef: true } in the options argument of the ${methodName}() call.`);
+                return this.wrappedInstance;
+            }
+            setWrappedInstance(e) {
+                this.wrappedInstance = e;
+            }
+            initSelector() {
+                const t = e(this.store.dispatch, a);
+                this.selector = ((e, t)=>{
+                    var n = {
+                        run (r) {
+                            try {
+                                const o = e(t.getState(), r);
+                                if (o !== n.props || n.error) {
+                                    n.shouldComponentUpdate = true;
+                                    n.props = o;
+                                    n.error = null;
+                                }
+                            } catch (error) {
+                                n.shouldComponentUpdate = true;
+                                n.error = error;
+                            }
+                        }
+                    };
+                    return n;
+                })(t, this.store);
+                this.selector.run(this.props);
+            }
+            initSubscription() {
+                if (shouldHandleStateChanges) {
+                    const e = (this.propsMode ? this.props : this.context)[M];
+                    this.subscription = new k(this.store, e, this.onStateChange.bind(this));
+                    this.notifyNestedSubs = this.subscription.notifyNestedSubs.bind(this.subscription);
+                }
+            }
+            onStateChange() {
+                this.selector.run(this.props);
+                if (this.selector.shouldComponentUpdate) {
+                    this.componentDidUpdate = this.notifyNestedSubsOnComponentDidUpdate;
+                    this.setState(O);
+                } else {
+                    this.notifyNestedSubs();
+                }
+            }
+            notifyNestedSubsOnComponentDidUpdate() {
+                this.componentDidUpdate = undefined;
+                this.notifyNestedSubs();
+            }
+            isSubscribed() {
+                return Boolean(this.subscription) && this.subscription.isSubscribed();
+            }
+            addExtraProps(e) {
+                if (!(withRef || renderCountProp || this.propsMode && this.subscription)) {
+                    return e;
+                }
+                const t = {
+                    ...e
+                };
+                if (withRef) {
+                    t.ref = this.setWrappedInstance;
+                }
+                if (renderCountProp) {
+                    t[renderCountProp] = this.renderCount++;
+                }
+                if (this.propsMode && this.subscription) {
+                    t[M] = this.subscription;
+                }
+                return t;
+            }
+            render() {
+                const selector = this.selector;
+                selector.shouldComponentUpdate = false;
+                if (selector.error) {
+                    throw selector.error;
+                }
+                return <WrappedComponent {...this.addExtraProps(selector.props)}/>;
+            }
+        }
+        if (T) {
+            u.prototype.UNSAFE_componentWillReceiveProps = u.prototype.componentWillReceiveProps;
+            delete u.prototype.componentWillReceiveProps;
+        }
+        u.WrappedComponent = WrappedComponent;
+        u.displayName = displayName;
+        u.childContextTypes = I;
+        u.contextTypes = L;
+        u.propTypes = L;
+        return y(u, WrappedComponent);
+    };
+}
+const hasOwnProperty = Object.prototype.hasOwnProperty;
+function j(e, t) {
+    if (e === t) {
+        return e !== 0 || t !== 0 || 1 / e == 1 / t;
+    }
+    return e != e && t != t;
+}
+function R(e, t) {
+    if (j(e, t)) {
+        return true;
+    }
+    if (typeof e !== "object" || e === null || typeof t !== "object" || t === null) {
+        return false;
+    }
+    const n = Object.keys(e);
+    const r = Object.keys(t);
+    if (n.length !== r.length) {
+        return false;
+    }
+    for(let o = 0; o < n.length; o++){
+        if (!hasOwnProperty.call(t, n[o]) || !j(e[n[o]], t[n[o]])) {
+            return false;
+        }
+    }
+    return true;
+}
+function M(e) {
+    return (t, n)=>{
+        const r = e(t, n);
+        function o() {
+            return r;
+        }
+        o.dependsOnOwnProps = false;
+        return o;
+    };
+}
+function A(e) {
+    if (e.dependsOnOwnProps !== null && e.dependsOnOwnProps !== undefined) {
+        return Boolean(e.dependsOnOwnProps);
+    }
+    return e.length !== 1;
+}
+function L(e, t) {
+    return (t, n)=>{
+        n.displayName;
+        const r = (e, t)=>{
+            if (r.dependsOnOwnProps) {
+                return r.mapToProps(e, t);
+            }
+            return r.mapToProps(e);
+        };
+        r.dependsOnOwnProps = true;
+        r.mapToProps = (t, n)=>{
+            r.mapToProps = e;
+            r.dependsOnOwnProps = A(e);
+            let o = r(t, n);
+            if (typeof o === "function") {
+                r.mapToProps = o;
+                r.dependsOnOwnProps = A(o);
+                o = r(t, n);
+            }
+            return o;
+        };
+        return r;
+    };
+}
+const I = [
+    (e)=>{
+        if (typeof e === "function") {
+            return L(e);
+        }
+    },
+    (e)=>{
+        if (e) {
+            return undefined;
+        }
+        return M((dispatch)=>({
+                dispatch
+            }));
+    },
+    (e)=>{
+        if (e && typeof e === "object") {
+            return M((t)=>bindActionCreators(e, t));
+        }
+    }
+];
+const D = [
+    (e)=>{
+        if (typeof e === "function") {
+            return L(e);
+        }
+    },
+    (e)=>{
+        if (e) {
+            return undefined;
+        }
+        return M(()=>({}));
+    }
+];
+function F(e, t, n) {
+    return {
+        ...n,
+        ...e,
+        ...t
+    };
+}
+const z = [
+    (e)=>{
+        if (typeof e === "function") {
+            return ((e)=>(t, n)=>{
+                    n.displayName;
+                    let r;
+                    const { pure, areMergedPropsEqual } = n;
+                    let a = false;
+                    return (t, n, u)=>{
+                        const l = e(t, n, u);
+                        if (a) {
+                            if (!(pure && areMergedPropsEqual(l, r))) {
+                                r = l;
+                            }
+                        } else {
+                            a = true;
+                            r = l;
+                        }
+                        return r;
+                    };
+                })(e);
+        }
+    },
+    (e)=>{
+        if (e) {
+            return undefined;
+        }
+        return ()=>F;
+    }
+];
+function q(e, t, n, r) {
+    return (o, i)=>n(e(o, i), t(r, i), i);
+}
+function U(e, t, n, r, { areStatesEqual, areOwnPropsEqual, areStatePropsEqual }) {
+    let i;
+    let a;
+    let u;
+    let l;
+    let c;
+    let p = false;
+    function h(o, p) {
+        const h = !areOwnPropsEqual(p, a);
+        const m = !areStatesEqual(o, i);
+        i = o;
+        a = p;
+        if (h && m) {
+            u = e(i, a);
+            if (t.dependsOnOwnProps) {
+                l = t(r, a);
+            }
+            return c = n(u, l, a);
+        }
+        if (h) {
+            if (e.dependsOnOwnProps) {
+                u = e(i, a);
+            }
+            if (t.dependsOnOwnProps) {
+                l = t(r, a);
+            }
+            return c = n(u, l, a);
+        }
+        if (m) {
+            return (()=>{
+                const t = e(i, a);
+                const r = !areStatePropsEqual(t, u);
+                u = t;
+                if (r) {
+                    c = n(u, l, a);
+                }
+                return c;
+            })();
+        }
+        return c;
+    }
+    return (o, s)=>{
+        if (p) {
+            return h(o, s);
+        }
+        return ((o, s)=>{
+            u = e(i = o, a = s);
+            l = t(r, a);
+            c = n(u, l, a);
+            p = true;
+            return c;
+        })(o, s);
+    };
+}
+function H(e, { initMapStateToProps, initMapDispatchToProps, initMergeProps, ...rest }) {
+    const a = initMapStateToProps(e, rest);
+    const u = initMapDispatchToProps(e, rest);
+    const l = initMergeProps(e, rest);
+    return (rest.pure ? U : q)(a, u, l, e, rest);
+}
+function W(e, t, n) {
+    for(let r = t.length - 1; r >= 0; r--){
+        const o = t[r](e);
+        if (o) {
+            return o;
+        }
+    }
+    return (t, r)=>{
+        throw new Error(`Invalid value of type ${typeof e} for ${n} argument when connecting component ${r.wrappedComponentName}.`);
+    };
+}
+function $(e, t) {
+    return e === t;
+}
+export const connect = (({ connectHOC = connectAdvanced, mapStateToPropsFactories = D, mapDispatchToPropsFactories = I, mergePropsFactories = z, selectorFactory = H } = {})=>function(e, t, n, { pure = true, areStatesEqual = $, areOwnPropsEqual = R, areStatePropsEqual = R, areMergedPropsEqual = R, ...rest } = {}) {
+        const initMapStateToProps = W(e, mapStateToPropsFactories, "mapStateToProps");
+        const initMapDispatchToProps = W(t, mapDispatchToPropsFactories, "mapDispatchToProps");
+        const initMergeProps = W(n, mergePropsFactories, "mergeProps");
+        return connectHOC(selectorFactory, {
+            methodName: "connect",
+            getDisplayName (e) {
+                return `Connect(${e})`;
+            },
+            shouldHandleStateChanges: Boolean(e),
+            initMapStateToProps,
+            initMapDispatchToProps,
+            initMergeProps,
+            pure,
+            areStatesEqual,
+            areOwnPropsEqual,
+            areStatePropsEqual,
+            areMergedPropsEqual,
+            ...rest
+        });
+    })();

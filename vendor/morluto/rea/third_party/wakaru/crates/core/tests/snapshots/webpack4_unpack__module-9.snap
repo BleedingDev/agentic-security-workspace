@@ -1,0 +1,90 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { r as isEmpty, u as u_1 } from "./module-0.js";
+const o = "Channel's Buffer overflow!";
+const i = 1;
+const a = 3;
+const u = 4;
+const l = {
+    isEmpty,
+    put: u_1,
+    take: u_1
+};
+function c(e = 10, t) {
+    let n = new Array(e);
+    let r = 0;
+    let l = 0;
+    let c = 0;
+    const s = (t)=>{
+        n[l] = t;
+        l = (l + 1) % e;
+        r++;
+    };
+    const take = ()=>{
+        if (r != 0) {
+            const t = n[c];
+            n[c] = null;
+            r--;
+            c = (c + 1) % e;
+            return t;
+        }
+    };
+    const flush = ()=>{
+        const e = [];
+        while(r){
+            e.push(take());
+        }
+        return e;
+    };
+    return {
+        isEmpty () {
+            return r == 0;
+        },
+        put (f) {
+            if (r < e) {
+                s(f);
+            } else {
+                let p;
+                switch(t){
+                    case i:
+                        throw new Error(o);
+                    case a:
+                        n[l] = f;
+                        c = l = (l + 1) % e;
+                        break;
+                    case u:
+                        p = 2 * e;
+                        n = flush();
+                        r = n.length;
+                        l = n.length;
+                        c = 0;
+                        n.length = p;
+                        e = p;
+                        s(f);
+                }
+            }
+        },
+        take,
+        flush
+    };
+}
+const s = {
+    none () {
+        return l;
+    },
+    fixed (e) {
+        return c(e, i);
+    },
+    dropping (e) {
+        return c(e, 2);
+    },
+    sliding (e) {
+        return c(e, a);
+    },
+    expanding (e) {
+        return c(e, u);
+    }
+};
+export { s as a };

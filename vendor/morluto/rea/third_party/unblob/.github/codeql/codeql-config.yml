@@ -1,0 +1,12 @@
+ame: "CodeQL config"
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - 'python'
+  - 'rust'
+  - 'tests'
+
+paths-ignore:
+  - 'tests/integration/**/*'

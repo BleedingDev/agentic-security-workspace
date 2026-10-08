@@ -1,0 +1,35 @@
+{
+  "name": "@wakaru/cli",
+  "version": "1.13.0",
+  "description": "JavaScript decompiler — unpack bundles and turn minified, transpiled production code back into readable modules. Written in Rust.",
+  "author": "Pionxzh",
+  "license": "Apache-2.0",
+  "bin": {
+    "wakaru": "./bin/wakaru"
+  },
+  "files": ["bin"],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pionxzh/wakaru.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/pionxzh/wakaru",
+  "keywords": [
+    "decompile",
+    "unminify",
+    "webpack",
+    "deobfuscate",
+    "javascript",
+    "rust"
+  ],
+  "optionalDependencies": {
+    "@wakaru/cli-darwin-arm64": "1.13.0",
+    "@wakaru/cli-linux-arm64": "1.13.0",
+    "@wakaru/cli-linux-x64": "1.13.0",
+    "@wakaru/cli-win32-x64": "1.13.0",
+    "@wakaru/cli-win32-arm64": "1.13.0"
+  }
+}

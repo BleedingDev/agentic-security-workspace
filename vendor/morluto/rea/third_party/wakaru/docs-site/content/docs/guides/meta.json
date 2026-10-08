@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "unpack-a-bundle",
+    "read-an-unpacked-bundle",
+    "unminify-a-webpack-bundle",
+    "unminify-a-file",
+    "obfuscated-code",
+    "rewrite-levels",
+    "source-maps",
+    "bun-single-file-executable",
+    "vue-sfc",
+    "playground",
+    "coding-agents"
+  ]
+}

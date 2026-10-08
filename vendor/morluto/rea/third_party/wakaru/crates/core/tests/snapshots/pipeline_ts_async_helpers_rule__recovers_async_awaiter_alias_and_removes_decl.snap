@@ -1,0 +1,8 @@
+---
+source: crates/core/tests/pipeline_ts_async_helpers_rule.rs
+expression: output
+---
+export async function foo() {
+    const x = await fetch("url");
+    return x;
+}

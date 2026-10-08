@@ -1,0 +1,210 @@
+name: Rust Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: wakaru
+            archive: wakaru-linux-x64.tar.gz
+            npm-pkg: cli-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: wakaru
+            archive: wakaru-linux-arm64.tar.gz
+            npm-pkg: cli-linux-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: wakaru
+            archive: wakaru-darwin-arm64.tar.gz
+            npm-pkg: cli-darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: wakaru.exe
+            archive: wakaru-win32-x64.zip
+            npm-pkg: cli-win32-x64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: wakaru.exe
+            archive: wakaru-win32-arm64.zip
+            npm-pkg: cli-win32-arm64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - name: Install release target
+        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p wakaru-cli
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ${{ matrix.archive }} ${{ matrix.artifact }}
+          mv ${{ matrix.archive }} ${{ github.workspace }}/
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact }}" -DestinationPath "${{ matrix.archive }}"
+
+      - name: Prepare platform npm package
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" \
+             "npm/platforms/${{ matrix.npm-pkg }}/"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.npm-pkg }}
+          path: npm/platforms/${{ matrix.npm-pkg }}/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          generate_release_notes: true
+
+  npm-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Publish platform packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for pkg in cli-darwin-arm64 cli-linux-arm64 cli-linux-x64 cli-win32-arm64 cli-win32-x64; do
+            PKG_DIR="npm/platforms/$pkg"
+            cp artifacts/$pkg/* "$PKG_DIR/"
+            cd "$PKG_DIR"
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+            npm publish --tag latest --access public
+            cd "$GITHUB_WORKSPACE"
+          done
+
+      - name: Publish main package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd npm
+          # Update version and optionalDependencies versions
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$VERSION';
+            for (const dep of Object.keys(pkg.optionalDependencies)) {
+              pkg.optionalDependencies[dep] = '$VERSION';
+            }
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish --tag latest --access public
+
+      - name: Publish wakaru alias package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd npm/alias
+          # Regenerate README from npm/README.md (single source of truth)
+          {
+            echo "# wakaru"
+            echo
+            echo "> \`wakaru\` is the bare-name alias for [\`@wakaru/cli\`](https://www.npmjs.com/package/@wakaru/cli): the same CLI under a shorter name."
+            tail -n +2 ../README.md | sed 's|@wakaru/cli|wakaru|g'
+          } > README.md
+          # Update version and pin the @wakaru/cli dependency to it
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$VERSION';
+            pkg.dependencies['@wakaru/cli'] = '$VERSION';
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish --tag latest --access public
+
+  crates-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the workspace version against the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "wakaru") | .version')"
+          if [ "$MANIFEST" != "$VERSION" ]; then
+            echo "tag is v$VERSION but Cargo.toml says $MANIFEST" >&2
+            exit 1
+          fi
+
+      - name: Select crates not yet on crates.io
+        id: select
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGES=""
+          for crate in wakaru-core wakaru; do
+            STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+              -H 'User-Agent: wakaru release workflow (https://github.com/pionxzh/wakaru)' \
+              "https://crates.io/api/v1/crates/$crate/$VERSION")"
+            case "$STATUS" in
+              200) echo "$crate $VERSION is already published; skipping" ;;
+              404) PACKAGES="$PACKAGES -p $crate" ;;
+              *) echo "crates.io returned $STATUS for $crate $VERSION" >&2; exit 1 ;;
+            esac
+          done
+          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate with crates.io
+        if: steps.select.outputs.packages != ''
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        if: steps.select.outputs.packages != ''
+        run: cargo publish ${{ steps.select.outputs.packages }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

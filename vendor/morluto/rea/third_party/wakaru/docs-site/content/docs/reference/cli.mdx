@@ -1,0 +1,142 @@
+---
+title: CLI
+description: Full reference for the Wakaru command line.
+---
+
+{/* Keep in sync with docs/cli.md and skills/wakaru/SKILL.md in the repo.
+    docs/cli.md is the source of truth for behavior detail. */}
+
+Run Wakaru with `npx wakaru` or install it globally with `npm i -g wakaru`.
+
+## Decompile a single file
+
+```bash
+wakaru input.js -o output.js
+cat input.js | wakaru > output.js    # stdin/stdout work too
+```
+
+Without `-o`, output goes to stdout.
+
+## Unpack bundles
+
+```bash
+wakaru bundle.js --unpack -o out/
+wakaru entry.js chunk.js --unpack -o out/     # multiple explicit files
+wakaru dist/ --unpack -o out/                 # recursively scan a directory
+wakaru ./compiled-app --unpack -o out/        # Bun single-file executable
+```
+
+Variants:
+
+| Option | Effect |
+| --- | --- |
+| `--unpack` | Detect the bundle format, split into modules, decompile each |
+| `--unpack --raw` | Raw split only: no readability transforms, provisional names, no module-graph promise |
+| `--unpack=strict` | Structural detection only, no heuristic fallback |
+| `--unpack=inspect` | Finer scope-hoist boundaries for static inspection. Always prints a warning. Not an executable reconstruction |
+
+Directory inputs scan `.js`, `.mjs`, and `.cjs` recursively, skipping hidden
+paths and `node_modules`. Input source maps (`--source-map`) are rejected
+with `--unpack`.
+
+## Module provenance
+
+```bash
+wakaru bundle.js --unpack --provenance -o out/
+```
+
+`--provenance` adds `provenance.json`, linking recovered filenames to their
+source inputs and byte ranges. Each range is `[start, end)`: the start byte
+is included, and the end byte is excluded. These are extraction regions,
+not line-by-line mappings of the rewritten output.
+
+See [Read an unpacked bundle](/guides/read-an-unpacked-bundle#check-the-original-bundle)
+for an example, or use [source maps](/guides/source-maps) to trace output positions.
+
+## Bun single-file executables
+
+`--unpack` on a `bun build --compile` binary (PE, Mach-O, ELF) validates
+Bun's embedded module graph and decompiles the JavaScript entries. It never
+executes the binary. To dump every embedded file, assets, WASM, and native
+add-ons included:
+
+```bash
+wakaru bun extract ./compiled-app -o extracted/
+wakaru bun extract ./compiled-app -o extracted/ --json
+wakaru bun extract ./compiled-app -o extracted/ --include-internals
+```
+
+`bun extract` is a byte-exact container operation. It writes every validated
+file record below `extracted/files/` plus a `manifest.json`. It never parses
+or executes the contents. `--include-internals` also writes Bun's opaque
+source-map, bytecode, and module-info regions. Bun 1.3.3+ is supported.
+
+## Rewrite level
+
+```bash
+wakaru input.js --level minimal
+wakaru input.js --dce                # full dead-code reachability sweep
+```
+
+Choose `minimal`, `standard` (the default), or `aggressive`.
+See [Rewrite levels](/guides/rewrite-levels).
+
+## Source maps
+
+```bash
+wakaru input.js --source-map input.js.map -o output.js
+wakaru input.js --emit-source-map -o output.js
+wakaru extract input.js.map -o src/
+```
+
+- `--source-map` uses an input map for identifier recovery and import
+  deduplication (single-file mode only).
+- `--emit-source-map` writes a `.map` alongside each output file, mapping
+  output back to input. Works with `--unpack`, where each module's map
+  points into the bundle and does not embed the bundle's text. With
+  `--formatter`, the map describes the formatted output.
+- `wakaru extract` writes the files embedded in a map's `sourcesContent` to
+  disk. When the map carries original sources, this recovers them directly.
+
+## Vue SFC recovery (experimental)
+
+```bash
+wakaru input.js --vue-sfc -o output.js    # JavaScript plus a recovered input.vue
+wakaru input.js --vue-sfc -o App.vue      # Vue-only output; errors if recovery fails
+wakaru bundle.js --unpack --vue-sfc -o out/   # additive .vue sidecars per recovered module
+```
+
+Best-effort Vue 3 render recovery. With a non-`.vue` output path, Wakaru
+writes normal JavaScript and adds a sibling `.vue` sidecar when recovery
+succeeds. Without `-o`, stdout remains JavaScript.
+
+## Output options
+
+```bash
+wakaru input.js --formatter -o output.js   # final formatting pass (off by default)
+wakaru bundle.js --unpack --json -o out/   # machine-readable JSON to stdout
+```
+
+`--json` includes warnings and errors in the JSON object. In unpack mode,
+each module also gets an artifact `kind` and `status`. Useful for CI and
+tooling.
+
+## Diagnostics
+
+```bash
+wakaru input.js --diagnostics              # post-transform checks to stderr
+wakaru input.js --profile trace.json       # Chrome trace; add --profile-rules for per-rule spans
+```
+
+With `--diagnostics`, conflicting emitted declarations (including `var` versus
+`let` or `const` across nested blocks) produce error-class warnings and a nonzero
+exit. Legal repeated `var` declarations and inner-scope shadowing are allowed.
+
+Unpack always reports a non-error `cross_module_class_call` warning when a
+module may call a recovered class without `new`. Rerun with `--level minimal`
+if the output must execute.
+
+## Overwrite protection
+
+Wakaru refuses to overwrite existing files or write into a non-empty output
+directory unless `--force` is passed.

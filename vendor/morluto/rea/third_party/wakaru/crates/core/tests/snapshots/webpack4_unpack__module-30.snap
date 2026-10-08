@@ -1,0 +1,49 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+const r = {
+    childContextTypes: true,
+    contextTypes: true,
+    defaultProps: true,
+    displayName: true,
+    getDefaultProps: true,
+    getDerivedStateFromProps: true,
+    mixins: true,
+    propTypes: true,
+    type: true
+};
+const o = {
+    name: true,
+    length: true,
+    prototype: true,
+    caller: true,
+    callee: true,
+    arguments: true,
+    arity: true
+};
+const s = Object.getPrototypeOf && Object.getPrototypeOf(Object);
+export default (function e(t, n, f) {
+    if (typeof n !== "string") {
+        if (s) {
+            const d = Object.getPrototypeOf(n);
+            if (d && d !== s) {
+                e(t, d, f);
+            }
+        }
+        let p = Object.getOwnPropertyNames(n);
+        if (Object.getOwnPropertySymbols) {
+            p = p.concat(Object.getOwnPropertySymbols(n));
+        }
+        for (const m of p){
+            if (!(r[m] || o[m] || f && f[m])) {
+                const y = Object.getOwnPropertyDescriptor(n, m);
+                try {
+                    Object.defineProperty(t, m, y);
+                } catch (e) {}
+            }
+        }
+        return t;
+    }
+    return t;
+});

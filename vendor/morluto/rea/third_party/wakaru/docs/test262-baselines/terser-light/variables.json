@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "variables"
+    ],
+    "paths": [
+      "test/language/statements/variable"
+    ]
+  },
+  "totals": {
+    "discovered": 178,
+    "runnable": 178,
+    "skipped": 0,
+    "unsupported": 4,
+    "rejected": 0,
+    "passed": 174,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/statements/variable/binding-resolution.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "84a23beb64d51ca2f92cf26b8672585d60ac18f8c71125b197ebb32ec8d84612",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«undefined», «true») to be true"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/ary-ptrn-elem-id-static-init-await-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/variable/dstr/obj-ptrn-elem-id-static-init-await-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "4aea9ef684ff1f0a9978415ecb2ac0bd527df6a5511f6891648d04e916c2b97a",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (31..36, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/variable/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "99cbe78343bac87a71ef56befcbba1f4c9f5a3915f7017e76c6942b240079782",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (25..30, InvalidIdentInAsync) }"
+    }
+  ]
+}

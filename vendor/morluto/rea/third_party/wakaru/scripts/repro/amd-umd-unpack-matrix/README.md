@@ -1,0 +1,21 @@
+# AMD and UMD unpack reproduction matrix
+
+This harness builds small AMD and UMD bundles with real tools, then runs wakaru
+with `--unpack` to verify the expected module extraction shape.
+
+It focuses on issue-style repros instead of a broad synthetic variant matrix:
+
+- RequireJS optimizer output with multiple named `define(...)` modules
+- Rollup AMD output with a named `define(...)` factory
+- Rollup UMD output with a plain single-module UMD wrapper
+
+```powershell
+node scripts/repro/amd-umd-unpack-matrix/matrix.mjs
+```
+
+Set `WAKARU` to test a specific binary. By default the script asks Cargo to
+refresh `target/debug/wakaru(.exe)` once, then uses that binary for the matrix.
+
+The tool packages are installed in the shared repro tool cache
+(`docs/testing.md`), so the first run may download RequireJS or Rollup packages.
+The `target/` directory is ignored by git.

@@ -1,0 +1,3690 @@
+mod common;
+
+use common::{assert_eq_normalized, render, render_pipeline_between, render_rule};
+use wakaru_core::rules::UnEs6Class;
+use wakaru_core::{DecompileOptions, RewriteLevel, UnpackWarningKind};
+
+fn apply(input: &str) -> String {
+    render_rule(input, UnEs6Class::new)
+}
+
+fn apply_minimal(input: &str) -> String {
+    render_rule(input, |unresolved_mark| {
+        UnEs6Class::new_with_level(unresolved_mark, RewriteLevel::Minimal)
+    })
+}
+
+// ============================================================
+// Basic class with constructor and prototype method
+// ============================================================
+
+#[test]
+fn test_basic_class_ts_output() {
+    let input = r#"
+var Foo = (function() {
+    function t(name) { this.name = name; }
+    t.prototype.logger = function logger() { console.log(this.name); }
+    t.staticMethod = function staticMethod() { console.log('static'); }
+    return t;
+}());
+"#;
+    let expected = r#"
+class Foo {
+    constructor(name) { this.name = name; }
+    logger() { console.log(this.name); }
+    static staticMethod() { console.log('static'); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Empty constructor is omitted
+// ============================================================
+
+#[test]
+fn test_empty_constructor_omitted() {
+    let input = r#"
+var Bar = (function() {
+    function t() {}
+    t.prototype.greet = function greet() { return 'hello'; }
+    return t;
+}());
+"#;
+    let expected = r#"
+class Bar {
+    greet() { return 'hello'; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Inheritance via __extends
+// ============================================================
+
+#[test]
+fn test_inheritance_extends() {
+    let input = r#"
+var Child = (function(_super) {
+    __extends(t, _super);
+    function t(name) { _super.call(this, name); }
+    t.prototype.speak = function speak() { return 'hi'; }
+    return t;
+}(Animal));
+"#;
+    let expected = r#"
+class Child extends Animal {
+    constructor(name) { super(name); }
+    speak() { return 'hi'; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn typescript_extends_helper_var_is_recovered() {
+    let input = r#"
+var __extends = (this && this.__extends) || (function () {
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+    return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+})();
+var Admin = (function (_super) {
+    __extends(Admin, _super);
+    function Admin(name, role) {
+        var _this = _super.call(this, name) || this;
+        _this.role = role;
+        return _this;
+    }
+    Admin.prototype.label = function () { return this.name + ":" + this.role; };
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+class Admin extends User {
+    constructor(name, role) {
+        super(name);
+        this.role = role;
+    }
+    label() { return this.name + ":" + this.role; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn exported_typescript_extends_iife_is_recovered() {
+    let input = r#"
+var E = (this && this.__extends) || function (d, b) {
+    for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p];
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+};
+export var Admin = (function (_super) {
+    E(Admin, _super);
+    function Admin(name) {
+        var _this = _super.call(this, name) || this;
+        Object.setPrototypeOf(_this, Admin.prototype);
+        return _this;
+    }
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+export class Admin extends User {
+    constructor(name) {
+        super(name);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn pipeline_uses_cached_typescript_extends_helper_identity() {
+    let input = r#"
+var E = (this && this.__extends) || function (d, b) {
+    for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p];
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+};
+var Admin = (function (_super) {
+    E(Admin, _super);
+    function Admin(name) {
+        var _this = _super.call(this, name) || this;
+        return _this;
+    }
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+class Admin extends User {
+    constructor(name) {
+        super(name);
+    }
+}
+"#;
+    assert_eq_normalized(
+        &render_pipeline_between(input, "UnEs6Class", "UnEs6Class"),
+        expected,
+    );
+}
+
+#[test]
+fn pipeline_uses_cached_tslib_extends_alias_identity() {
+    let input = r#"
+var tslib_1 = require("tslib");
+var E = tslib_1.__extends;
+var Admin = (function (_super) {
+    E(Admin, _super);
+    function Admin(name) {
+        var _this = _super.call(this, name) || this;
+        return _this;
+    }
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+var tslib_1 = require("tslib");
+var E = tslib_1.__extends;
+class Admin extends User {
+    constructor(name) {
+        super(name);
+    }
+}
+"#;
+    assert_eq_normalized(
+        &render_pipeline_between(input, "UnEs6Class", "UnEs6Class"),
+        expected,
+    );
+}
+
+#[test]
+fn pipeline_uses_cached_tslib_namespace_identity_for_extends_call() {
+    let input = r#"
+var tslib_1 = require("tslib");
+var Admin = (function (_super) {
+    tslib_1.__extends(Admin, _super);
+    function Admin(name) {
+        var _this = _super.call(this, name) || this;
+        return _this;
+    }
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+var tslib_1 = require("tslib");
+class Admin extends User {
+    constructor(name) {
+        super(name);
+    }
+}
+"#;
+    assert_eq_normalized(
+        &render_pipeline_between(input, "UnEs6Class", "UnEs6Class"),
+        expected,
+    );
+}
+
+#[test]
+fn shadowed_require_does_not_create_tslib_extends_namespace() {
+    let input = r#"
+function require(path) {
+    return load(path);
+}
+var tslib_1 = require("tslib");
+var Admin = (function (_super) {
+    tslib_1.__extends(Admin, _super);
+    function Admin(name) {
+        var _this = _super.call(this, name) || this;
+        return _this;
+    }
+    return Admin;
+}(User));
+"#;
+
+    let output = render_pipeline_between(input, "UnEs6Class", "UnEs6Class");
+    assert!(
+        output.contains("tslib_1.__extends(Admin, _super)"),
+        "shadowed require must not create a tslib namespace helper:\n{output}"
+    );
+    assert!(
+        !output.contains("class Admin extends User"),
+        "shadowed require must not recover class inheritance through tslib:\n{output}"
+    );
+}
+
+#[test]
+fn tslib_named_extends_import_is_recovered() {
+    let input = r#"
+import { __extends } from "tslib";
+var Admin = (function (_super) {
+    __extends(Admin, _super);
+    function Admin(name, role) {
+        var _this = _super.call(this, name) || this;
+        _this.role = role;
+        return _this;
+    }
+    Admin.prototype.label = function () { return this.name + ":" + this.role; };
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+import "tslib";
+class Admin extends User {
+    constructor(name, role) {
+        super(name);
+        this.role = role;
+    }
+    label() { return this.name + ":" + this.role; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn tslib_namespace_extends_require_is_recovered() {
+    let input = r#"
+var tslib_1 = require("tslib");
+var Admin = (function (_super) {
+    tslib_1.__extends(Admin, _super);
+    function Admin(name, role) {
+        var _this = _super.call(this, name) || this;
+        _this.role = role;
+        return _this;
+    }
+    Admin.prototype.label = function () { return this.name + ":" + this.role; };
+    return Admin;
+}(User));
+"#;
+    let expected = r#"
+var tslib_1 = require("tslib");
+class Admin extends User {
+    constructor(name, role) {
+        super(name);
+        this.role = role;
+    }
+    label() { return this.name + ":" + this.role; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn nested_tslib_namespace_extends_require_is_recovered() {
+    let input = r#"
+function createAdmin() {
+    var tslib_1 = require("tslib");
+    var Admin = (function (_super) {
+        tslib_1.__extends(Admin, _super);
+        function Admin(name) {
+            var _this = _super.call(this, name) || this;
+            return _this;
+        }
+        return Admin;
+    }(User));
+    return Admin;
+}
+"#;
+    let expected = r#"
+function createAdmin() {
+    var tslib_1 = require("tslib");
+    class Admin extends User {
+        constructor(name) {
+            super(name);
+        }
+    }
+    return Admin;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn static_field_assignment_in_iife_is_recovered() {
+    let input = r#"
+var User = (function () {
+    function User() {}
+    User.getRole = function () { return User.role; };
+    User.role = "admin";
+    return User;
+}());
+"#;
+    let expected = r#"
+class User {
+    static getRole() { return User.role; }
+    static role = "admin";
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn derived_static_field_assignment_is_preserved() {
+    let input = r#"
+var User = (function (_super) {
+    __extends(User, _super);
+    function User() { return _super.call(this) || this; }
+    User.role = "admin";
+    return User;
+}(Base));
+"#;
+    let output = apply(input);
+
+    assert!(
+        output.contains("User.role = \"admin\""),
+        "derived static assignment should keep assignment semantics"
+    );
+    assert!(
+        !output.contains("static role = \"admin\""),
+        "derived static assignment must not become a static field"
+    );
+}
+
+#[test]
+fn minimal_preserves_static_field_assignment_in_iife() {
+    let input = r#"
+var User = (function () {
+    function User() {}
+    User.role = "admin";
+    return User;
+}());
+"#;
+    let output = apply_minimal(input);
+
+    assert!(
+        output.contains("User.role = \"admin\""),
+        "minimal mode should keep assignment semantics"
+    );
+    assert!(
+        !output.contains("static role = \"admin\""),
+        "static field recovery requires standard+"
+    );
+}
+
+#[test]
+fn test_super_rewrite_skips_nested_function_scope() {
+    // Outer e.call(this) → super(), but inner(e) shadows e — its e.call(this)
+    // must remain unchanged.
+    let input = r#"
+var Child = (function(e) {
+    _inherits(t, e);
+    function t() {
+        e.call(this);
+        function inner(e) {
+            return e.call(this);
+        }
+        this.inner = inner;
+    }
+    return t;
+}(Base));
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+// ============================================================
+// Inheritance via _inherits (Babel)
+// ============================================================
+
+#[test]
+fn test_inheritance_inherits() {
+    let input = r#"
+var Child = (function(_super) {
+    _inherits(t, _super);
+    function t() {}
+    t.prototype.run = function run() {}
+    return t;
+}(Base));
+"#;
+    let expected = r#"
+class Child extends Base {
+    run() {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn orphaned_set_prototype_of_helper_removed_after_inherits_helper() {
+    let input = r#"
+function _setPrototypeOf(o, p) {
+    return (_setPrototypeOf = Object.setPrototypeOf ? Object.setPrototypeOf.bind() : function(o, p) {
+        o.__proto__ = p;
+        return o;
+    })(o, p);
+}
+function _inherits(subClass, superClass) {
+    subClass.prototype = Object.create(superClass.prototype);
+    subClass.prototype.constructor = subClass;
+    _setPrototypeOf(subClass, superClass);
+}
+var Child = (function(_super) {
+    _inherits(t, _super);
+    function t() {
+        _super.apply(this, arguments);
+    }
+    t.prototype.run = function run() {
+        return true;
+    };
+    return t;
+}(Base));
+"#;
+    let expected = r#"
+class Child extends Base {
+    run() {
+        return true;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn swc_external_inherits_import() {
+    let input = r#"
+import { _ as _inherits } from "@swc/helpers/_/_inherits";
+var Child = (function(_super) {
+    _inherits(t, _super);
+    function t() {
+        _super.apply(this, arguments);
+    }
+    t.prototype.run = function run() {
+        return true;
+    };
+    return t;
+}(Base));
+"#;
+    let expected = r#"
+class Child extends Base {
+    run() {
+        return true;
+    }
+}
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn non_helper_set_prototype_function_is_preserved() {
+    let input = r#"
+function keep(o, p) {
+    Object.setPrototypeOf(o, p);
+    other.__proto__ = p;
+}
+var Child = (function(_super) {
+    _inherits(t, _super);
+    function t() {}
+    t.prototype.run = function run() {
+        return true;
+    };
+    return t;
+}(Base));
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("function keep"),
+        "unreferenced non-helper functions should not be removed by class recovery"
+    );
+    assert!(
+        output.contains("class Child extends Base"),
+        "class conversion should still happen"
+    );
+}
+
+#[test]
+fn detected_inherits_helper_does_not_match_shadowed_iife_param() {
+    let input = r#"
+function h(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+}
+var Child = (function(h) {
+    h(t, h);
+    function t() {}
+    return t;
+}(Base));
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Child"),
+        "shadowed IIFE param must not be treated as detected inherits helper"
+    );
+    assert!(
+        output.contains("h(t, h)"),
+        "shadowed helper-like call should remain in the output"
+    );
+}
+
+#[test]
+fn builtin_inherits_name_does_not_match_shadowed_iife_param() {
+    let input = r#"
+var Child = (function(_inherits) {
+    _inherits(t, _inherits);
+    function t() {}
+    return t;
+}(Base));
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Child"),
+        "shadowed _inherits param must not be treated as a global helper"
+    );
+    assert!(
+        output.contains("_inherits(t, _inherits)"),
+        "shadowed _inherits call should remain in the output"
+    );
+}
+
+#[test]
+fn builtin_extends_name_does_not_match_shadowed_iife_param() {
+    let input = r#"
+var Child = (function(__extends) {
+    __extends(t, __extends);
+    function t() {}
+    return t;
+}(Base));
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Child"),
+        "shadowed __extends param must not be treated as a global helper"
+    );
+    assert!(
+        output.contains("__extends(t, __extends)"),
+        "shadowed __extends call should remain in the output"
+    );
+}
+
+// ============================================================
+// Getter and setter via Object.defineProperty
+// ============================================================
+
+#[test]
+fn test_inheritance_member_expr_super() {
+    // Super class is a member expression (e.g. React.Component or module.Component)
+    let input = r#"
+var Child = (function(_super) {
+    _inherits(t, _super);
+    function t() {}
+    t.prototype.run = function run() {}
+    return t;
+}(module.Component));
+"#;
+    let expected = r#"
+class Child extends module.Component {
+    run() {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_getter_setter_define_property() {
+    let input = r#"
+var MyClass = (function() {
+    function t(val) { this._val = val; }
+    Object.defineProperty(t.prototype, "value", {
+        enumerable: false,
+        configurable: true,
+        get: function() { return this._val; },
+        set: function(v) { this._val = v; }
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class MyClass {
+    constructor(val) { this._val = val; }
+    get value() { return this._val; }
+    set value(v) { this._val = v; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn define_property_zero_param_setter_gets_dummy_arg() {
+    // `Object.defineProperty` setters may be zero-arg; class `set` must have
+    // exactly one parameter. FairyGUI-style empty setters need a dummy.
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: false,
+        configurable: true,
+        get: function() { return null; },
+        set: function() {}
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class Widget {
+    get text() { return null; }
+    set text(_) {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn create_class_zero_param_setter_gets_dummy_arg() {
+    let input = r#"
+var _createClass = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+var Widget = (function() {
+    function t() {}
+    _createClass(t, [
+        { key: "text", get: function() { return null; } },
+        { key: "text", set: function() {} }
+    ]);
+    return t;
+}());
+"#;
+    let expected = r#"
+class Widget {
+    get text() { return null; }
+    set text(_) {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn define_property_zero_param_setter_avoids_underscore_collision() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: false,
+        configurable: true,
+        get: function() { return null; },
+        set: function() { console.log(_); }
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class Widget {
+    get text() { return null; }
+    set text(_v) { console.log(_); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn define_property_multi_param_setter_preserves_iife_shape() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: false,
+        configurable: true,
+        set: function(value, metadata) { use(value, metadata); }
+    });
+    return t;
+}());
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("Object.defineProperty(t.prototype, \"text\"")
+            && !output.contains("class Widget"),
+        "an incompatible setter signature must keep the descriptor callback:\n{output}"
+    );
+}
+
+#[test]
+fn legacy_typescript_enumerable_accessor_recovers_at_standard() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: true,
+        configurable: true,
+        set: function(value) { this._text = value; }
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class Widget {
+    set text(value) { this._text = value; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn legacy_typescript_enumerable_accessor_preserves_iife_at_minimal() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: true,
+        configurable: true,
+        set: function(value) { this._text = value; }
+    });
+    return t;
+}());
+"#;
+    let output = apply_minimal(input);
+    assert!(
+        output.contains("Object.defineProperty(t.prototype, \"text\"")
+            && !output.contains("class Widget"),
+        "minimal must preserve the emitted enumerable descriptor:\n{output}"
+    );
+}
+
+#[test]
+fn define_property_nonconfigurable_accessor_preserves_iife_shape() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        enumerable: false,
+        set: function() {}
+    });
+    return t;
+}());
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("Object.defineProperty(t.prototype, \"text\"")
+            && !output.contains("class Widget"),
+        "a nonconfigurable descriptor cannot become a configurable class accessor:\n{output}"
+    );
+}
+
+#[test]
+fn define_property_mixed_function_and_method_accessors_preserve_both() {
+    let input = r#"
+var Widget = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "text", {
+        configurable: true,
+        get: function() { return this._text; },
+        set(value) { this._text = value; }
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class Widget {
+    get text() { return this._text; }
+    set text(value) { this._text = value; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_define_property_value_function_method() {
+    let input = r#"
+var MyClass = (function() {
+    function t(val) { this._val = val; }
+    Object.defineProperty(t.prototype, "value", {
+        enumerable: false,
+        configurable: true,
+        writable: true,
+        value: function value() { return this._val; }
+    });
+    return t;
+}());
+"#;
+    let expected = r#"
+class MyClass {
+    constructor(val) { this._val = val; }
+    value() { return this._val; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_define_property_value_function_enumerable_true_not_method() {
+    let input = r#"
+var MyClass = (function() {
+    function t() {}
+    Object.defineProperty(t.prototype, "value", {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value: function value() { return 1; }
+    });
+    return t;
+}());
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("Object.defineProperty(t.prototype, \"value\""),
+        "{output}"
+    );
+    assert!(!output.contains("\n    value()"), "{output}");
+}
+
+// ============================================================
+// Babel loose mode: proto alias
+// ============================================================
+
+#[test]
+fn test_babel_loose_proto_alias() {
+    let input = r#"
+var Greeter = (function() {
+    function t(name) { this.name = name; }
+    var proto = t.prototype;
+    proto.greet = function greet() { return 'hi ' + this.name; }
+    return t;
+}());
+"#;
+    let expected = r#"
+class Greeter {
+    constructor(name) { this.name = name; }
+    greet() { return 'hi ' + this.name; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Babel _createClass variant
+// ============================================================
+
+#[test]
+fn test_babel_create_class() {
+    let input = r#"
+var MyClass = (function() {
+    function t(x) { this.x = x; }
+    return _createClass(t, [{
+        key: "getX",
+        value: function getX() { return this.x; }
+    }], [{
+        key: "create",
+        value: function create(x) { return new t(x); }
+    }]);
+}());
+"#;
+    let expected = r#"
+var MyClass = function() {
+    function t(x) { this.x = x; }
+    return _createClass(t, [{
+        key: "getX",
+        value: function getX() { return this.x; }
+    }], [{
+        key: "create",
+        value: function create(x) { return new t(x); }
+    }]);
+}();
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn same_name_non_helper_create_class_call_is_not_class_method() {
+    let input = r#"
+function _createClass(target, methods) {
+    record(target, methods);
+    return target;
+}
+var Foo = (function() {
+    function t() {}
+    _createClass(t, [{
+        key: "value",
+        value: function value() { return 1; }
+    }]);
+    return t;
+}());
+"#;
+    let output = apply(input);
+    assert!(output.contains("_createClass(t"), "{output}");
+    assert!(!output.contains("class Foo"), "{output}");
+    assert!(output.contains("function value()"), "{output}");
+}
+
+#[test]
+fn test_static_method_referencing_inner_constructor_name_stays_iife_when_outer_name_differs() {
+    let input = r#"
+var G = (function() {
+    function U() {}
+    U.getItemAsync = function(B) {
+        var G;
+        if (U.asyncStorage) {
+            return U.asyncStorage.getItem(B);
+        }
+        return null;
+    };
+    return U;
+}());
+"#;
+    let expected = r#"
+var G = function() {
+    function U() {}
+    U.getItemAsync = function(B) {
+        var G;
+        if (U.asyncStorage) {
+            return U.asyncStorage.getItem(B);
+        }
+        return null;
+    };
+    return U;
+}();
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// No-op: not a class IIFE (should be left unchanged)
+// ============================================================
+
+#[test]
+fn test_noop_not_a_class() {
+    let input = r#"
+var x = (function() {
+    return 42;
+}());
+"#;
+    // No inner function declaration → not a class
+    // The fixer pass normalizes `(function() { ... }())` → `function() { ... }()`
+    // in variable init positions, so we compare against the fixer-normalized form.
+    let expected = r#"
+var x = function() {
+    return 42;
+}();
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+// ============================================================
+// No-op: prototype inheritance setup lines are skipped
+// ============================================================
+
+#[test]
+fn test_prototype_chain_setup_skipped() {
+    let input = r#"
+var Child = (function(_super) {
+    __extends(t, _super);
+    function t() { _super.apply(this, arguments); }
+    t.prototype = Object.create(_super.prototype);
+    t.prototype.constructor = t;
+    t.prototype.doSomething = function doSomething() { return true; }
+    return t;
+}(Parent));
+"#;
+    // _super.apply(this, arguments) → super(...arguments) → default ctor removed
+    let expected = r#"
+class Child extends Parent {
+    doSomething() { return true; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Inlined inheritance (webpack4 pattern without _inherits)
+// ============================================================
+
+#[test]
+fn test_inlined_inheritance_webpack4() {
+    // webpack4 inlines the _inherits logic directly instead of calling _inherits
+    let input = r#"
+var Child = (function(_super) {
+    if (typeof _super !== "function" && _super !== null) {
+        throw new TypeError("Super expression must either be null or a function");
+    }
+    function t() {
+        _super !== null && _super.apply(this, arguments);
+    }
+    t.prototype = Object.create(_super !== null && _super.prototype);
+    t.prototype.constructor = t;
+    _super && (Object.setPrototypeOf ? Object.setPrototypeOf(t, _super) : t.__proto__ = _super);
+    t.prototype.run = function run() { return true; }
+    return t;
+}(Base));"#;
+    // The constructor still needs the wrapper's null guard. Removing the
+    // wrapper would leave _super unbound even if its apply call became super().
+    let output = apply(input);
+    assert!(output.contains("function(_super)"), "{output}");
+    assert!(output.contains("_super.apply(this, arguments)"), "{output}");
+    assert!(!output.contains("class Child extends Base"), "{output}");
+}
+
+#[test]
+fn zero_arg_iife_with_params_requires_inline_inheritance() {
+    let input = r#"
+var Foo = (function(_super) {
+    function Foo() {}
+    return Foo;
+}());
+"#;
+    let expected = r#"
+var Foo = function(_super) {
+    function Foo() {}
+    return Foo;
+}();
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Both call forms: (function(){...}()) and (function(){...})()
+// ============================================================
+
+#[test]
+fn test_iife_call_form_outer_paren() {
+    // (function() { ... })()  ← callee is paren-wrapped FnExpr
+    let input = r#"
+var A = (function() {
+    function t() {}
+    t.prototype.go = function go() {}
+    return t;
+})();
+"#;
+    let expected = r#"
+class A {
+    go() {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_arrow_iife_class_basic() {
+    let input = r#"
+var Foo = (() => {
+    function t() {}
+    t.prototype.render = function() {
+        return null;
+    };
+    return t;
+})();
+"#;
+    let expected = r#"
+class Foo {
+    render() {
+        return null;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_arrow_iife_class_with_extends() {
+    let input = r#"
+var Foo = ((e) => {
+    function t() {}
+    ((e, t) => {
+        e.prototype = Object.create(t && t.prototype, {
+            constructor: { value: e, enumerable: false, writable: true, configurable: true }
+        });
+        t && (Object.setPrototypeOf ? Object.setPrototypeOf(e, t) : e.__proto__ = t);
+    })(t, e);
+    t.prototype.render = function() {
+        return null;
+    };
+    return t;
+})(Parent);
+"#;
+    let expected = r#"
+class Foo extends Parent {
+    render() {
+        return null;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_arrow_iife_class_with_inherits_typecheck() {
+    // Full Babel pattern with typeof check in inherits IIFE
+    let input = r#"
+var Foo = ((e) => {
+    function t() {}
+    ((e, t) => {
+        if (typeof t != "function" && t !== null) {
+            throw new TypeError("Super expression must either be null or a function");
+        }
+        e.prototype = Object.create(t && t.prototype, {
+            constructor: { value: e, enumerable: false, writable: true, configurable: true }
+        });
+        t && (Object.setPrototypeOf ? Object.setPrototypeOf(e, t) : e.__proto__ = t);
+    })(t, e);
+    t.prototype.hello = function() {
+        return "world";
+    };
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    hello() {
+        return "world";
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_super_call_rewritten_in_constructor() {
+    // e.call(this, args) should become super(args) in the constructor
+    let input = r#"
+var Foo = ((e) => {
+    function t(x, y) {
+        e.call(this, x, y);
+        this.z = 1;
+    }
+    ((e, t) => {
+        e.prototype = Object.create(t && t.prototype, {
+            constructor: { value: e, enumerable: false, writable: true, configurable: true }
+        });
+    })(t, e);
+    return t;
+})(Parent);
+"#;
+    let expected = r#"
+class Foo extends Parent {
+    constructor(x, y){
+        super(x, y);
+        this.z = 1;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// super() || this simplification
+// ============================================================
+
+#[test]
+fn test_super_or_this_simplified() {
+    // `o = super(n, r) || this` → `o = super(n, r)` → cleanup aliases
+    let input = r#"
+var Foo = (function(e) {
+    function t(n, r) {
+        var o;
+        o = e.call(this, n, r) || this;
+        o.x = 1;
+        return o;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(n, r){
+        super(n, r);
+        this.x = 1;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_super_or_this_direct_return() {
+    // `return e.call(this) || this` → `return super()` → strip return
+    let input = r#"
+var Foo = (function(e) {
+    function t() {
+        return e.call(this) || this;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_super_alias_replaced_with_this() {
+    // n = r = super(...) → super(...), then r.x → this.x, return n removed
+    let input = r#"
+var Foo = ((e) => {
+    function t() {
+        var n;
+        var r;
+        n = r = e.call(this);
+        r.state = { x: 1 };
+        return n;
+    }
+    ((e, t) => {
+        e.prototype = Object.create(t && t.prototype, {
+            constructor: { value: e, enumerable: false, writable: true, configurable: true }
+        });
+    })(t, e);
+    return t;
+})(Parent);
+"#;
+    let expected = r#"
+class Foo extends Parent {
+    constructor(){
+        super();
+        this.state = {
+            x: 1
+        };
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_single_super_alias_replaced_with_this() {
+    // r = super(...) → super(...), then r.x → this.x
+    let input = r#"
+var Foo = (function(e) {
+    function t(a) {
+        var r = e.call(this, a);
+        r.name = a;
+        return r;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(a){
+        super(a);
+        this.name = a;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_super_call_with_spread_rewritten() {
+    let input = r#"
+var Foo = (function(e) {
+    function t() {
+        e.call(this, a, b);
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(){
+        super(a, b);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// super.apply(this, arguments) → super(...arguments)
+// ============================================================
+
+#[test]
+fn test_super_apply_rewritten() {
+    let input = r#"
+var Foo = (function(e) {
+    function t() {
+        e.apply(this, arguments);
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Inline _possibleConstructorReturn IIFE unwrapping
+// ============================================================
+
+#[test]
+fn test_inline_pcr_iife_with_apply() {
+    // The pattern from module-24 classes z, Q, oe:
+    // function t() { return PCR_IIFE(this, e.apply(this, arguments)); }
+    let input = r#"
+var Foo = (function(e) {
+    function t() {
+        return function(e, t) {
+            if (!e) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
+            return !t || "object" != typeof t && "function" != typeof t ? e : t;
+        }(this, e.apply(this, arguments));
+    }
+    t.prototype = Object.create(e && e.prototype);
+    t.prototype.constructor = t;
+    t.prototype.render = function render() { return null; }
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    render() { return null; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_inline_pcr_arrow_iife_with_apply() {
+    // Arrow form of inline PCR IIFE (as seen in decompiled output)
+    let input = r#"
+var Foo = ((e) => {
+    function t() {
+        return ((e, t) => {
+            if (!e) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
+            if (!t || typeof t != "object" && typeof t != "function") return e;
+            return t;
+        })(this, e.apply(this, arguments));
+    }
+    ((e, t) => {
+        e.prototype = Object.create(t && t.prototype, {
+            constructor: { value: e, enumerable: false, writable: true, configurable: true }
+        });
+        t && (Object.setPrototypeOf ? Object.setPrototypeOf(e, t) : e.__proto__ = t);
+    })(t, e);
+    t.prototype.enable = function(e) { this.x = e; }
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    enable(e) { this.x = e; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Sequence-expression return: `return t.method = fn, ..., ClassName;`
+// ============================================================
+
+#[test]
+fn test_seq_return_proto_alias_methods() {
+    // Minified Babel loose: methods in comma expression return
+    let input = r#"
+var Foo = (function() {
+    function e(a, b) { this.a = a; this.b = b; }
+    var t = e.prototype;
+    return t.getA = function getA() { return this.a; }, t.getB = function getB() { return this.b; }, e;
+}());
+"#;
+    let expected = r#"
+class Foo {
+    constructor(a, b) { this.a = a; this.b = b; }
+    getA() { return this.a; }
+    getB() { return this.b; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_seq_return_with_extends() {
+    // Minified Babel loose with inheritance: o(child, parent) + comma-expr return
+    // Note: `|| this` fallback is a separate cleanup concern (not handled by UnEs6Class alone)
+    let input = r#"
+function o(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+}
+var Foo = (function(t) {
+    o(a, t);
+    var r = a.prototype;
+    function a(n, r) {
+        var o;
+        o = t.call(this, n, r) || this;
+        o.x = 1;
+        return o;
+    }
+    return r.getX = function() { return this.x; }, r.render = function() { return null; }, a;
+})(Parent);
+"#;
+    // `super(n, r) || this` is simplified to `super(n, r)`, then alias cleanup converts
+    // `o = super(...)` → `super(); this.x = 1`
+    // The orphaned `_inherits` helper `o` is removed after conversion.
+    let expected = r#"
+class Foo extends Parent {
+    constructor(n, r){
+        super(n, r);
+        this.x = 1;
+    }
+    getX() { return this.x; }
+    render() { return null; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_seq_return_with_extends_direct_super() {
+    // Same pattern but without the `|| this` fallback — alias should be cleaned up
+    let input = r#"
+function o(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+}
+var Foo = (function(t) {
+    o(a, t);
+    var r = a.prototype;
+    function a(n, r) {
+        var o;
+        o = t.call(this, n, r);
+        o.x = 1;
+        return o;
+    }
+    return r.getX = function() { return this.x; }, r.render = function() { return null; }, a;
+})(Parent);
+"#;
+    let expected = r#"
+class Foo extends Parent {
+    constructor(n, r){
+        super(n, r);
+        this.x = 1;
+    }
+    getX() { return this.x; }
+    render() { return null; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn orphaned_set_prototype_of_helper_removed_with_inherits_helper() {
+    let input = r#"
+function r(e, t) {
+    return (r = Object.setPrototypeOf ? Object.setPrototypeOf.bind() : function(e, t) {
+        e.__proto__ = t;
+        return e;
+    })(e, t);
+}
+function o(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+    r(e, t);
+}
+var Foo = (function(t) {
+    o(a, t);
+    function a() {
+        t.call(this);
+    }
+    return a;
+})(Parent);
+"#;
+    let expected = r#"
+class Foo extends Parent {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_seq_return_no_methods() {
+    // Edge: just `return e;` (no comma expression) — already handled, verifying no regression
+    let input = r#"
+var Foo = (function() {
+    function e() {}
+    e.prototype.go = function go() {}
+    return e;
+}());
+"#;
+    let expected = r#"
+class Foo {
+    go() {}
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_inherits_helper_in_outer_scope() {
+    // Module-23 pattern: inherits helper at top level, class IIFE inside a function body.
+    // The inherits helper `o` is detected at module level and available in nested scopes.
+    let input = r#"
+function o(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+}
+function createProvider() {
+    var r = (function(t) {
+        o(a, t);
+        var r = a.prototype;
+        function a(n) { t.call(this, n); }
+        r.render = function() { return null; };
+        return a;
+    })(Component);
+    return r;
+}
+"#;
+    let expected = r#"
+function o(e, t) {
+    e.prototype = Object.create(t.prototype);
+    e.prototype.constructor = e;
+}
+function createProvider() {
+    class r extends Component {
+        constructor(n) { super(n); }
+        render() { return null; }
+    }
+    return r;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_inline_pcr_with_comma_and_class_call_check() {
+    // Full Babel pattern: classCallCheck, possibleConstructorReturn in sequence expr
+    let input = r#"
+var Foo = (function(e) {
+    function t() {
+        return function(e, t) {
+            if (!(e instanceof t)) throw new TypeError("Cannot call a class as a function");
+        }(this, t), function(e, t) {
+            if (!e) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
+            return !t || "object" != typeof t && "function" != typeof t ? e : t;
+        }(this, e.apply(this, arguments));
+    }
+    t.prototype = Object.create(e && e.prototype);
+    t.prototype.constructor = t;
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// _createClass body-shape detection (minified helper name)
+// ============================================================
+
+#[test]
+fn create_class_minified_helper_with_inline_inherits() {
+    // Babel output where _createClass is minified to `r` and _inherits is inlined.
+    // The outer IIFE has a param `e` but is called with 0 args.
+    let input = r#"
+var r = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+var Foo = function(e) {
+    function t() {
+        return function(e, t) {
+            if (!e) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
+            return !t || "object" != typeof t && "function" != typeof t ? e : t;
+        }(this, (t.__proto__ || Object.getPrototypeOf(t)).apply(this, arguments));
+    }
+    return function(e, t) {
+        if ("function" != typeof t && null !== t) throw new TypeError("Super expression must either be null or a function, not " + typeof t);
+        e.prototype = Object.create(t && t.prototype, { constructor: { value: e, enumerable: false, writable: true, configurable: true } });
+        t && (Object.setPrototypeOf ? Object.setPrototypeOf(e, t) : e.__proto__ = t);
+    }(t, Bar), r(t, [
+        { key: "render", value: function() { return 42; } }
+    ]), t;
+}();
+"#;
+    let result = render(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn create_class_minified_no_super() {
+    let input = r#"
+var r = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+var Foo = function() {
+    function t(name) { this.name = name; }
+    r(t, [
+        { key: "greet", value: function() { return "hello " + this.name; } }
+    ]);
+    return t;
+}();
+"#;
+    let result = render(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn create_class_with_static_methods() {
+    let input = r#"
+var _createClass = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+var Foo = function() {
+    function t() {}
+    _createClass(t, [
+        { key: "instance", value: function() { return 1; } }
+    ], [
+        { key: "staticMethod", value: function() { return 2; } }
+    ]);
+    return t;
+}();
+"#;
+    let result = render(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn swc_create_class_function_helper_is_recovered() {
+    // SWC emits `_create_class` as a function declaration instead of Babel's
+    // `_createClass` var-IIFE helper.
+    let input = r#"
+function _class_call_check(instance, Constructor) {
+    if (!(instance instanceof Constructor)) {
+        throw new TypeError("Cannot call a class as a function");
+    }
+}
+function _defineProperties(target, props) {
+    for(var i = 0; i < props.length; i++){
+        var descriptor = props[i];
+        descriptor.enumerable = descriptor.enumerable || false;
+        descriptor.configurable = true;
+        if ("value" in descriptor) descriptor.writable = true;
+        Object.defineProperty(target, descriptor.key, descriptor);
+    }
+}
+function _create_class(Constructor, protoProps, staticProps) {
+    if (protoProps) _defineProperties(Constructor.prototype, protoProps);
+    if (staticProps) _defineProperties(Constructor, staticProps);
+    return Constructor;
+}
+var User = function() {
+    "use strict";
+    function User(name) {
+        _class_call_check(this, User);
+        this.name = name;
+    }
+    _create_class(User, [
+        {
+            key: "greet",
+            value: function greet() {
+                return "hi " + this.name;
+            }
+        }
+    ], [
+        {
+            key: "create",
+            value: function create(name) {
+                return new User(name);
+            }
+        }
+    ]);
+    return User;
+}();
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("class User"),
+        "expected class recovery, got:\n{output}"
+    );
+    assert!(output.contains("constructor(name)"), "{output}");
+    assert!(output.contains("greet()"), "{output}");
+    assert!(output.contains("static create(name)"), "{output}");
+    assert!(!output.contains("_create_class"), "{output}");
+    assert!(
+        !output.contains("\"use strict\""),
+        "class syntax subsumes the recovered wrapper's strict directive: {output}"
+    );
+}
+
+// ============================================================
+// _createClass with 1 arg (no methods, just seals prototype)
+// ============================================================
+
+#[test]
+fn test_create_class_one_arg() {
+    let input = r#"
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { _Bar.apply(this, arguments); }
+    return _createClass(t);
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// _callSuper (Babel 7.24+) → super(...)
+// ============================================================
+
+#[test]
+fn test_call_super_with_arguments() {
+    let input = r#"
+function _callSuper(t, o, e) { return _isNR() ? Reflect.construct(o, e || [], t.constructor) : o.apply(t, e); }
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { return _callSuper(this, t, arguments); }
+    return _createClass(t);
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_call_super_no_args() {
+    let input = r#"
+function _callSuper(t, o, e) { return _isNR() ? Reflect.construct(o, e || [], t.constructor) : o.apply(t, e); }
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { return _callSuper(this, t); }
+    return _createClass(t);
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_call_super_with_explicit_args() {
+    let input = r#"
+function _callSuper(t, o, e) { return _isNR() ? Reflect.construct(o, e || [], t.constructor) : o.apply(t, e); }
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t(a, b) {
+        return _callSuper(this, t, [a, b]);
+    }
+    return _createClass(t);
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+    constructor(a, b) { super(a, b); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_call_super_unmangled_ctor_name() {
+    // Matches the real-world Babel 7.24+ output where inner function has same name as class
+    let input = r#"
+function _callSuper(t, o, e) { return _isNR() ? Reflect.construct(o, e || [], t.constructor) : o.apply(t, e); }
+var Foo = function(_Bar) {
+    function Foo() {
+        return _callSuper(this, Foo, arguments);
+    }
+    _inherits(Foo, _Bar);
+    return _createClass(Foo);
+}(Bar);
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// Regression: generic Reflect.construct wrapper must NOT be removed
+// ============================================================
+
+#[test]
+fn test_reflect_construct_2arg_not_treated_as_call_super() {
+    // A generic 2-arg Reflect.construct wrapper should not be detected as _callSuper
+    // and must not be removed as an orphaned helper.
+    let input = r#"
+function make(type, args) { return Reflect.construct(type, args); }
+var Foo = (function() {
+    function t() {}
+    t.prototype.run = function() { return make(Array, [1,2,3]); }
+    return t;
+}());
+"#;
+    let expected = r#"
+function make(type, args) { return Reflect.construct(type, args); }
+class Foo {
+    run() { return make(Array, [1,2,3]); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_reflect_construct_3arg_not_treated_as_call_super() {
+    // A generic 3-arg Reflect.construct wrapper (no .apply fallback) must be preserved.
+    let input = r#"
+function make(type, args, newTarget) { return Reflect.construct(type, args, newTarget); }
+var Foo = (function() {
+    function t() {}
+    t.prototype.run = function() { return make(Array, [1], Array); }
+    return t;
+}());
+"#;
+    let expected = r#"
+function make(type, args, newTarget) { return Reflect.construct(type, args, newTarget); }
+class Foo {
+    run() { return make(Array, [1], Array); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn test_construct_or_apply_not_treated_as_call_super() {
+    // A dual-path wrapper with different param flow must be preserved.
+    // param2.apply(param1) is Babel's pattern; type.apply(self) is not.
+    let input = r#"
+function constructOrApply(type, args, self) {
+    return canReflect ? Reflect.construct(type, args, self.constructor) : type.apply(self, args);
+}
+var Foo = (function() {
+    function t() {}
+    t.prototype.run = function() { return constructOrApply(Array, [1], this); }
+    return t;
+}());
+"#;
+    let expected = r#"
+function constructOrApply(type, args, self) {
+    return canReflect ? Reflect.construct(type, args, self.constructor) : type.apply(self, args);
+}
+class Foo {
+    run() { return constructOrApply(Array, [1], this); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn swc_external_create_class_import() {
+    let input = r#"
+import { _ as _create_class } from "@swc/helpers/_/_create_class";
+var Foo = (function() {
+    function t(name) { this.name = name; }
+    return _create_class(t, [{
+        key: "greet",
+        value: function greet() { return "hello " + this.name; }
+    }]);
+}());
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("class Foo"),
+        "should recover class declaration, got:\n{output}"
+    );
+    assert!(
+        output.contains("greet()"),
+        "should recover method from _create_class, got:\n{output}"
+    );
+    assert!(
+        !output.contains("_create_class"),
+        "should remove _create_class call, got:\n{output}"
+    );
+    assert!(
+        !output.contains("@swc/helpers"),
+        "should remove helper import, got:\n{output}"
+    );
+}
+
+#[test]
+fn swc_external_call_super_import() {
+    let input = r#"
+import { _ as _call_super } from "@swc/helpers/_/_call_super";
+import { _ as _inherits } from "@swc/helpers/_/_inherits";
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { return _call_super(this, t, arguments); }
+    return t;
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn babel_runtime_call_super_import() {
+    // transform-runtime output imports the helper from @babel/runtime.
+    let input = r#"
+import _callSuper from "@babel/runtime/helpers/callSuper";
+import _inherits from "@babel/runtime/helpers/inherits";
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { return _callSuper(this, t, arguments); }
+    return t;
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn babel_runtime_inherits_loose_import() {
+    // Babel loose mode: _inheritsLoose appears AFTER the constructor, no
+    // _possibleConstructorReturn, direct _Bar.apply(this, arguments) || this.
+    let input = r#"
+import _inheritsLoose from "@babel/runtime/helpers/inheritsLoose";
+var Foo = (function(_Bar) {
+    function Foo() {
+        return _Bar.apply(this, arguments) || this;
+    }
+    _inheritsLoose(Foo, _Bar);
+    return Foo;
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn babel_loose_alias_expanded_inheritance_is_recovered() {
+    let input = r#"
+function setPrototypeOf(object, prototype) {
+    return setPrototypeOf = Object.setPrototypeOf
+        ? Object.setPrototypeOf.bind()
+        : function(object, prototype) {
+            object.__proto__ = prototype;
+            return object;
+        }, setPrototypeOf(object, prototype);
+}
+var Child = (function(Base_1) {
+    function Child() {
+        return Base_1.apply(this, arguments) || this;
+    }
+    var constructorAlias, baseAlias;
+    baseAlias = Base_1;
+    constructorAlias = Child;
+    constructorAlias.prototype = Object.create(baseAlias.prototype);
+    constructorAlias.prototype.constructor = constructorAlias;
+    setPrototypeOf(constructorAlias, baseAlias);
+    Child.prototype.run = function() { return this.value; };
+    return Child;
+}(Base));
+"#;
+    let expected = r#"
+class Child extends Base {
+    run() { return this.value; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn babel_loose_inheritance_with_an_escaping_alias_is_preserved() {
+    let input = r#"
+function setPrototypeOf(object, prototype) {
+    return setPrototypeOf = Object.setPrototypeOf
+        ? Object.setPrototypeOf.bind()
+        : function(object, prototype) {
+            object.__proto__ = prototype;
+            return object;
+        }, setPrototypeOf(object, prototype);
+}
+var Child = (function(Base_1) {
+    function Child() {
+        return Base_1.apply(this, arguments) || this;
+    }
+    var constructorAlias, baseAlias;
+    baseAlias = Base_1;
+    constructorAlias = Child;
+    constructorAlias.prototype = Object.create(baseAlias.prototype);
+    constructorAlias.prototype.constructor = constructorAlias;
+    setPrototypeOf(constructorAlias, baseAlias);
+    observe(constructorAlias);
+    Child.prototype.run = function() { return this.value; };
+    return Child;
+}(Base));
+"#;
+    let output = apply(input);
+    assert!(!output.contains("class Child"), "{output}");
+    assert!(output.contains("observe(constructorAlias)"), "{output}");
+    assert!(
+        output.contains("constructorAlias.prototype = Object.create"),
+        "{output}"
+    );
+}
+
+#[test]
+fn babel_loose_minified_inheritance_recovers_through_pipeline() {
+    // Reproduce from native `class Base` / `class Child extends Base` with:
+    // Babel 7.24.9 + preset-env 7.24.8 (`loose: true`, modules disabled),
+    // then Terser 5.31.6 (`--compress passes=3 --mangle --module`).
+    let input = r#"
+function t(o,r){return t=Object.setPrototypeOf?Object.setPrototypeOf.bind():function(t,o){return t.__proto__=o,t},t(o,r)}
+export var Base=function(){function t(t){void 0===t&&(t=1),this.value=t}return t.prototype.method=function(){return this.value},t}();
+export var Child=function(o){function r(){return o.apply(this,arguments)||this}var e,n;return n=o,(e=r).prototype=Object.create(n.prototype),e.prototype.constructor=e,t(e,n),r.prototype.slugify=function(){return this.method()},r}(Base);
+export const child=new Child;
+"#;
+    let output = render(input);
+    assert!(output.contains("export class Base"), "{output}");
+    assert!(
+        output.contains("export class Child extends Base"),
+        "{output}"
+    );
+    assert!(!output.contains("prototype = Object.create"), "{output}");
+    assert!(!output.contains(".apply(this, arguments)"), "{output}");
+}
+
+#[test]
+fn swc_external_inherits_loose_import() {
+    let input = r#"
+import { _ as _inherits_loose } from "@swc/helpers/_/_inherits_loose";
+var Foo = (function(_Bar) {
+    function Foo() {
+        return _Bar.apply(this, arguments) || this;
+    }
+    _inherits_loose(Foo, _Bar);
+    return Foo;
+}(Bar));
+"#;
+    let expected = r#"
+class Foo extends Bar {
+}
+"#;
+    assert_eq_normalized(&render(input), expected);
+}
+
+#[test]
+fn unwraps_class_with_imported_sub_helpers_present() {
+    let input = r#"
+import { _ as _call_super } from "@swc/helpers/_/_call_super";
+import { _ as _inherits } from "@swc/helpers/_/_inherits";
+import { _ as _set_prototype_of } from "@swc/helpers/_/_set_prototype_of";
+import { _ as _get_prototype_of } from "@swc/helpers/_/_get_prototype_of";
+import { _ as _is_native_reflect_construct } from "@swc/helpers/_/_is_native_reflect_construct";
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t() { return _call_super(this, t, arguments); }
+    return t;
+}(Bar));
+"#;
+    let output = render(input);
+    assert!(
+        output.contains("class Foo extends Bar"),
+        "should convert to class: {output}"
+    );
+    assert!(
+        !output.contains("_call_super") && !output.contains("_inherits"),
+        "consumed helpers should be removed: {output}"
+    );
+    assert!(
+        output.contains("@swc/helpers/_/_set_prototype_of"),
+        "pre-existing dead sub-helper imports should survive: {output}"
+    );
+}
+
+#[test]
+fn test_call_super_unsafe_third_arg_bails_class_conversion() {
+    // When the third arg to _callSuper is not `arguments` or an array literal,
+    // the rewriter cannot safely convert it. The whole IIFE should stay unconverted.
+    let input = r#"
+function _callSuper(t, o, e) { return _isNativeReflectConstruct() ? Reflect.construct(o, e || [], t.constructor) : o.apply(t, e); }
+var Foo = (function(_Bar) {
+    _inherits(t, _Bar);
+    function t(maybeArgs) {
+        return _callSuper(this, t, maybeArgs);
+    }
+    return _createClass(t);
+}(Bar));
+"#;
+    // Should stay unconverted — no dangling `t` reference
+    let output = apply(input);
+    assert!(
+        output.contains("_callSuper"),
+        "should keep _callSuper call when third arg is unsafe"
+    );
+    assert!(
+        !output.contains("class Foo"),
+        "should not convert to class when _callSuper rewrite bails"
+    );
+}
+
+// ============================================================
+// Duplicate sloppy-mode parameter names — class bodies are strict
+// mode, so conversion must bail rather than emit a SyntaxError
+// ============================================================
+
+#[test]
+fn duplicate_constructor_params_preserve_iife_shape() {
+    let input = r#"
+var Foo = function() {
+    function t(a, a) { this.value = a; }
+    t.prototype.run = function run() { return this.value; }
+    return t;
+}();
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn duplicate_method_params_preserve_iife_shape() {
+    let input = r#"
+var Foo = function() {
+    function t(value) { this.value = value; }
+    t.prototype.pick = function pick(a, a) { return a; }
+    return t;
+}();
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn duplicate_getter_params_preserve_iife_shape() {
+    let input = r#"
+var Foo = function() {
+    function t(val) { this._val = val; }
+    Object.defineProperty(t.prototype, "value", {
+        get: function(a, a) { return this._val; }
+    });
+    return t;
+}();
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn duplicate_create_class_method_params_preserve_iife_shape() {
+    let input = r#"
+function _createClass(t, e, n) { return t; }
+var Foo = function() {
+    function t(value) { this.value = value; }
+    return _createClass(t, [{ key: "pick", value: function(a, a) { return a; } }]);
+}();
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+// ============================================================
+// Reused `var` bindings — class declarations are lexical
+// ============================================================
+
+#[test]
+fn reused_var_binding_preserves_later_class_iife() {
+    let input = r#"
+var Shared = makeFirstValue();
+exports.Primary = Shared;
+var Shared = (function() {
+    function Base(value) { this.value = value; }
+    Base.prototype.read = function read() { return this.value; };
+    return Base;
+}());
+consume(Shared);
+"#;
+    let expected = r#"
+var Shared = makeFirstValue();
+exports.Primary = Shared;
+var Shared = function() {
+    function Base(value) { this.value = value; }
+    Base.prototype.read = function read() { return this.value; };
+    return Base;
+}();
+consume(Shared);
+"#;
+
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn block_scoped_var_reuse_preserves_later_class_iife() {
+    let input = r#"
+if (enabled) {
+    var Shared = makeFirstValue();
+}
+var Shared = (function() {
+    function Base() {}
+    Base.prototype.read = function read() { return 1; };
+    return Base;
+}());
+"#;
+    let output = apply(input);
+
+    assert!(
+        !output.contains("class Shared"),
+        "a block-level var shares the outer function binding: {output}"
+    );
+}
+
+#[test]
+fn class_iife_in_block_observes_outer_var_reuse() {
+    let input = r#"
+var Shared = makeFirstValue();
+if (enabled) {
+    var Shared = (function() {
+        function Base() {}
+        Base.prototype.read = function read() { return 1; };
+        return Base;
+    }());
+}
+consume(Shared);
+"#;
+    let output = apply(input);
+
+    assert!(
+        !output.contains("class Shared"),
+        "a class inside the block would shadow the hoisted var: {output}"
+    );
+}
+
+#[test]
+fn nested_same_name_var_does_not_block_class_recovery() {
+    let input = r#"
+function makeOther() {
+    var Shared = makeFirstValue();
+    return Shared;
+}
+var Shared = (function() {
+    function Base() {}
+    Base.prototype.read = function read() { return 1; };
+    return Base;
+}());
+"#;
+    let output = apply(input);
+
+    assert!(
+        output.contains("class Shared"),
+        "binding identity should distinguish nested locals: {output}"
+    );
+}
+
+#[test]
+fn reused_var_binding_does_not_gain_pipeline_tdz() {
+    let input = r#"
+var Shared = makeFirstValue();
+exports.Primary = Shared;
+var Shared = (function() {
+    function Base(value) { this.value = value; }
+    Base.prototype.read = function read() { return this.value; };
+    return Base;
+}());
+consume(Shared);
+"#;
+
+    let output = wakaru_core::decompile(
+        input,
+        DecompileOptions {
+            diagnostics: true,
+            filename: "reused-var-class.js".to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("decompile should succeed");
+    assert!(
+        output
+            .warnings
+            .iter()
+            .all(|warning| warning.kind != UnpackWarningKind::TdzViolation),
+        "class recovery introduced a TDZ: {:?}\n--- output ---\n{}",
+        output.warnings,
+        output.code
+    );
+}
+
+#[test]
+fn typescript_default_inheritance_recovers_native_super_dispatch() {
+    // TypeScript 5.9.3, ES5 + CommonJS + importHelpers. The constructor's
+    // canonical default constructor and prototype call recover together at standard.
+    let input = r#"
+var tslib_1 = require("tslib");
+var Child = (function (_super) {
+    tslib_1.__extends(Child, _super);
+    function Child() {
+        return _super !== null && _super.apply(this, arguments) || this;
+    }
+    Child.prototype.value = function () {
+        return _super.prototype.value.call(this) + 1;
+    };
+    return Child;
+}(Parent));
+exports.Child = Child;
+"#;
+    let output = apply(input);
+    assert!(output.contains("class Child extends Parent"), "{output}");
+    assert!(output.contains("super.value() + 1"), "{output}");
+    assert!(!output.contains("function(_super)"), "{output}");
+    let minimal = apply_minimal(input);
+    assert!(minimal.contains("_super !== null"), "{minimal}");
+    assert!(
+        minimal.contains("tslib_1.__extends(Child, _super)"),
+        "{minimal}"
+    );
+    assert!(!minimal.contains("class Child extends"), "{minimal}");
+}
+
+#[test]
+fn inherited_methods_keep_captured_superclass_references() {
+    // A fully rewritten constructor does not prove that methods no longer
+    // depend on the wrapper. Inspect every recovered class member.
+    let input = r#"
+import { __extends } from "tslib";
+var Child = (function (base) {
+    __extends(Child, base);
+    function Child() { base.call(this); }
+    Child.prototype.parent = function () { return base; };
+    return Child;
+}(Parent));
+"#;
+    let output = apply(input);
+    assert!(output.contains("function(base)"), "{output}");
+    assert!(output.contains("return base"), "{output}");
+    assert!(!output.contains("class Child extends Parent"), "{output}");
+}
+
+fn ts_default_inheritance(method: &str) -> String {
+    format!(
+        r#"import {{ __extends }} from "tslib";
+var Child = (function (base) {{
+    __extends(Child, base);
+    function Child() {{ return base !== null && base.apply(this, arguments) || this; }}
+    {method}
+    return Child;
+}})(Parent);"#
+    )
+}
+
+#[test]
+fn ts_default_inheritance_rewrites_instance_static_and_lexical_arrow_calls() {
+    let input = ts_default_inheritance(
+        r#"
+Child.prototype.value = function (arg) { return base.prototype.value.call(this, arg); };
+Child.value = function (arg) { return base.value.call(this, arg); };
+Child.prototype.lazy = function () { return () => base.prototype.value.call(this); };
+"#,
+    );
+    let expected = r#"import "tslib";
+class Child extends Parent {
+    value(arg) { return super.value(arg); }
+    static value(arg) { return super.value(arg); }
+    lazy() { return () => super.value(); }
+}"#;
+    assert_eq_normalized(&apply(&input), expected);
+}
+
+#[test]
+fn ts_default_inheritance_keeps_noncanonical_constructor_frames() {
+    let input = ts_default_inheritance("");
+    for source in [
+        input.replace("base !== null", "base != null"),
+        input.replace("base !== null", "base !== undefined"),
+        input.replace("this, arguments", "other, arguments"),
+        input.replace("this, arguments", "this, values"),
+        input.replace("this, arguments", "this, ...arguments"),
+        input.replace("function Child()", "function Child(arguments)"),
+        input.replace("return base !==", "observe(); return base !=="),
+        input.replace("|| this", "|| fallback"),
+        input.replace("function (base)", "async function (base)"),
+        input.replace("})(Parent)", "})(...parents)"),
+    ] {
+        assert!(
+            !apply(&source).contains("class Child extends"),
+            "{}",
+            apply(&source)
+        );
+    }
+}
+
+#[test]
+fn ts_default_inheritance_requires_stable_proven_extends_helpers() {
+    let input = ts_default_inheritance("");
+    for prefix in [
+        "function __extends(a, b) { custom(a, b); }",
+        "var __extends = this && this.__extends || function(a, b) { custom(a, b); };",
+        "",
+        "var __extends = require('tslib').__extends; __extends = custom;",
+        "var __extends = require('tslib').__extends; var __extends = custom;",
+        "var __extends = require('tslib').__extends; function replace() { __extends = custom; }",
+    ] {
+        let source = input.replace("import { __extends } from \"tslib\";", prefix);
+        assert!(
+            !apply(&source).contains("class Child extends"),
+            "{}",
+            apply(&source)
+        );
+    }
+    for effect in [
+        "ts.__extends = custom;",
+        "ts = custom;",
+        "var ts = custom;",
+        "consume(ts);",
+        "eval(code);",
+        "with (scope) { observe(); }",
+    ] {
+        let source = input
+            .replace(
+                "import { __extends } from \"tslib\";",
+                &format!("var ts = require('tslib'); {effect}"),
+            )
+            .replace("__extends(Child, base)", "ts.__extends(Child, base)");
+        assert!(
+            !apply(&source).contains("class Child extends"),
+            "{}",
+            apply(&source)
+        );
+    }
+}
+
+#[test]
+fn ts_default_inheritance_preserves_unconsumed_and_dynamic_superclass_uses() {
+    for method in [
+        "Child.prototype.value = function () { return base; };",
+        "Child.prototype.value = function () { Child = custom; return base.prototype.value.call(this); };",
+        "Child.prototype.value = function () { return Child; };",
+        "Child.prototype.value = function () { return function () { return base.prototype.value.call(this); }; };",
+        "Child.prototype.value = function () { return base.prototype.value.call(other); };",
+        "Child.prototype.value = function () { return base.prototype[key()].call(this); };",
+        "Child.prototype.value = function () { base = custom; return base.prototype.value.call(this); };",
+        "Child.prototype.value = function () { return base.prototype.value.apply(this, arguments); };",
+        "Child.prototype.value = function () { return base.value.call(this); };",
+        "Child.value = function () { return base.prototype.value.call(this); };",
+    ] {
+        let input = ts_default_inheritance(method);
+        assert!(
+            !apply(&input).contains("class Child extends"),
+            "{}",
+            apply(&input)
+        );
+    }
+}
+
+#[test]
+fn ts_default_inheritance_does_not_rewrite_a_shadowed_superclass_name() {
+    let input = ts_default_inheritance(
+        "Child.prototype.value = function (base) { return base.prototype.value.call(this); };",
+    );
+    let expected = r#"import "tslib";
+class Child extends Parent { value(base) { return base.prototype.value.call(this); } }"#;
+    assert_eq_normalized(&apply(&input), expected);
+}
+
+#[test]
+fn tsc_default_inheritance_recovers_across_helper_delivery_and_minification() {
+    for input in [
+        include_str!("fixtures/tslib-inheritance/commonjs-inline.js"),
+        include_str!("fixtures/tslib-inheritance/commonjs-inline-compressed.js"),
+        include_str!("fixtures/tslib-inheritance/commonjs-inline-mangled.js"),
+        include_str!("fixtures/tslib-inheritance/commonjs-import-helpers.js"),
+        include_str!("fixtures/tslib-inheritance/commonjs-import-helpers-compressed.js"),
+        include_str!("fixtures/tslib-inheritance/commonjs-import-helpers-mangled.js"),
+        include_str!("fixtures/tslib-inheritance/esm-import-helpers.js"),
+        include_str!("fixtures/tslib-inheritance/esm-import-helpers-compressed.js"),
+        include_str!("fixtures/tslib-inheritance/esm-import-helpers-mangled.js"),
+    ] {
+        let output = render(input);
+        assert!(output.contains("class Child extends Parent"), "{output}");
+        assert!(output.contains("super.value() + 1"), "{output}");
+        assert!(!output.contains(".apply(this, arguments)"), "{output}");
+        let minimal = wakaru_core::decompile(
+            input,
+            DecompileOptions {
+                level: RewriteLevel::Minimal,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .code;
+        assert!(!minimal.contains("class Child"), "{minimal}");
+        assert!(minimal.contains(".apply(this, arguments)"), "{minimal}");
+    }
+}
+
+#[test]
+fn consumed_extends_import_keeps_module_evaluation_and_other_imports() {
+    let input = ts_default_inheritance("").replace(
+        "import { __extends }",
+        "import { __extends, __read, custom }",
+    ) + "\nconsume(__read, custom);";
+    let output = apply(&input);
+    assert!(!output.contains("__extends"), "{output}");
+    assert!(output.contains("__read"), "{output}");
+    assert!(output.contains("custom"), "{output}");
+    assert_eq_normalized(
+        &apply(&ts_default_inheritance("")),
+        "import \"tslib\"; class Child extends Parent {}",
+    );
+}
+
+#[test]
+fn extends_import_cleanup_tracks_aliases_and_nested_class_recovery() {
+    let source = ts_default_inheritance("")
+        .replace("__extends", "extend")
+        .replace("import { extend }", "import { __extends as extend }");
+    let output = apply(&source);
+    assert_eq_normalized(&output, "import \"tslib\"; class Child extends Parent {}");
+    let nested = ts_default_inheritance("").replace("var Child", "function make() { var Child")
+        + " return Child; }";
+    let output = apply(&nested);
+    assert!(!output.contains("__extends"), "{output}");
+    assert!(output.contains("import \"tslib\";"), "{output}");
+}
+
+#[test]
+fn extends_import_cleanup_preserves_remaining_or_originally_unused_bindings() {
+    for tail in [
+        "consume(__extends);",
+        "export { __extends };",
+        "function later() { return __extends; }",
+    ] {
+        let input = ts_default_inheritance("") + tail;
+        assert!(apply(&input).contains("import { __extends }"));
+    }
+    let input = "import { __extends } from 'tslib'; var Box = (function() { function Box() {} return Box; })();";
+    assert!(apply(input).contains("import { __extends }"));
+    let input = ts_default_inheritance("")
+        .replace("'tslib'", "'custom'")
+        .replace("\"tslib\"", "\"custom\"");
+    assert!(apply(&input).contains("import { __extends }"));
+}
+
+#[test]
+fn ts_default_inheritance_recovers_static_factories_for_the_original_constructor() {
+    for inner in ["Child", "C"] {
+        let input =
+            ts_default_inheritance("Child.make = function (value) { return new Child(value); };");
+        let input = if inner == "C" {
+            input
+                .replace("Child", "C")
+                .replace("var C =", "var Child =")
+        } else {
+            input
+        };
+        assert_eq_normalized(
+            &apply(&input),
+            "import \"tslib\"; class Child extends Parent { static make(value) { return new Child(value); } }",
+        );
+    }
+}
+
+#[test]
+fn ts_static_factory_keeps_name_capture_outer_reads_and_constructor_writes() {
+    for method in [
+        "C.make = function (Child) { return new C(Child); };",
+        "C.make = function () { return new C(Child); };",
+        "C.make = function () { return new C(C); };",
+        "C.make = function () { C = other; return new C(); };",
+        "C.make = function () { return C(); };",
+        "C.make = function () { return () => new C(); };",
+    ] {
+        let input = ts_default_inheritance(method)
+            .replace("__extends(Child, base)", "__extends(C, base)")
+            .replace("function Child()", "function C()")
+            .replace("return Child;", "return C;");
+        assert!(
+            !apply(&input).contains("class Child extends"),
+            "{}",
+            apply(&input)
+        );
+    }
+}
+
+#[test]
+fn ts_static_factory_does_not_rewrite_a_shadowed_constructor_parameter() {
+    let input = ts_default_inheritance("Child.make = function (Child) { return new Child(); };");
+    assert_eq_normalized(
+        &apply(&input),
+        "import \"tslib\"; class Child extends Parent { static make(Child) { return new Child(); } }",
+    );
+}
+
+#[test]
+fn ts_static_factory_rebinds_parenthesized_constructor_callees() {
+    let input =
+        ts_default_inheritance("Child.make = function (value) { return new (Child)(value); };")
+            .replace("Child", "C")
+            .replace("var C =", "var Child =");
+    assert_eq_normalized(
+        &apply(&input),
+        "import \"tslib\"; class Child extends Parent { static make(value) { return new Child(value); } }",
+    );
+}
+
+#[test]
+fn tsc_static_factories_recover_across_helper_delivery_and_minification() {
+    for input in [
+        include_str!("fixtures/tslib-inheritance/static-factory/commonjs-inline.js"),
+        include_str!("fixtures/tslib-inheritance/static-factory/commonjs-inline-compressed.js"),
+        include_str!("fixtures/tslib-inheritance/static-factory/commonjs-inline-mangled.js"),
+        include_str!("fixtures/tslib-inheritance/static-factory/commonjs-import-helpers.js"),
+        include_str!(
+            "fixtures/tslib-inheritance/static-factory/commonjs-import-helpers-compressed.js"
+        ),
+        include_str!(
+            "fixtures/tslib-inheritance/static-factory/commonjs-import-helpers-mangled.js"
+        ),
+        include_str!("fixtures/tslib-inheritance/static-factory/esm-import-helpers.js"),
+        include_str!("fixtures/tslib-inheritance/static-factory/esm-import-helpers-compressed.js"),
+        include_str!("fixtures/tslib-inheritance/static-factory/esm-import-helpers-mangled.js"),
+    ] {
+        let output = render(input);
+        assert!(output.contains("class Child extends Parent"), "{output}");
+        assert!(output.contains("static make("), "{output}");
+        assert!(output.contains("return new Child("), "{output}");
+        assert!(!output.contains("__extends"), "{output}");
+        let minimal = wakaru_core::decompile(
+            input,
+            DecompileOptions {
+                level: RewriteLevel::Minimal,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .code;
+        assert!(!minimal.contains("class Child"), "{minimal}");
+        assert!(minimal.contains(".apply(this, arguments)"), "{minimal}");
+    }
+}
+
+#[test]
+fn extends_import_cleanup_respects_dynamic_lookup_and_binding_identity() {
+    let input = ts_default_inheritance("") + "function inspect() { return eval(' __extends '); }";
+    assert!(apply(&input).contains("import { __extends }"));
+    let input = ts_default_inheritance("") + "function inspect(__extends) { return __extends; }";
+    let output = apply(&input);
+    assert!(output.contains("import \"tslib\";"), "{output}");
+    assert!(output.contains("return __extends;"), "{output}");
+}
+
+// ============================================================
+// super() alias references the rewriter cannot turn into `this`
+// ============================================================
+
+#[test]
+fn super_alias_captured_by_a_nested_function_stays_declared() {
+    // The `_this` alias is read from a plain `function` passed to super(); that
+    // function has its own `this`, so the alias must survive as `var a = this`.
+    let input = r#"
+var Foo = (function(e) {
+    function t(t, n) {
+        var a = e.call(this, n, function(e, t, n) {
+            a.setLayout(t, n);
+        }) || this;
+        a._maxSpan = t;
+        return a;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(t, n){
+        super(n, function(e, t, n) {
+            a.setLayout(t, n);
+        });
+        var a = this;
+        this._maxSpan = t;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn super_alias_inside_an_arrow_is_rewritten_to_this() {
+    let input = r#"
+var Foo = (function(e) {
+    function t(n) {
+        var a = e.call(this, n) || this;
+        a.onChange = () => a.update();
+        return a;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(n){
+        super(n);
+        this.onChange = () => this.update();
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn super_alias_rewrite_uses_binding_identity() {
+    // The catch parameter shares the alias's name but is a different binding.
+    let input = r#"
+var Foo = (function(e) {
+    function t(n) {
+        var r = e.call(this, n) || this;
+        r.value = n;
+        try {
+            risky();
+        } catch (r) {
+            console.log(r);
+        }
+        return r;
+    }
+    t.prototype = Object.create(e && e.prototype);
+    return t;
+})(Base);
+"#;
+    let expected = r#"
+class Foo extends Base {
+    constructor(n){
+        super(n);
+        this.value = n;
+        try {
+            risky();
+        } catch (r) {
+            console.log(r);
+        }
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn same_named_inner_constructor_references_follow_the_class_binding() {
+    // Minifiers give the IIFE's inner constructor the same name as the outer
+    // variable. The method's `new e(...)` must end up on the class binding, so
+    // a later rename of the class carries it along.
+    let input = r#"
+var e = function() {
+    function e(e, t) {
+        this.x = e;
+        this.y = t;
+    }
+    var t = e.prototype;
+    t.derive = function(n, r) {
+        return new e(n, r);
+    };
+    return e;
+}();
+exports.Vector = e;
+"#;
+    let output = render(input);
+    assert!(output.contains("export class Vector"), "{output}");
+    assert!(output.contains("return new Vector(n, r);"), "{output}");
+    assert!(!output.contains("new e("), "{output}");
+}
+
+// ── Inlined `_createClass` loops are classes, not the helper ────────────────
+
+const CREATE_CLASS_HELPER: &str = r#"
+var _createClass = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            "value" in r && (r.writable = true);
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), r && e(t, r), t;
+    };
+}();
+"#;
+
+/// A class IIFE whose minifier inlined the `_createClass` loop: it has a
+/// function declaration, a `return`, and `Object.defineProperty(_, _.key, _)`,
+/// exactly the signals the helper detector looks for.
+const INLINED_LOOP_CLASS: &str = r#"
+var Timer = function() {
+    var t;
+    function n() {
+        if (!(this instanceof n)) {
+            throw TypeError("Cannot call a class as a function");
+        }
+        this.timeStore = {};
+    }
+    t = [
+        {
+            key: "start",
+            value: function(t) {
+                this.timeStore[t] = Date.now();
+            }
+        }
+    ];
+    (function(t, n) {
+        for (var r = 0; r < n.length; r++) {
+            var a = n[r];
+            a.enumerable = a.enumerable || false;
+            a.configurable = true;
+            if ("value" in a) {
+                a.writable = true;
+            }
+            Object.defineProperty(t, a.key, a);
+        }
+    })(n.prototype, t);
+    return n;
+}();
+"#;
+
+#[test]
+fn class_iife_with_an_inlined_create_class_loop_is_not_removed_as_the_helper() {
+    // `Widget` converts and triggers the orphaned-helper sweep. `Timer` is not
+    // referenced anywhere; it is dead input code, never a helper, so it stays.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{INLINED_LOOP_CLASS}\n{}",
+        r#"
+var Widget = function() {
+    function t() {}
+    _createClass(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+use(Widget);
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class Widget"), "{output}");
+    assert!(output.contains("Timer"), "{output}");
+    assert!(output.contains("timeStore"), "{output}");
+    assert!(!output.contains("_createClass"), "{output}");
+}
+
+#[test]
+fn class_referenced_only_from_another_inlined_loop_class_survives() {
+    // Bench shape: two classes with inlined loops, `Processor` builds a `Timer`
+    // inside a method, the module only uses `Processor`. Both are classes and
+    // both must survive the sweep that removes the real `_createClass`.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{INLINED_LOOP_CLASS}\n{}",
+        r#"
+var Processor = function() {
+    var t;
+    function n() {
+        if (!(this instanceof n)) {
+            throw TypeError("Cannot call a class as a function");
+        }
+    }
+    t = [
+        {
+            key: "createTimer",
+            value: function() {
+                return new Timer();
+            }
+        }
+    ];
+    (function(t, n) {
+        for (var r = 0; r < n.length; r++) {
+            var a = n[r];
+            a.enumerable = a.enumerable || false;
+            a.configurable = true;
+            if ("value" in a) {
+                a.writable = true;
+            }
+            Object.defineProperty(t, a.key, a);
+        }
+    })(n.prototype, t);
+    return n;
+}();
+var Widget = function() {
+    function t() {}
+    _createClass(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+use(Widget, new Processor());
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("new Timer()"), "{output}");
+    assert!(
+        output.contains("var Timer = ") || output.contains("class Timer"),
+        "{output}"
+    );
+    assert!(!output.contains("_createClass"), "{output}");
+}
+
+#[test]
+fn create_class_helper_referenced_only_by_a_kept_helper_stays() {
+    // `_createClass2` delegates to `_createClass`. `Widget` converts, so
+    // `_createClass2` loses that call, but a direct call on an external
+    // prototype keeps it, and the helper it delegates to must stay with it.
+    let input = format!(
+        "{CREATE_CLASS_HELPER}\n{}",
+        r#"
+var _createClass2 = function() {
+    function e(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            Object.defineProperty(e, r.key, r);
+        }
+    }
+    return function(t, n, r) {
+        return n && e(t.prototype, n), _createClass(t, n, r), t;
+    };
+}();
+var Widget = function() {
+    function t() {}
+    _createClass2(t, [{ key: "text", value: function() { return null; } }]);
+    return t;
+}();
+_createClass2(External.prototype, [{ key: "extra", value: function() {} }]);
+use(Widget);
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class Widget"), "{output}");
+    assert!(output.contains("var _createClass2 = "), "{output}");
+    assert!(output.contains("var _createClass = "), "{output}");
+}
+
+#[test]
+fn class_recovery_is_skipped_when_module_has_dynamic_scope() {
+    // The TS-inheritance index already refused dynamic scope; the base class
+    // rewrite also removes and re-declares bindings, so the module-wide skip
+    // applies to it as well.
+    for hazard in ["eval(code);", "with (scope) { observe(); }"] {
+        let input = format!(
+            r#"
+var Foo = (function() {{
+    function t(name) {{ this.name = name; }}
+    t.prototype.logger = function logger() {{ console.log(this.name); }}
+    return t;
+}}());
+{hazard}
+"#
+        );
+        let output = apply(&input);
+        assert!(!output.contains("class Foo"), "{output}");
+    }
+}
+
+// ============================================================
+// Same-module leftover `.call` / `.apply` on the constructor
+// (or an IIFE parameter bound to it) must skip class recovery.
+// A native class has no [[Call]]; leftover helper subclasses
+// still invoke the parent as a function.
+// ============================================================
+
+/// Babel-loose leftover: base IIFE + helper subclass that still
+/// does `Base_1.call(this)` after the base would otherwise become a class.
+fn leftover_subclass_call_input() -> &'static str {
+    r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var Child = ((Base_1) => {
+    function n() {
+        var t = Base_1.call(this) || this;
+        t._items = [];
+        return t;
+    }
+    inheritsLoose(n, Base_1);
+    return n;
+})(Foo);
+"#
+}
+
+#[test]
+fn same_module_iife_param_call_skips_base_class_recovery() {
+    let output = apply(leftover_subclass_call_input());
+    assert!(
+        !output.contains("class Foo"),
+        "leftover IIFE-param .call must keep the base constructible:\n{output}"
+    );
+    assert!(
+        output.contains("Base_1.call(this)") || output.contains(".call(this)"),
+        "the helper subclass must keep the function .call:\n{output}"
+    );
+}
+
+#[test]
+fn same_module_iife_param_call_skips_base_class_recovery_in_pipeline() {
+    let output = render(leftover_subclass_call_input());
+    assert!(
+        !output.contains("class Foo"),
+        "later rules must not recover the skipped base IIFE:\n{output}"
+    );
+    assert!(
+        !output.contains("class t"),
+        "later rules must keep the returned constructor callable:\n{output}"
+    );
+    assert!(output.contains("function t()"), "{output}");
+    assert!(output.contains("t.prototype.start = function"), "{output}");
+}
+
+#[test]
+fn consumed_typescript_super_call_does_not_permanently_block_base_recovery() {
+    // Reproduce with TypeScript 5.9.3:
+    //   npx tsc input.ts --target ES5 --module none
+    // The derived IIFE can be recovered and consumes `_super.call`; a fresh
+    // analysis must then allow the base IIFE to recover too.
+    let input = r#"
+var __extends = (this && this.__extends) || (function () {
+    var extendStatics = function (d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+    return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+})();
+var Foo = /** @class */ (function () {
+    function Foo() {}
+    Foo.prototype.start = function () { this.onStart(); };
+    Foo.prototype.onStart = function () {};
+    return Foo;
+}());
+var Child = /** @class */ (function (_super) {
+    __extends(Child, _super);
+    function Child() {
+        return _super.call(this) || this;
+    }
+    return Child;
+}(Foo));
+new Child();
+"#;
+    let output = apply(input);
+    assert!(output.contains("class Foo"), "{output}");
+    assert!(output.contains("class Child extends Foo"), "{output}");
+}
+
+#[test]
+fn argument_after_spread_may_feed_callable_iife_parameter() {
+    let input = r#"
+var xs = [];
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var Child = ((Base_1, unused) => {
+    function n() {
+        return Base_1.call(this) || this;
+    }
+    inheritsLoose(n, Base_1);
+    return n;
+})(...xs, Foo);
+new Child();
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Foo"),
+        "an argument after a possibly-empty spread may still feed Base_1:\n{output}"
+    );
+}
+
+#[test]
+fn same_module_iife_param_apply_skips_base_class_recovery() {
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var Child = ((Base_1) => {
+    function n() {
+        return Base_1.apply(this, arguments) || this;
+    }
+    inheritsLoose(n, Base_1);
+    return n;
+})(Foo);
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Foo"),
+        "leftover IIFE-param .apply must keep the base constructible:\n{output}"
+    );
+    assert!(
+        output.contains("Base_1.apply(this, arguments)"),
+        "the helper subclass must keep the function .apply:\n{output}"
+    );
+}
+
+#[test]
+fn same_module_direct_ctor_call_skips_class_recovery() {
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+function make() {
+    return Foo.call(this);
+}
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Foo"),
+        "a same-module Foo.call outside the IIFE must skip class recovery:\n{output}"
+    );
+    assert!(
+        output.contains("Foo.call(this)"),
+        "the leftover .call must remain:\n{output}"
+    );
+}
+
+#[test]
+fn same_module_ident_alias_call_skips_class_recovery() {
+    // `var a = Foo` makes `a.call` a call of the IIFE's constructor.
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var a = Foo;
+function make() {
+    return a.call(this);
+}
+"#;
+    let output = apply(input);
+    assert!(
+        !output.contains("class Foo"),
+        "a .call through a plain alias must skip class recovery:\n{output}"
+    );
+    assert!(output.contains("a.call(this)"), "{output}");
+}
+
+#[test]
+fn isolated_ctor_without_call_or_apply_still_recovers() {
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var Bar = (function() {
+    function t() {}
+    t.prototype.stop = function() { this.onStop(); };
+    return t;
+})();
+"#;
+    let expected = r#"
+class Foo {
+    start() { this.onStart(); }
+}
+class Bar {
+    stop() { this.onStop(); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn inherits_loose_without_call_or_apply_still_recovers_base() {
+    // `inheritsLoose` itself is valid on a native class (Object.create).
+    // Only leftover .call / .apply is the skip trigger.
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+var Child = ((Base_1) => {
+    function n() {}
+    inheritsLoose(n, Base_1);
+    return n;
+})(Foo);
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("class Foo"),
+        "inheritsLoose without .call/.apply must not skip the base:\n{output}"
+    );
+    assert!(
+        output.contains("inheritsLoose"),
+        "the unrecognized helper subclass should stay an IIFE:\n{output}"
+    );
+}
+
+#[test]
+fn inner_shadow_call_does_not_block_outer_class_recovery() {
+    // Binding identity is (sym, ctxt). An inner function named Foo that
+    // calls itself is not the outer constructor binding.
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+function wrapper() {
+    function Foo() {
+        Foo.call(this);
+    }
+    return Foo;
+}
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("class Foo"),
+        "an inner shadow Foo.call must not block outer class recovery:\n{output}"
+    );
+    assert!(
+        output.contains("Foo.call(this)"),
+        "the inner shadow .call must remain:\n{output}"
+    );
+}
+
+#[test]
+fn nested_param_same_short_name_call_does_not_block() {
+    let input = r#"
+var Foo = (function() {
+    function t() {}
+    t.prototype.start = function() { this.onStart(); };
+    return t;
+})();
+function wrapper() {
+    function inner(Foo) {
+        Foo.call(this);
+    }
+    return inner;
+}
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("class Foo"),
+        "a nested param with the same printed name is not the constructor:\n{output}"
+    );
+    assert!(
+        output.contains("Foo.call(this)"),
+        "the nested param .call must remain:\n{output}"
+    );
+}
+
+#[test]
+fn class_helper_in_a_block_keeps_uses_in_a_sibling_block() {
+    let input = format!(
+        r#"
+function outer() {{
+  {{
+    {CREATE_CLASS_HELPER}
+    var Widget = function() {{
+      function t() {{}}
+      _createClass(t, [{{ key: "text", value: function() {{ return null; }} }}]);
+      return t;
+    }}();
+    use(Widget);
+  }}
+  {{ use(_createClass); }}
+}}
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class Widget"), "{output}");
+    assert!(output.contains("var _createClass ="), "{output}");
+}
+
+#[test]
+fn class_helper_is_removed_after_its_nested_block_use_is_consumed() {
+    let input = format!(
+        r#"
+function outer() {{
+  {{
+    {CREATE_CLASS_HELPER}
+    var First = function() {{
+      function t() {{}}
+      _createClass(t, [{{ key: "text", value: function() {{ return null; }} }}]);
+      return t;
+    }}();
+    use(First);
+  }}
+}}
+"#
+    );
+    let output = apply(&input);
+    assert!(output.contains("class First"), "{output}");
+    assert!(!output.contains("var _createClass ="), "{output}");
+}
+
+// ── Inlined `_defineProperties` loop IIFE in the class wrapper ──────────────
+
+/// The lowered `_defineProperties` loop as the minifier inlines it into the
+/// class wrapper, with `{TARGET}` and `{PROPS}` as its call arguments.
+const DEFINE_PROPERTIES_LOOP_IIFE: &str = r#"(function(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            r.configurable = true;
+            if ("value" in r) {
+                r.writable = true;
+            }
+            Object.defineProperty(e, r.key, r);
+        }
+    })({TARGET}, {PROPS});"#;
+
+fn define_properties_loop_iife(target: &str, props: &str) -> String {
+    DEFINE_PROPERTIES_LOOP_IIFE
+        .replace("{TARGET}", target)
+        .replace("{PROPS}", props)
+}
+
+#[test]
+fn inline_define_properties_loop_with_methods_temp_is_recovered() {
+    let input = format!(
+        r#"
+var Store = function() {{
+    var e;
+    function t(n) {{
+        this.items = n;
+    }}
+    e = [
+        {{ key: "get", value: function(e) {{ return this.items[e]; }} }},
+        {{ key: "size", get: function() {{ return this.items.length; }} }}
+    ];
+    {}
+    return t;
+}}();
+"#,
+        define_properties_loop_iife("t.prototype", "e")
+    );
+    let expected = r#"
+class Store {
+    constructor(n) {
+        this.items = n;
+    }
+    get(e) { return this.items[e]; }
+    get size() { return this.items.length; }
+}
+"#;
+    assert_eq_normalized(&apply(&input), expected);
+}
+
+#[test]
+fn inline_define_properties_loop_on_constructor_defines_static_members() {
+    // Babel 7.16+ `_createClass` also seals `prototype`; a class's own
+    // `prototype` is already non-writable, so the seal is part of the class.
+    let input = format!(
+        r#"
+var Parser = function() {{
+    function e() {{}}
+    {}
+    Object.defineProperty(e, "prototype", {{ writable: false }});
+    return e;
+}}();
+"#,
+        define_properties_loop_iife("e", r#"[{ key: "MAP", get: function() { return 1; } }]"#)
+    );
+    let expected = r#"
+class Parser {
+    static get MAP() { return 1; }
+}
+"#;
+    assert_eq_normalized(&apply(&input), expected);
+}
+
+#[test]
+fn inline_define_properties_loop_without_configurable_default_stays_iife() {
+    // Without `configurable = true` the loop defines non-configurable
+    // properties, which class methods are not.
+    let input = r#"
+var Store = function() {
+    function t() {}
+    (function(e, t) {
+        for (var n = 0; n < t.length; n++) {
+            var r = t[n];
+            r.enumerable = r.enumerable || false;
+            if ("value" in r) {
+                r.writable = true;
+            }
+            Object.defineProperty(e, r.key, r);
+        }
+    })(t.prototype, [{ key: "get", value: function() { return 1; } }]);
+    return t;
+}();
+"#;
+    let output = apply(input);
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(
+        output.contains("Object.defineProperty(e, r.key, r)"),
+        "{output}"
+    );
+}
+
+#[test]
+fn inline_define_properties_loop_with_escaping_methods_temp_stays_iife() {
+    // `e` is read again after the loop, so the array is not a temporary the
+    // class conversion may drop.
+    let input = format!(
+        r#"
+var Store = function() {{
+    var e;
+    function t() {{}}
+    e = [{{ key: "get", value: function() {{ return 1; }} }}];
+    {}
+    t.methods = e;
+    return t;
+}}();
+"#,
+        define_properties_loop_iife("t.prototype", "e")
+    );
+    let output = apply(&input);
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("t.methods = e"), "{output}");
+}
+
+#[test]
+fn inline_define_properties_loop_on_another_prototype_stays_iife() {
+    let input = format!(
+        r#"
+var Store = function() {{
+    function t() {{}}
+    {}
+    return t;
+}}();
+"#,
+        define_properties_loop_iife(
+            "Other.prototype",
+            r#"[{ key: "get", value: function() { return 1; } }]"#
+        )
+    );
+    let output = apply(&input);
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("Other.prototype"), "{output}");
+}
+
+#[test]
+fn minified_inline_define_properties_loop_recovers_through_pipeline() {
+    let input = r#"var Store=function(){var e;function t(n){!function(e,t){if(!(e instanceof t))throw new TypeError("Cannot call a class as a function")}(this,t),this.items=n}return e=[{key:"get",value:function(e){return this.items[e]}}],function(e,t){for(var n=0;n<t.length;n++){var r=t[n];r.enumerable=r.enumerable||!1,r.configurable=!0,"value"in r&&(r.writable=!0),Object.defineProperty(e,r.key,r)}}(t.prototype,e),t}();use(Store);"#;
+    let output = render(input);
+    assert!(output.contains("class Store"), "{output}");
+    assert!(output.contains("get(e)"), "{output}");
+    assert!(!output.contains("defineProperty"), "{output}");
+    assert!(!output.contains("Cannot call a class"), "{output}");
+}
+
+#[test]
+fn inline_define_properties_loop_with_inlined_guard_recovers_through_pipeline() {
+    // Produced by @swc/core minify: both `_classCallCheck` and
+    // `_defineProperties` are inlined into the class wrapper, and the guard's
+    // `new` is dropped.
+    let input = r#"var Store=function(){var e;function t(n){if(!(this instanceof t))throw TypeError("Cannot call a class as a function");this.items=n}return e=[{key:"get",value:function(e){return this.items[e]}}],function(e,t){for(var n=0;n<t.length;n++){var r=t[n];r.enumerable=r.enumerable||!1,r.configurable=!0,"value"in r&&(r.writable=!0),Object.defineProperty(e,r.key,r)}}(t.prototype,e),t}();use(new Store([]));"#;
+    let output = render(input);
+    assert!(output.contains("class Store"), "{output}");
+    assert!(output.contains("get(e)"), "{output}");
+    assert!(!output.contains("defineProperty"), "{output}");
+    assert!(!output.contains("Cannot call a class"), "{output}");
+}
+
+// ── Class wrapper flattened into the enclosing statement list ───────────────
+
+/// A class whose minifier removed the wrapper IIFE, as it reaches UnEs6Class:
+/// `var e, t, Store = (e = function e() {...}, t = [...], loop(e.prototype, t), e)`
+/// split into statements. `{EXTRA}` is inserted before the alias.
+fn flattened_class(ctor: &str, extra: &str, after: &str) -> String {
+    format!(
+        r#"
+var e;
+var t;
+e = {ctor};
+t = [
+    {{ key: "get", value: function(e) {{ return this.items[e]; }} }},
+    {{ key: "size", get: function() {{ return this.items.length; }} }}
+];
+{}
+{extra}
+var Store = e;
+use(new Store([]));
+{after}
+"#,
+        define_properties_loop_iife("e.prototype", "t")
+    )
+}
+
+const FLAT_CTOR: &str = r#"function e(n) {
+    if (!(this instanceof e)) {
+        throw TypeError("Cannot call a class as a function");
+    }
+    this.items = n;
+}"#;
+
+const FLAT_EXPECTED: &str = r#"
+class Store {
+    constructor(n) {
+        this.items = n;
+    }
+    get(e) { return this.items[e]; }
+    get size() { return this.items.length; }
+}
+use(new Store([]));
+"#;
+
+#[test]
+fn flattened_class_run_is_recovered() {
+    let output = apply(&flattened_class(FLAT_CTOR, "", ""));
+    assert_eq_normalized(&output, FLAT_EXPECTED);
+}
+
+#[test]
+fn flattened_class_run_with_anonymous_constructor_is_recovered() {
+    let ctor = "function(n) { this.items = n; }";
+    let output = apply(&flattened_class(ctor, "", ""));
+    assert_eq_normalized(&output, FLAT_EXPECTED);
+}
+
+#[test]
+fn flattened_class_run_with_prototype_seal_is_recovered() {
+    let seal = r#"Object.defineProperty(e, "prototype", { writable: false });"#;
+    let output = apply(&flattened_class(FLAT_CTOR, seal, ""));
+    assert_eq_normalized(&output, FLAT_EXPECTED);
+}
+
+#[test]
+fn flattened_class_run_whose_constructor_escapes_stays() {
+    // `e` is read after the alias, so removing its declaration would leave a
+    // dangling reference.
+    let output = apply(&flattened_class(FLAT_CTOR, "", "other(e);"));
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("other(e)"), "{output}");
+}
+
+#[test]
+fn flattened_class_run_whose_methods_temp_escapes_stays() {
+    let output = apply(&flattened_class(FLAT_CTOR, "", "other(t);"));
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("other(t)"), "{output}");
+}
+
+#[test]
+fn flattened_class_run_with_top_level_this_stays() {
+    // Folding the run into a function would rebind `this`.
+    let output = apply(&flattened_class(FLAT_CTOR, "e.owner = this;", ""));
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("e.owner = this"), "{output}");
+}
+
+#[test]
+fn flattened_class_run_whose_method_reads_the_outer_name_stays() {
+    // The static factory reads the outer `e`, not the class name.
+    let statics = define_properties_loop_iife(
+        "e",
+        r#"[{ key: "create", value: function() { return new e([]); } }]"#,
+    );
+    let output = apply(&flattened_class(FLAT_CTOR, &statics, ""));
+    assert!(!output.contains("class Store"), "{output}");
+    assert!(output.contains("new e([])"), "{output}");
+}
+
+#[test]
+fn swc_flattened_class_recovers_through_pipeline() {
+    // Produced by @babel/preset-env 7.12 (IE 11), then @swc/core minify with
+    // compress and mangle.
+    let input = r#""use strict";var e,t,n=(e=function e(t){if(!(this instanceof e))throw TypeError("Cannot call a class as a function");this.items=t},t=[{key:"get",value:function(e){return this.items[e]}},{key:"size",get:function(){return this.items.length}}],function(e,t){for(var n=0;n<t.length;n++){var i=t[n];i.enumerable=i.enumerable||!1,i.configurable=!0,"value"in i&&(i.writable=!0),Object.defineProperty(e,i.key,i)}}(e.prototype,t),e),i=new n(["a","b"]),r=new n(["c"]);use(i.get(1),i.size,r.size);"#;
+    let output = render(input);
+    assert!(output.contains("class "), "{output}");
+    assert!(output.contains("get size()"), "{output}");
+    assert!(!output.contains("defineProperty"), "{output}");
+    assert!(!output.contains("Cannot call a class"), "{output}");
+}

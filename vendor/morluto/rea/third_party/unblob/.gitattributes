@@ -1,0 +1,3 @@
+tests/integration/** -filter -diff -merge -text
+tests/files/** -filter -diff -merge -text
+docs/demo.gif -filter -diff -merge -text

@@ -1,0 +1,113 @@
+---
+title: Troubleshooting
+description: What to check when Wakaru refuses, warns, or returns less than you expected.
+---
+
+## Very large inputs are slow or run out of memory
+
+Peak memory depends heavily on the largest module after splitting.
+Splitting a bundle into many small modules reduces that cost. An input that
+does not split keeps one giant syntax tree alive through the whole run and
+can use many gigabytes.
+
+- Confirm the bundle actually splits. `--json` reports the module count.
+- Give Wakaru the entry and its chunks as separate files, not one
+  concatenated file.
+- If the input is a single huge file that Wakaru cannot split, expect high
+  memory use.
+
+## The output looks different from the input
+
+Changes such as helpers becoming `async` functions or `require` becoming
+`import` are expected. [Rewrite levels](/guides/rewrite-levels) explain
+which recovery choices may affect behavior.
+
+If the output behaves differently, [open an issue](https://github.com/pionxzh/wakaru/issues)
+with your Wakaru version, command, input, and the behavior you expected.
+A small reproduction helps, but you do not need to diagnose the cause first.
+
+## The bundle came out as one file
+
+One output file can mean Wakaru found no useful module boundaries. Add
+`--json` and check `detected_formats`: an empty list means no bundle format
+was detected, so the explicit input was decompiled as one module.
+
+- Check [Supported inputs](/reference/supported-inputs#bundlers), including
+  the limits for your format.
+- Use a production build. Wakaru does not unwrap webpack's `eval` devtool
+  output, where module bodies are stored as strings.
+- If you used `--unpack=strict`, try ordinary `--unpack` to allow heuristic
+  splitting.
+
+If the bundle still does not split as expected,
+[report it](https://github.com/pionxzh/wakaru/issues) with the input and command.
+
+## Imports point to missing files
+
+Check that you supplied the entry and its chunks from the same build. A
+bundle may load code from another file that Wakaru never received:
+
+```bash
+npx wakaru entry.js chunk.js --unpack -o out/
+```
+
+Use a fresh output directory. If you have the whole build directory, you can
+pass that instead. See [Inputs](/guides/unpack-a-bundle#inputs).
+
+Directory scans skip files they do not recognize as bundles or chunks. If
+a missing JavaScript file exists in the build but was skipped, include it as
+an explicit input. Wakaru cannot recover code from a chunk you do not have.
+
+If all the relevant inputs are present, check
+[Output & warnings](/reference/output-and-warnings#validating-an-output-tree)
+for how to investigate the broken reference.
+
+## The run reports failures
+
+Some files may have been written before the command failed. Inspect the
+warnings before using that partial output. With `--json`, `failed > 0` or a
+warning with `is_error: true` means the run failed, even if other modules
+were recovered successfully.
+
+See [Output & warnings](/reference/output-and-warnings#warnings) for how to
+read the result and investigate diagnostics.
+
+## The output directory already exists
+
+Wakaru refuses to write into a directory that is not empty, and refuses to
+overwrite an existing output file. Pass `--force` to allow overwrites.
+Use a fresh directory to avoid mixing new output with files from an earlier run.
+
+## "no bundle or chunk files detected in directory input"
+
+A directory scan found nothing it recognizes. Directory scans only look at
+`.js`, `.mjs`, and `.cjs` files, and skip hidden paths and `node_modules`.
+Point Wakaru at the bundle file directly instead of the directory. A Bun
+single-file executable also needs an explicit path. Directory scans do not
+pick it up.
+
+## `--source-map` is rejected with `--unpack`
+
+By design. Unpacked modules get new positions, and a bundle-level map would
+assign wrong or duplicate names to them. Two options:
+
+- The map has `sourcesContent`. Skip decompiling and pull the original files
+  out with `wakaru extract`.
+- The map only has names. Decompile a single file with `--source-map`, or
+  unpack without it.
+
+See [Source maps](/guides/source-maps) for both paths.
+
+## React Native: nothing is recognized
+
+Wakaru needs the plain JavaScript bundle that Metro emits. Hermes bytecode
+(`.hbc`) and RAM bundles are not JavaScript and are out of scope.
+
+## Vue SFC recovery returned JavaScript
+
+Recovery is best-effort. If no `.vue` artifact appears, keep the JavaScript
+to inspect the component and check the module's `status` in `--json` output.
+With `-o App.vue`, recovery failure produces an error instead of falling
+back to JavaScript.
+
+See [Vue SFC](/guides/vue-sfc#checking-what-happened) for the recovery statuses.

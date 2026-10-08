@@ -1,0 +1,1621 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "esbuild-minify",
+    "version": "0.23.1",
+    "configHash": "5cc7678984b5d2f567c58fa41b6aef47740bd1d8d00a72443d6b759eeeaf1a6f"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "scope"
+    ],
+    "paths": [
+      "test/language/statements/block",
+      "test/language/statements/const",
+      "test/language/statements/function",
+      "test/language/expressions/function",
+      "test/language/expressions/arrow-function",
+      "test/language/statements/with"
+    ]
+  },
+  "totals": {
+    "discovered": 1396,
+    "runnable": 1396,
+    "skipped": 0,
+    "unsupported": 10,
+    "rejected": 187,
+    "passed": 1199,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/arrow-function/arrow/binding-tests-1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-arrow-this",
+      "fingerprint": "49eb1ba1732a38262e178b5fc9f3f8d3befc993f14096630fdd2f9e9a9afbc2d",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: This binding initialization was incorrect for arrow capturing this from closure. Expected SameValue(«[object Object]», «[object Object]») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/arrow/binding-tests-2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-arrow-this",
+      "fingerprint": "49eb1ba1732a38262e178b5fc9f3f8d3befc993f14096630fdd2f9e9a9afbc2d",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: This binding initialization was incorrect for arrow capturing this from closure. Expected SameValue(«[object Object]», «[object Object]») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/arrow/binding-tests-3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-arrow-this",
+      "fingerprint": "49eb1ba1732a38262e178b5fc9f3f8d3befc993f14096630fdd2f9e9a9afbc2d",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: This binding initialization was incorrect for arrow capturing this from closure. Expected SameValue(«[object Object]», «[object Object]») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "swc-array-binding-elision",
+      "fingerprint": "9121f62b3dcd89cc8c1ee010eb2c3940b2e919fb397ad7d905e57b9eb23e6ee7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elision.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "swc-array-binding-elision",
+      "fingerprint": "cec832ef1e846cfc6fc28d995e7e40c43136a94a54238a14b988a483625c992d",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/throw-new.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "swc-print-new-arrow-parens",
+      "fingerprint": "b99412fcd75bdd9126d9988f79604ffab563dd6c54e6190ad1ff8038b902d62f",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Malformed arrow function parameter list"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/unscopables-with-in-nested-fn.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/unscopables-with.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/expressions/function/name.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "fde434471186ccfd32bdb650b9af7b7a0a07e60a1ad28bfdc26372601bc751ef",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: name descriptor value should be func; name value should be func"
+    },
+    {
+      "path": "test/language/expressions/function/static-init-await-reference.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "48d37538e0f533ff1c316b8d36cd586a76d4f4aee813691965d0d4b28588aeb0",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:14:4: ERROR: Cannot use \"await\" as an identifier here:"
+    },
+    {
+      "path": "test/language/expressions/function/unscopables-with-in-nested-fn.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/unscopables-with.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/block/tco-stmt-list.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/block/tco-stmt.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/const/block-local-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/const/fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/const/fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/const/fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "82a4e1c6891c50846d49fbc2dd343ab074e778c61428e45ba5e5ab1d24c97f54",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected true but got false"
+    },
+    {
+      "path": "test/language/statements/const/function-local-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/const/global-use-before-initialization-in-prior-statement.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "1518fbb5c85568c92930631ff8374d7fd00baa06287e3406bad527ab19161843",
+      "summary": "Error: sloppy: expected runtime ReferenceError, got success no error: success"
+    },
+    {
+      "path": "test/language/statements/function/S13.2.2_A17_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "76b00718f00876f7d18f3e61ceeb840f4cfee49bdf55998762259e6c9c9a90d7",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/function/S13.2.2_A17_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "2cee1a35a2ff32ee16557b3686b3e28ff2918f1ee7ee0c70faa1ce270ac64af7",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: __obj is not defined"
+    },
+    {
+      "path": "test/language/statements/function/S13.2.2_A18_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "f542f415166e641b80a352522e6d4126249dc166082ae02be41161fc1f23f697",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #4: this.b === true. Actual: this.b ===undefined"
+    },
+    {
+      "path": "test/language/statements/function/S13.2.2_A18_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "eea0281f7d430b2b27ae928c6159e59ffe9ab3d549916e682d8df98b255a3c9e",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: callee is not defined"
+    },
+    {
+      "path": "test/language/statements/function/S13.2.2_A19_T7.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "b3b919bb99628653e16444092dd71d8080f7a0b57c5ee69b780b84146685dd49",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #2: this.hasOwnProperty('__func') === true"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/function/scope-param-elem-var-open.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "b4d5ada25149f4da1f1aa8d4f015df9fe8f22a4dbf64e8eb146eb9dcc11ed44b",
+      "summary": "Error: sloppy: expected success, got runtime TypeError: probe1 is not a function"
+    },
+    {
+      "path": "test/language/statements/function/unscopables-with-in-nested-fn.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/function/unscopables-with.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "548e5b5b912c7419473a37f4a29783f914685d178994f560b1ab3aaced6de550",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: The value of globalThis.v is 1 Expected SameValue(«undefined», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.10_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.10_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.10_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.10_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.10_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.11_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.11_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.11_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.11_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "015564adeb9febfbff998a296134c8550b70e0e72068ecf37967337054588326",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #0: result === \"value\". Actual:  result ===ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.11_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.12_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.12_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.12_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.12_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.12_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.1_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.1_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.1_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "1a2f28e0008e94ca47b17cd5017776ff0699edc9d778eadee1e0d449e915780c",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p2 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.4_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.4_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.4_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.4_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.4_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.5_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.5_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.5_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.5_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.5_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.6_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.6_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.6_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.7_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.7_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.7_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.7_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.7_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.8_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.8_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.8_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.8_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.8_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.9_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.9_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.9_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.10_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.10_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.10_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.10_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.10_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.11_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.11_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.12_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.12_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.12_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.12_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.12_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.1_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.1_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.1_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.2_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.2_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.2_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.2_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.2_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.3_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.3_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.3_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.3_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.4_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.4_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.4_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.4_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.4_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.5_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.5_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.5_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.5_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.5_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.6_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.6_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.6_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.7_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.7_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.7_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.7_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.7_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.8_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.8_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.8_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.8_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.8_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.9_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.9_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.9_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "094739844e30acc5daf952ef54c53de5bc459d3130788ce19c33df312b819e18",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: p1 is not defined"
+    },
+    {
+      "path": "test/language/statements/with/get-binding-value-call-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a7bd9e98726fab40a01940a073f1c030fb68151a4d93d8e64723fbcd7c44ede1",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:Object, get:Symbol(Symbol.unscopables), get:Object] and expected [has:Object, get:Symbol(Symbol.unscopables), has:Object, get:Object] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/get-binding-value-idref-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a7bd9e98726fab40a01940a073f1c030fb68151a4d93d8e64723fbcd7c44ede1",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:Object, get:Symbol(Symbol.unscopables), get:Object] and expected [has:Object, get:Symbol(Symbol.unscopables), has:Object, get:Object] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "acac106221921667e68abe8a554ace60dfe055231b32544f53c4fc2b899ff1d9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "acac106221921667e68abe8a554ace60dfe055231b32544f53c4fc2b899ff1d9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-binding-deleted-with-typed-array-in-proto-chain-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-idref-compound-assign-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c2111c92f68c10c69d18ccfd85132a2c26623b425df39cd0320bb4a6c9ea68f2",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), get:p, has:p, get:Symbol(Symbol.unscopables), set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-idref-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "486a3a37bf85e7e25e6d0855c4f72a63ca5b6d9637cb861646d2389bc6f8f674",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/unscopables-inc-dec.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c41eb82fa6973cb6b6b2a0e425d8bdf0eca1bd9322c8aa4032b43060dd7b0fe4",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«2», «1») to be true"
+    }
+  ]
+}

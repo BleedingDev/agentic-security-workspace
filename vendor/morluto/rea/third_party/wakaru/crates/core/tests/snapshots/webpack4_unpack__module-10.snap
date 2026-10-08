@@ -1,0 +1,192 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import * as r from "./module-0.js";
+import { q } from "./module-0.js";
+import * as l from "./module-2.js";
+import { k } from "./module-2.js";
+import { a as a_1 } from "./module-6.js";
+import { a as a_2 } from "./module-9.js";
+const o = {
+    done: true,
+    value: undefined
+};
+const i = {};
+function a(e) {
+    if (q.channel(e)) {
+        return "channel";
+    }
+    if (Array.isArray(e)) {
+        return String(e.map((e)=>String(e)));
+    }
+    return String(e);
+}
+function u(e, t, n = "iterator") {
+    let a;
+    let u = t;
+    function l(t, n) {
+        if (u === i) {
+            return o;
+        }
+        if (n) {
+            u = i;
+            throw n;
+        }
+        if (a) {
+            a(t);
+        }
+        const r = e[u]();
+        const l = r[0];
+        const c = r[1];
+        const s = r[2];
+        a = s;
+        if ((u = l) === i) {
+            return o;
+        }
+        return c;
+    }
+    return r.t(l, (e)=>l(null, e), n, true);
+}
+export function b(e, t, ...r) {
+    const s = {
+        done: false,
+        value: l.s(e)
+    };
+    let f;
+    const d = (e)=>f = e;
+    return u({
+        q1 () {
+            return [
+                "q2",
+                s,
+                d
+            ];
+        },
+        q2 () {
+            if (f === a_1) {
+                return [
+                    i
+                ];
+            }
+            return [
+                "q1",
+                ((e)=>({
+                        done: false,
+                        value: k(t, ...r, e)
+                    }))(f)
+            ];
+        }
+    }, "q1", `takeEvery(${a(e)}, ${t.name})`);
+}
+export function d(e, t, ...r) {
+    const s = {
+        done: false,
+        value: l.s(e)
+    };
+    const f = (e)=>({
+            done: false,
+            value: k(t, ...r, e)
+        });
+    let d;
+    let p;
+    const h = (e)=>d = e;
+    const m = (e)=>p = e;
+    return u({
+        q1 () {
+            return [
+                "q2",
+                s,
+                m
+            ];
+        },
+        q2 () {
+            if (p === a_1) {
+                return [
+                    i
+                ];
+            }
+            if (d) {
+                return [
+                    "q3",
+                    ((e)=>({
+                            done: false,
+                            value: l.f(e)
+                        }))(d)
+                ];
+            }
+            return [
+                "q1",
+                f(p),
+                h
+            ];
+        },
+        q3 () {
+            return [
+                "q1",
+                f(p),
+                h
+            ];
+        }
+    }, "q1", `takeLatest(${a(e)}, ${t.name})`);
+}
+export function f(e, t, n, ...s) {
+    let p;
+    let h;
+    const m = {
+        done: false,
+        value: l.a(t, a_2.sliding(1))
+    };
+    const y = {
+        done: false,
+        value: l.e(r.m, e)
+    };
+    const v = (e)=>p = e;
+    const b = (e)=>h = e;
+    return u({
+        q1 () {
+            return [
+                "q2",
+                m,
+                b
+            ];
+        },
+        q2 () {
+            return [
+                "q3",
+                {
+                    done: false,
+                    value: l.s(h)
+                },
+                v
+            ];
+        },
+        q3 () {
+            if (p === a_1) {
+                return [
+                    i
+                ];
+            }
+            return [
+                "q4",
+                ((e)=>({
+                        done: false,
+                        value: k(n, ...s, e)
+                    }))(p)
+            ];
+        },
+        q4 () {
+            return [
+                "q2",
+                y
+            ];
+        }
+    }, "q1", `throttle(${a(t)}, ${n.name})`);
+}
+const h = (e)=>`import { ${e} } from 'redux-saga' has been deprecated in favor of import { ${e} } from 'redux-saga/effects'.
+The latter will not work with yield*, as helper effects are wrapped automatically for you in fork effect.
+Therefore yield ${e} will return task descriptor to your saga and execute next lines of code.`;
+const m = r.n(b, h("takeEvery"));
+export const c = r.n(d, h("takeLatest"));
+export const e = r.n(f, h("throttle"));
+export { m as a };

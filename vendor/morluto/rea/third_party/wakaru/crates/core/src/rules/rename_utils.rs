@@ -1,0 +1,1261 @@
+use crate::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::cell::Cell;
+
+use swc_core::atoms::Atom;
+use swc_core::common::{Mark, SyntaxContext};
+use swc_core::ecma::ast::{
+    ArrowExpr, AssignPat, BindingIdent, BlockStmt, CatchClause, Class, ClassDecl, ClassExpr, Decl,
+    DefaultDecl, ExportNamedSpecifier, Expr, FnDecl, FnExpr, Function, Ident, ImportDecl,
+    ImportNamedSpecifier, ImportSpecifier, JSXElementName, KeyValuePatProp, KeyValueProp,
+    MemberProp, Module, ModuleDecl, ModuleExportName, ModuleItem, ObjectPatProp, Pat, Prop,
+    PropName, Stmt, VarDecl, VarDeclKind, VarDeclarator,
+};
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+use super::decl_utils::{collect_decl_binding_ids, collect_decl_names, collect_pat_names};
+
+pub(crate) use crate::analysis::BindingId;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingRename {
+    pub old: BindingId,
+    pub new: Atom,
+}
+
+/// True when the first character is an ASCII lowercase letter — the JSX
+/// intrinsic-tag convention: `<kb/>` references the string tag "kb", not a
+/// binding, so a binding used as a JSX element name must never be renamed to
+/// a lowercase name. JSX transforms (Babel, TypeScript, swc) test `/^[a-z]/`,
+/// so a name starting with a non-ASCII lowercase letter (e.g. `σ`) still
+/// references a component binding.
+pub(crate) fn starts_with_lowercase(value: &str) -> bool {
+    value.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+}
+
+/// Binding ids used as JSX element names (`<Tag/>`).
+pub(crate) fn collect_jsx_tag_bindings(module: &Module) -> HashSet<BindingId> {
+    struct TagCollector {
+        bindings: HashSet<BindingId>,
+    }
+    impl Visit for TagCollector {
+        fn visit_jsx_element_name(&mut self, name: &JSXElementName) {
+            if let JSXElementName::Ident(ident) = name {
+                self.bindings.insert((ident.sym.clone(), ident.ctxt));
+            }
+        }
+    }
+    let mut collector = TagCollector {
+        bindings: HashSet::default(),
+    };
+    module.visit_with(&mut collector);
+    collector.bindings
+}
+
+/// Names used by unresolved identifier references in this module.
+///
+/// A transform that introduces a module-scoped binding with one of these
+/// names would capture the reference even though their syntax contexts differ
+/// before the transform. Visit identifiers directly so write targets and JSX
+/// element names are covered as well as value-position expressions.
+pub(crate) fn collect_unresolved_reference_names(
+    module: &Module,
+    unresolved_mark: Mark,
+) -> HashSet<Atom> {
+    struct Collector {
+        unresolved_mark: Mark,
+        names: HashSet<Atom>,
+    }
+
+    impl Visit for Collector {
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.ctxt.outer() == self.unresolved_mark {
+                self.names.insert(ident.sym.clone());
+            }
+        }
+
+        fn visit_jsx_element_name(&mut self, name: &swc_core::ecma::ast::JSXElementName) {
+            // A lowercase element name is an intrinsic tag string, not a
+            // reference, even though the resolver stamps it with the
+            // unresolved mark.
+            match name {
+                swc_core::ecma::ast::JSXElementName::Ident(ident)
+                    if starts_with_lowercase(&ident.sym) => {}
+                _ => name.visit_children_with(self),
+            }
+        }
+    }
+
+    let mut collector = Collector {
+        unresolved_mark,
+        names: HashSet::default(),
+    };
+    module.visit_with(&mut collector);
+    collector.names
+}
+
+/// Like [`collect_unresolved_reference_names`], but only names that are real
+/// free references. The resolver visits export specifiers with
+/// `IdentType::Ref`, so the *exported* half of `export { o as compute }` and
+/// the name in `export * as ns` carry the unresolved mark without referencing
+/// anything; a caller deciding whether a name is safe to introduce as a binding
+/// must not treat those as occupied.
+pub(crate) fn collect_free_reference_names(
+    module: &Module,
+    unresolved_mark: Mark,
+) -> HashSet<Atom> {
+    struct Collector {
+        unresolved_mark: Mark,
+        names: HashSet<Atom>,
+    }
+
+    impl Visit for Collector {
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.ctxt.outer() == self.unresolved_mark {
+                self.names.insert(ident.sym.clone());
+            }
+        }
+
+        fn visit_jsx_element_name(&mut self, name: &swc_core::ecma::ast::JSXElementName) {
+            // A lowercase element name is an intrinsic tag string, not a
+            // reference, even though the resolver stamps it with the
+            // unresolved mark.
+            match name {
+                swc_core::ecma::ast::JSXElementName::Ident(ident)
+                    if starts_with_lowercase(&ident.sym) => {}
+                _ => name.visit_children_with(self),
+            }
+        }
+
+        fn visit_export_named_specifier(&mut self, spec: &ExportNamedSpecifier) {
+            if let ModuleExportName::Ident(orig) = &spec.orig {
+                self.visit_ident(orig);
+            }
+        }
+
+        fn visit_export_namespace_specifier(
+            &mut self,
+            _: &swc_core::ecma::ast::ExportNamespaceSpecifier,
+        ) {
+        }
+
+        fn visit_export_default_specifier(
+            &mut self,
+            _: &swc_core::ecma::ast::ExportDefaultSpecifier,
+        ) {
+        }
+    }
+
+    let mut collector = Collector {
+        unresolved_mark,
+        names: HashSet::default(),
+    };
+    module.visit_with(&mut collector);
+    collector.names
+}
+
+/// Collect local bindings whose public names are pinned to the binding name
+/// by an export *declaration* (`export const X` / `export function X` /
+/// `export class X`): renaming those would change the module's public API.
+///
+/// Bindings that only appear in export *specifiers* (`export { c }`,
+/// `export { c as Z }`) are deliberately not collected: `BindingRenamer`
+/// preserves the public name by rewriting the specifier and inserting an
+/// alias when needed (`export { NewName as c }`), so renaming the local is
+/// safe and keeps readability. Default exports are likewise excluded —
+/// renaming the local of `export default function f() {}` does not change
+/// the public name `default`.
+pub(crate) fn collect_exported_binding_ids(module: &Module) -> HashSet<BindingId> {
+    collect_exported_binding_ids_from_items(&module.body)
+}
+
+pub(crate) fn collect_exported_binding_ids_from_items(items: &[ModuleItem]) -> HashSet<BindingId> {
+    let mut bindings = HashSet::default();
+
+    for item in items {
+        if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item {
+            collect_decl_binding_ids(&export.decl, &mut bindings);
+        }
+    }
+
+    bindings
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TopLevelBindingKind {
+    Var { declarator_index: usize },
+    Fn,
+    Class,
+}
+
+#[derive(Clone, Debug)]
+pub struct TopLevelBindingInfo {
+    pub id: BindingId,
+    pub item_index: usize,
+    pub exported: bool,
+    pub kind: TopLevelBindingKind,
+}
+
+#[derive(Debug, Default)]
+pub struct RenameShadowIndex {
+    /// The bindings `for_bindings` analyzed. A query for any other binding
+    /// has no scope information behind it, so it must not be answered
+    /// "no shadowing" just because the map has no entry.
+    indexed_bindings: HashSet<BindingId>,
+    forbidden_names_by_binding: HashMap<BindingId, HashSet<Atom>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static RENAME_SHADOW_INDEX_BUILDS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_rename_shadow_index_build_count() {
+    RENAME_SHADOW_INDEX_BUILDS.with(|builds| builds.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn rename_shadow_index_build_count() -> usize {
+    RENAME_SHADOW_INDEX_BUILDS.with(Cell::get)
+}
+
+impl RenameShadowIndex {
+    pub fn for_bindings(module: &Module, bindings: &HashSet<BindingId>) -> Self {
+        #[cfg(test)]
+        RENAME_SHADOW_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
+
+        struct ScopeFrame {
+            declared_names: HashSet<Atom>,
+            referenced_bindings: HashSet<BindingId>,
+        }
+
+        struct Builder<'a> {
+            bindings: &'a HashSet<BindingId>,
+            scope_stack: Vec<ScopeFrame>,
+            index: RenameShadowIndex,
+        }
+
+        impl Builder<'_> {
+            fn push_scope(&mut self, declared_names: HashSet<Atom>) {
+                self.scope_stack.push(ScopeFrame {
+                    declared_names,
+                    referenced_bindings: HashSet::default(),
+                });
+            }
+
+            fn pop_scope(&mut self) {
+                let Some(scope) = self.scope_stack.pop() else {
+                    return;
+                };
+
+                if scope.declared_names.is_empty() || scope.referenced_bindings.is_empty() {
+                    return;
+                }
+
+                for binding in scope.referenced_bindings {
+                    self.index
+                        .forbidden_names_by_binding
+                        .entry(binding)
+                        .or_default()
+                        .extend(scope.declared_names.iter().cloned());
+                }
+            }
+
+            fn collect_param_names(params: &[swc_core::ecma::ast::Param]) -> HashSet<Atom> {
+                let mut names = HashSet::default();
+                for param in params {
+                    collect_pat_names(&param.pat, &mut names);
+                }
+                names
+            }
+
+            fn collect_arrow_param_names(params: &[Pat]) -> HashSet<Atom> {
+                let mut names = HashSet::default();
+                for param in params {
+                    collect_pat_names(param, &mut names);
+                }
+                names
+            }
+
+            fn mark_binding_reference(&mut self, ident: &Ident) {
+                if self.scope_stack.is_empty() {
+                    return;
+                }
+
+                let binding = (ident.sym.clone(), ident.ctxt);
+                if !self.bindings.contains(&binding) {
+                    return;
+                }
+
+                for scope in &mut self.scope_stack {
+                    scope.referenced_bindings.insert(binding.clone());
+                }
+            }
+        }
+
+        impl Visit for Builder<'_> {
+            fn visit_function(&mut self, function: &Function) {
+                self.push_scope(Self::collect_param_names(&function.params));
+                function.visit_children_with(self);
+                self.pop_scope();
+            }
+
+            fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+                self.push_scope(Self::collect_arrow_param_names(&arrow.params));
+                arrow.visit_children_with(self);
+                self.pop_scope();
+            }
+
+            fn visit_var_declarator(&mut self, declarator: &VarDeclarator) {
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    collect_pat_names(&declarator.name, &mut scope.declared_names);
+                }
+                declarator.visit_children_with(self);
+            }
+
+            fn visit_fn_decl(&mut self, declaration: &FnDecl) {
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    scope.declared_names.insert(declaration.ident.sym.clone());
+                }
+                declaration.function.visit_with(self);
+            }
+
+            fn visit_class_decl(&mut self, declaration: &ClassDecl) {
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    scope.declared_names.insert(declaration.ident.sym.clone());
+                }
+                declaration.class.visit_with(self);
+            }
+
+            fn visit_ident(&mut self, ident: &Ident) {
+                self.mark_binding_reference(ident);
+            }
+
+            fn visit_block_stmt(&mut self, block: &BlockStmt) {
+                self.push_scope(HashSet::default());
+                block.visit_children_with(self);
+                self.pop_scope();
+            }
+
+            fn visit_catch_clause(&mut self, catch: &CatchClause) {
+                let mut declared_names = HashSet::default();
+                if let Some(param) = &catch.param {
+                    collect_pat_names(param, &mut declared_names);
+                }
+                self.push_scope(declared_names);
+                catch.visit_children_with(self);
+                self.pop_scope();
+            }
+
+            fn visit_prop_name(&mut self, prop: &PropName) {
+                if let PropName::Computed(computed) = prop {
+                    computed.visit_with(self);
+                }
+            }
+
+            fn visit_member_prop(&mut self, prop: &MemberProp) {
+                if let MemberProp::Computed(computed) = prop {
+                    computed.visit_children_with(self);
+                }
+            }
+        }
+
+        if bindings.is_empty() {
+            return Self::default();
+        }
+
+        let mut builder = Builder {
+            bindings,
+            scope_stack: Vec::new(),
+            index: Self {
+                indexed_bindings: bindings.clone(),
+                forbidden_names_by_binding: HashMap::default(),
+            },
+        };
+        module.visit_with(&mut builder);
+        builder.index
+    }
+
+    /// True when renaming `old` to `new_name` would let a nested scope's
+    /// declaration capture references to `old`.
+    ///
+    /// `old` must be one of the bindings this index was built for. The index
+    /// holds no scope information for any other binding, so such a query is
+    /// answered fail-closed (`true`, blocking the rename) and trips a debug
+    /// assertion — a silent `false` here would approve renames the index
+    /// never analyzed.
+    pub fn rename_causes_shadowing(&self, old: &BindingId, new_name: &Atom) -> bool {
+        if !self.indexed_bindings.contains(old) {
+            debug_assert!(
+                false,
+                "RenameShadowIndex queried for binding {old:?} that was not \
+                 in the set passed to for_bindings"
+            );
+            return true;
+        }
+        self.forbidden_names_by_binding
+            .get(old)
+            .is_some_and(|names| names.contains(new_name))
+    }
+}
+
+/// Whether any scope in the module declares a binding spelled `name`: a
+/// variable, parameter, or catch pattern, a function or class name (declared
+/// or as a named expression), or an import local. Rules that synthesize a
+/// free reference to a global use it as the shadow check: `SyntaxContext`
+/// does not survive printing, so a same-named binding anywhere is enough to
+/// capture the emitted identifier.
+pub(crate) fn module_declares_binding_named(module: &Module, name: &str) -> bool {
+    struct Finder<'a> {
+        name: &'a str,
+        found: bool,
+    }
+
+    impl Finder<'_> {
+        fn declare(&mut self, ident: &Ident) {
+            if ident.sym == self.name {
+                self.found = true;
+            }
+        }
+    }
+
+    impl Visit for Finder<'_> {
+        fn visit_binding_ident(&mut self, binding: &BindingIdent) {
+            self.declare(&binding.id);
+        }
+
+        fn visit_fn_decl(&mut self, declaration: &FnDecl) {
+            self.declare(&declaration.ident);
+            declaration.function.visit_with(self);
+        }
+
+        fn visit_fn_expr(&mut self, expr: &FnExpr) {
+            if let Some(ident) = &expr.ident {
+                self.declare(ident);
+            }
+            expr.function.visit_with(self);
+        }
+
+        fn visit_class_decl(&mut self, declaration: &ClassDecl) {
+            self.declare(&declaration.ident);
+            declaration.class.visit_with(self);
+        }
+
+        fn visit_class_expr(&mut self, expr: &ClassExpr) {
+            if let Some(ident) = &expr.ident {
+                self.declare(ident);
+            }
+            expr.class.visit_with(self);
+        }
+
+        fn visit_import_specifier(&mut self, specifier: &ImportSpecifier) {
+            let local = match specifier {
+                ImportSpecifier::Named(named) => &named.local,
+                ImportSpecifier::Default(default) => &default.local,
+                ImportSpecifier::Namespace(namespace) => &namespace.local,
+            };
+            self.declare(local);
+        }
+    }
+
+    let mut finder = Finder { name, found: false };
+    module.visit_with(&mut finder);
+    finder.found
+}
+
+pub fn collect_module_names(module: &Module) -> HashSet<Atom> {
+    let mut names = HashSet::default();
+    for item in &module.body {
+        match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import)) => {
+                for spec in &import.specifiers {
+                    match spec {
+                        ImportSpecifier::Named(named) => {
+                            names.insert(named.local.sym.clone());
+                        }
+                        ImportSpecifier::Default(default) => {
+                            names.insert(default.local.sym.clone());
+                        }
+                        ImportSpecifier::Namespace(namespace) => {
+                            names.insert(namespace.local.sym.clone());
+                        }
+                    }
+                }
+            }
+            ModuleItem::Stmt(Stmt::Decl(decl)) => {
+                collect_decl_names(decl, &mut names);
+            }
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+                collect_decl_names(&export_decl.decl, &mut names);
+            }
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(default_decl)) => {
+                match &default_decl.decl {
+                    DefaultDecl::Fn(fn_expr) => {
+                        if let Some(ident) = &fn_expr.ident {
+                            names.insert(ident.sym.clone());
+                        }
+                    }
+                    DefaultDecl::Class(class_expr) => {
+                        if let Some(ident) = &class_expr.ident {
+                            names.insert(ident.sym.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // `var` is scoped to the nearest function (or the module), even when its
+    // declaration is nested under a top-level loop, block, `if`, or `try`.
+    // Those bindings must reserve their names just like direct declarations;
+    // otherwise a rename can create both an import and a module `var` with the
+    // same name. Stop at function/arrow/class boundaries because their `var`
+    // declarations belong to a different scope (including class static
+    // blocks, whose vars are local to the static block).
+    struct ModuleScopeVarCollector<'a> {
+        names: &'a mut HashSet<Atom>,
+    }
+
+    impl Visit for ModuleScopeVarCollector<'_> {
+        fn visit_var_decl(&mut self, declaration: &VarDecl) {
+            if declaration.kind == VarDeclKind::Var {
+                for declarator in &declaration.decls {
+                    collect_pat_names(&declarator.name, self.names);
+                }
+            }
+            declaration.visit_children_with(self);
+        }
+
+        fn visit_function(&mut self, _: &Function) {}
+
+        fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+
+        fn visit_class(&mut self, _: &Class) {}
+    }
+
+    module.visit_with(&mut ModuleScopeVarCollector { names: &mut names });
+    names
+}
+
+pub fn collect_top_level_binding_infos(module: &Module) -> HashMap<Atom, TopLevelBindingInfo> {
+    let mut infos = HashMap::default();
+
+    for (item_index, item) in module.body.iter().enumerate() {
+        match item {
+            ModuleItem::Stmt(Stmt::Decl(decl)) => {
+                collect_decl_binding_infos(decl, item_index, false, &mut infos);
+            }
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+                collect_decl_binding_infos(&export_decl.decl, item_index, true, &mut infos);
+            }
+            _ => {}
+        }
+    }
+
+    infos
+}
+
+/// Returns true when replacing references to `old` with an identifier named
+/// `replacement_name` would resolve to a shadowing binding at any use site.
+///
+/// This is a targeted version of SWC's rename safety check: instead of running
+/// a whole-module mangle pass, callers can ask whether a raw `Expr::Ident`
+/// substitution would be captured by a nested function, block, or catch scope.
+pub fn binding_replacement_would_be_shadowed(
+    module: &Module,
+    old: &BindingId,
+    replacement_name: &Atom,
+) -> bool {
+    struct Checker<'a> {
+        old: &'a BindingId,
+        replacement_name: &'a Atom,
+        scope_stack: Vec<bool>,
+        found: bool,
+    }
+
+    impl Checker<'_> {
+        fn in_shadowing_scope(&self) -> bool {
+            self.scope_stack.iter().any(|declares| *declares)
+        }
+
+        fn pat_binds_replacement(&self, pat: &Pat) -> bool {
+            pat_binds_name(pat, self.replacement_name)
+        }
+
+        fn block_binds_replacement(&self, stmts: &[Stmt]) -> bool {
+            block_binds_name(stmts, self.replacement_name)
+        }
+
+        fn is_old_ident(&self, ident: &Ident) -> bool {
+            ident.sym == self.old.0 && ident.ctxt == self.old.1
+        }
+
+        fn mark_current_scope_binding(&mut self, pat: &Pat) {
+            if !self.scope_stack.is_empty() && self.pat_binds_replacement(pat) {
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    *scope = true;
+                }
+            }
+        }
+
+        fn visit_binding_pat_defaults(&mut self, pat: &Pat) {
+            match pat {
+                Pat::Array(array) => {
+                    for elem in array.elems.iter().flatten() {
+                        self.visit_binding_pat_defaults(elem);
+                    }
+                }
+                Pat::Object(object) => {
+                    for prop in &object.props {
+                        match prop {
+                            ObjectPatProp::KeyValue(kv) => {
+                                self.visit_binding_pat_defaults(&kv.value);
+                            }
+                            ObjectPatProp::Assign(assign) => {
+                                if let Some(value) = &assign.value {
+                                    value.visit_with(self);
+                                }
+                            }
+                            ObjectPatProp::Rest(rest) => {
+                                self.visit_binding_pat_defaults(&rest.arg);
+                            }
+                        }
+                    }
+                }
+                Pat::Assign(assign) => {
+                    assign.right.visit_with(self);
+                    self.visit_binding_pat_defaults(&assign.left);
+                }
+                Pat::Rest(rest) => self.visit_binding_pat_defaults(&rest.arg),
+                _ => {}
+            }
+        }
+    }
+
+    impl Visit for Checker<'_> {
+        fn visit_import_decl(&mut self, _: &ImportDecl) {}
+
+        fn visit_fn_expr(&mut self, function: &FnExpr) {
+            self.scope_stack.push(
+                function
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| &ident.sym == self.replacement_name),
+            );
+            function.function.visit_with(self);
+            self.scope_stack.pop();
+        }
+
+        fn visit_class_expr(&mut self, class: &ClassExpr) {
+            self.scope_stack.push(
+                class
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| &ident.sym == self.replacement_name),
+            );
+            class.class.visit_with(self);
+            self.scope_stack.pop();
+        }
+
+        fn visit_function(&mut self, function: &Function) {
+            let params_shadow = function
+                .params
+                .iter()
+                .any(|param| self.pat_binds_replacement(&param.pat));
+            let body_shadow = function
+                .body
+                .as_ref()
+                .is_some_and(|body| self.block_binds_replacement(&body.stmts));
+            self.scope_stack.push(params_shadow || body_shadow);
+
+            for param in &function.params {
+                self.visit_binding_pat_defaults(&param.pat);
+            }
+            if let Some(body) = &function.body {
+                body.visit_with(self);
+            }
+
+            self.scope_stack.pop();
+        }
+
+        fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+            let params_shadow = arrow
+                .params
+                .iter()
+                .any(|param| self.pat_binds_replacement(param));
+            let body_shadow = match arrow.body.as_ref() {
+                swc_core::ecma::ast::ArrowFunctionBody::FunctionBody(body) => {
+                    self.block_binds_replacement(&body.stmts)
+                }
+                swc_core::ecma::ast::ArrowFunctionBody::Expr(_) => false,
+            };
+            self.scope_stack.push(params_shadow || body_shadow);
+
+            for param in &arrow.params {
+                self.visit_binding_pat_defaults(param);
+            }
+            arrow.body.visit_with(self);
+
+            self.scope_stack.pop();
+        }
+
+        fn visit_block_stmt(&mut self, block: &BlockStmt) {
+            let body_shadow = self.block_binds_replacement(&block.stmts);
+            self.scope_stack.push(body_shadow);
+            block.visit_children_with(self);
+            self.scope_stack.pop();
+        }
+
+        fn visit_catch_clause(&mut self, catch: &CatchClause) {
+            let param_shadow = catch
+                .param
+                .as_ref()
+                .is_some_and(|param| self.pat_binds_replacement(param));
+            let body_shadow = self.block_binds_replacement(&catch.body.stmts);
+            self.scope_stack.push(param_shadow || body_shadow);
+
+            if let Some(param) = &catch.param {
+                self.visit_binding_pat_defaults(param);
+            }
+            catch.body.visit_with(self);
+
+            self.scope_stack.pop();
+        }
+
+        fn visit_var_declarator(&mut self, declarator: &VarDeclarator) {
+            self.mark_current_scope_binding(&declarator.name);
+            self.visit_binding_pat_defaults(&declarator.name);
+            if let Some(init) = &declarator.init {
+                init.visit_with(self);
+            }
+        }
+
+        fn visit_pat(&mut self, pat: &Pat) {
+            self.visit_binding_pat_defaults(pat);
+        }
+
+        fn visit_decl(&mut self, decl: &Decl) {
+            match decl {
+                Decl::Fn(function) => function.function.visit_with(self),
+                Decl::Class(class) => class.class.visit_with(self),
+                _ => decl.visit_children_with(self),
+            }
+        }
+
+        fn visit_class(&mut self, class: &Class) {
+            class.visit_children_with(self);
+        }
+
+        fn visit_ident(&mut self, ident: &Ident) {
+            if self.is_old_ident(ident) && self.in_shadowing_scope() {
+                self.found = true;
+            }
+        }
+
+        fn visit_prop_name(&mut self, prop: &PropName) {
+            if let PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
+
+        fn visit_member_prop(&mut self, prop: &MemberProp) {
+            if let MemberProp::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
+    }
+
+    let mut checker = Checker {
+        old,
+        replacement_name,
+        scope_stack: Vec::new(),
+        found: false,
+    };
+    module.visit_with(&mut checker);
+    checker.found
+}
+
+pub fn rename_bindings_in_module(module: &mut Module, renames: &[BindingRename]) {
+    if renames.is_empty() {
+        return;
+    }
+    let mut renamer = BindingRenamer::new(renames);
+    module.visit_mut_with(&mut renamer);
+}
+
+pub fn rename_bindings<T>(node: &mut T, renames: &[BindingRename])
+where
+    T: VisitMutWith<BindingRenamer>,
+{
+    if renames.is_empty() {
+        return;
+    }
+    let mut renamer = BindingRenamer::new(renames);
+    node.visit_mut_with(&mut renamer);
+}
+
+fn block_binds_name(stmts: &[Stmt], name: &Atom) -> bool {
+    struct Collector<'a> {
+        name: &'a Atom,
+        found: bool,
+    }
+
+    impl Collector<'_> {
+        fn pat_binds_name(&self, pat: &Pat) -> bool {
+            pat_binds_name(pat, self.name)
+        }
+    }
+
+    impl Visit for Collector<'_> {
+        fn visit_decl(&mut self, decl: &Decl) {
+            match decl {
+                Decl::Var(var) => {
+                    if var.decls.iter().any(|decl| self.pat_binds_name(&decl.name)) {
+                        self.found = true;
+                    }
+                    for decl in &var.decls {
+                        if let Some(init) = &decl.init {
+                            init.visit_with(self);
+                        }
+                    }
+                }
+                Decl::Fn(function) => {
+                    if &function.ident.sym == self.name {
+                        self.found = true;
+                    }
+                }
+                Decl::Class(class) => {
+                    if &class.ident.sym == self.name {
+                        self.found = true;
+                    }
+                    class.class.visit_children_with(self);
+                }
+                _ => decl.visit_children_with(self),
+            }
+        }
+
+        fn visit_function(&mut self, _: &Function) {}
+
+        fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+
+        fn visit_prop_name(&mut self, prop: &PropName) {
+            if let PropName::Computed(computed) = prop {
+                computed.visit_with(self);
+            }
+        }
+
+        fn visit_member_prop(&mut self, prop: &MemberProp) {
+            if let MemberProp::Computed(prop) = prop {
+                prop.visit_with(self);
+            }
+        }
+    }
+
+    let mut collector = Collector { name, found: false };
+    for stmt in stmts {
+        stmt.visit_with(&mut collector);
+    }
+    collector.found
+}
+
+fn pat_binds_name(pat: &Pat, name: &Atom) -> bool {
+    match pat {
+        Pat::Ident(id) => &id.id.sym == name,
+        Pat::Array(arr) => arr.elems.iter().flatten().any(|p| pat_binds_name(p, name)),
+        Pat::Object(obj) => obj.props.iter().any(|prop| match prop {
+            ObjectPatProp::KeyValue(kv) => pat_binds_name(&kv.value, name),
+            ObjectPatProp::Assign(assign) => &assign.key.id.sym == name,
+            ObjectPatProp::Rest(rest) => pat_binds_name(&rest.arg, name),
+        }),
+        Pat::Assign(assign) => pat_binds_name(&assign.left, name),
+        Pat::Rest(rest) => pat_binds_name(&rest.arg, name),
+        _ => false,
+    }
+}
+
+fn collect_decl_binding_infos(
+    decl: &Decl,
+    item_index: usize,
+    exported: bool,
+    infos: &mut HashMap<Atom, TopLevelBindingInfo>,
+) {
+    match decl {
+        Decl::Var(var) => {
+            for (declarator_index, declarator) in var.decls.iter().enumerate() {
+                let Pat::Ident(binding) = &declarator.name else {
+                    continue;
+                };
+                infos.insert(
+                    binding.id.sym.clone(),
+                    TopLevelBindingInfo {
+                        id: (binding.id.sym.clone(), binding.id.ctxt),
+                        item_index,
+                        exported,
+                        kind: TopLevelBindingKind::Var { declarator_index },
+                    },
+                );
+            }
+        }
+        Decl::Fn(function) => {
+            infos.insert(
+                function.ident.sym.clone(),
+                TopLevelBindingInfo {
+                    id: (function.ident.sym.clone(), function.ident.ctxt),
+                    item_index,
+                    exported,
+                    kind: TopLevelBindingKind::Fn,
+                },
+            );
+        }
+        Decl::Class(class) => {
+            infos.insert(
+                class.ident.sym.clone(),
+                TopLevelBindingInfo {
+                    id: (class.ident.sym.clone(), class.ident.ctxt),
+                    item_index,
+                    exported,
+                    kind: TopLevelBindingKind::Class,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+pub(crate) struct BindingRenamer {
+    rename_map: HashMap<BindingId, Atom>,
+}
+
+impl BindingRenamer {
+    pub fn new(renames: &[BindingRename]) -> Self {
+        let mut rename_map = HashMap::default();
+        for rename in renames {
+            rename_map
+                .entry(rename.old.clone())
+                .or_insert_with(|| rename.new.clone());
+        }
+        Self { rename_map }
+    }
+
+    fn lookup(&self, sym: &Atom, ctxt: SyntaxContext) -> Option<&Atom> {
+        self.rename_map.get(&(sym.clone(), ctxt))
+    }
+}
+
+impl VisitMut for BindingRenamer {
+    fn visit_mut_ident(&mut self, ident: &mut Ident) {
+        if let Some(new_name) = self.lookup(&ident.sym, ident.ctxt) {
+            ident.sym = new_name.clone();
+        }
+    }
+
+    fn visit_mut_import_named_specifier(&mut self, spec: &mut ImportNamedSpecifier) {
+        if let Some(new_name) = self.lookup(&spec.local.sym, spec.local.ctxt) {
+            if spec.imported.is_none() {
+                spec.imported = Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident::new(
+                    spec.local.sym.clone(),
+                    spec.local.span,
+                    spec.local.ctxt,
+                )));
+            }
+            spec.local.sym = new_name.clone();
+        }
+    }
+
+    fn visit_mut_export_named_specifier(&mut self, spec: &mut ExportNamedSpecifier) {
+        let ModuleExportName::Ident(orig) = &mut spec.orig else {
+            return;
+        };
+
+        if let Some(new_name) = self.lookup(&orig.sym, orig.ctxt) {
+            if spec.exported.is_none() {
+                spec.exported = Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident::new(
+                    orig.sym.clone(),
+                    orig.span,
+                    orig.ctxt,
+                )));
+            }
+            orig.sym = new_name.clone();
+        }
+    }
+
+    fn visit_mut_prop(&mut self, prop: &mut Prop) {
+        if let Prop::Shorthand(ident) = prop {
+            if let Some(new_name) = self.lookup(&ident.sym, ident.ctxt) {
+                let key = PropName::Ident(ident.clone().into());
+                ident.sym = new_name.clone();
+                *prop = Prop::KeyValue(KeyValueProp {
+                    key,
+                    value: Box::new(Expr::Ident(ident.clone())),
+                });
+                return;
+            }
+        }
+
+        prop.visit_mut_children_with(self);
+
+        if let Prop::KeyValue(kv) = prop {
+            let (PropName::Ident(key), Expr::Ident(value)) = (&kv.key, kv.value.as_ref()) else {
+                return;
+            };
+            if key.sym != value.sym {
+                return;
+            }
+
+            let Prop::KeyValue(kv_owned) =
+                std::mem::replace(prop, Prop::Shorthand(Default::default()))
+            else {
+                unreachable!()
+            };
+            let Expr::Ident(value) = *kv_owned.value else {
+                unreachable!()
+            };
+            *prop = Prop::Shorthand(value);
+        }
+    }
+
+    fn visit_mut_object_pat_prop(&mut self, prop: &mut ObjectPatProp) {
+        if let ObjectPatProp::Assign(assign) = prop {
+            if let Some(new_name) = self.lookup(&assign.key.id.sym, assign.key.id.ctxt) {
+                let key = PropName::Ident(assign.key.id.clone().into());
+                let mut binding = assign.key.clone();
+                binding.id.sym = new_name.clone();
+                let value = if let Some(default) = assign.value.take() {
+                    Pat::Assign(AssignPat {
+                        span: binding.id.span,
+                        left: Box::new(Pat::Ident(binding)),
+                        right: default,
+                    })
+                } else {
+                    Pat::Ident(binding)
+                };
+                *prop = ObjectPatProp::KeyValue(KeyValuePatProp {
+                    key,
+                    value: Box::new(value),
+                });
+                prop.visit_mut_children_with(self);
+                return;
+            }
+        }
+
+        prop.visit_mut_children_with(self);
+    }
+
+    fn visit_mut_prop_name(&mut self, name: &mut PropName) {
+        if let PropName::Computed(computed) = name {
+            computed.visit_mut_with(self);
+        }
+    }
+
+    fn visit_mut_member_prop(&mut self, prop: &mut MemberProp) {
+        if let MemberProp::Computed(computed) = prop {
+            computed.visit_mut_with(self);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_declares_binding_named_sees_every_binding_form() {
+        for source in [
+            "var Infinity = 1;",
+            "function f(Infinity) {}",
+            "try {} catch (Infinity) {}",
+            "const [Infinity] = xs;",
+            "function Infinity() {}",
+            "(function Infinity() {})();",
+            "class Infinity {}",
+            "const C = class Infinity {};",
+            "import Infinity from 'm';",
+            "import { x as Infinity } from 'm';",
+            "import * as Infinity from 'm';",
+            "export default function Infinity() {}",
+            "function outer() { function inner() { let Infinity; } }",
+        ] {
+            with_parsed_module(source, |module| {
+                assert!(
+                    module_declares_binding_named(module, "Infinity"),
+                    "{source}"
+                );
+            });
+        }
+        for source in [
+            "const x = Infinity;",
+            "obj.Infinity = 1;",
+            "const o = { Infinity: 1 };",
+            "Infinity: for (;;) break Infinity;",
+        ] {
+            with_parsed_module(source, |module| {
+                assert!(
+                    !module_declares_binding_named(module, "Infinity"),
+                    "{source}"
+                );
+            });
+        }
+    }
+    use swc_core::common::{sync::Lrc, FileName, Mark, SourceMap, GLOBALS};
+    use swc_core::ecma::parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
+    use swc_core::ecma::transforms::base::resolver;
+
+    fn with_parsed_module<R>(source: &str, f: impl FnOnce(&Module) -> R) -> R {
+        GLOBALS.set(&Default::default(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let fm = cm.new_source_file(
+                FileName::Custom("test.js".to_string()).into(),
+                source.to_string(),
+            );
+            let lexer = Lexer::new(
+                Syntax::Es(EsSyntax::default()),
+                Default::default(),
+                StringInput::from(&*fm),
+                None,
+            );
+            let mut parser = Parser::new_from(lexer);
+            let mut module = parser.parse_module().expect("failed to parse");
+            let unresolved_mark = Mark::new();
+            let top_level_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, top_level_mark, false));
+            f(&module)
+        })
+    }
+
+    fn with_resolved_module<R>(source: &str, f: impl FnOnce(&Module, Mark) -> R) -> R {
+        GLOBALS.set(&Default::default(), || {
+            let cm: Lrc<SourceMap> = Default::default();
+            let fm = cm.new_source_file(
+                FileName::Custom("test.js".to_string()).into(),
+                source.to_string(),
+            );
+            let lexer = Lexer::new(
+                Syntax::Es(EsSyntax {
+                    jsx: true,
+                    ..Default::default()
+                }),
+                Default::default(),
+                StringInput::from(&*fm),
+                None,
+            );
+            let mut module = Parser::new_from(lexer)
+                .parse_module()
+                .expect("failed to parse");
+            let unresolved_mark = Mark::new();
+            module.visit_mut_with(&mut resolver(unresolved_mark, Mark::new(), false));
+            f(&module, unresolved_mark)
+        })
+    }
+
+    #[test]
+    fn free_name_collectors_skip_intrinsic_jsx_tags() {
+        let source = r#"const x = <a href="/">{foo}</a>; const y = <Bar />;"#;
+        with_resolved_module(source, |module, unresolved_mark| {
+            for names in [
+                collect_unresolved_reference_names(module, unresolved_mark),
+                collect_free_reference_names(module, unresolved_mark),
+            ] {
+                assert!(names.contains(&Atom::from("foo")));
+                assert!(names.contains(&Atom::from("Bar")));
+                assert!(
+                    !names.contains(&Atom::from("a")),
+                    "an intrinsic tag is not a reference: {names:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn free_reference_names_skip_export_specifier_names() {
+        let source = r#"
+const o = 1;
+export { o as compute };
+export * as ns from "./x";
+use(globalName);
+"#;
+        with_resolved_module(source, |module, unresolved_mark| {
+            // The resolver visits the exported half as a reference, so the plain
+            // collector reports it; the free-reference collector must not.
+            let unresolved = collect_unresolved_reference_names(module, unresolved_mark);
+            assert!(unresolved.contains(&Atom::from("compute")));
+
+            let free = collect_free_reference_names(module, unresolved_mark);
+            assert!(free.contains(&Atom::from("globalName")));
+            assert!(free.contains(&Atom::from("use")));
+            assert!(!free.contains(&Atom::from("compute")));
+            assert!(!free.contains(&Atom::from("ns")));
+            assert!(!free.contains(&Atom::from("o")));
+        });
+    }
+
+    #[test]
+    fn starts_with_lowercase_matches_jsx_intrinsic_tag_test() {
+        assert!(starts_with_lowercase("kb"));
+        assert!(!starts_with_lowercase("Kb"));
+        assert!(!starts_with_lowercase("_kb"));
+        assert!(!starts_with_lowercase(""));
+        // JSX transforms test /^[a-z]/: a non-ASCII lowercase initial still
+        // names a component binding, not an intrinsic tag.
+        assert!(!starts_with_lowercase("σelement"));
+        assert!(!starts_with_lowercase("Σelement"));
+    }
+
+    fn top_level_binding(module: &Module, name: &str) -> BindingId {
+        collect_top_level_binding_infos(module)
+            .remove(&Atom::from(name))
+            .expect("binding not found")
+            .id
+    }
+
+    #[test]
+    fn nested_declaration_blocks_rename() {
+        with_parsed_module(
+            "var target = 1; function wrapper() { var inner = 2; return target + inner; }",
+            |module| {
+                let target = top_level_binding(module, "target");
+                let bindings = HashSet::from_iter([target.clone()]);
+                let index = RenameShadowIndex::for_bindings(module, &bindings);
+                assert!(index.rename_causes_shadowing(&target, &Atom::from("inner")));
+                assert!(!index.rename_causes_shadowing(&target, &Atom::from("other")));
+            },
+        );
+    }
+
+    #[test]
+    fn indexed_binding_without_nested_conflicts_reports_no_shadowing() {
+        with_parsed_module("var lonely = 1; use(lonely);", |module| {
+            let lonely = top_level_binding(module, "lonely");
+            let bindings = HashSet::from_iter([lonely.clone()]);
+            let index = RenameShadowIndex::for_bindings(module, &bindings);
+            assert!(!index.rename_causes_shadowing(&lonely, &Atom::from("anything")));
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not in the set passed to for_bindings")]
+    fn unindexed_binding_query_is_rejected() {
+        with_parsed_module("var known = 1;", |module| {
+            let known = top_level_binding(module, "known");
+            let bindings = HashSet::from_iter([known]);
+            let index = RenameShadowIndex::for_bindings(module, &bindings);
+            let stranger = (Atom::from("stranger"), SyntaxContext::empty());
+            index.rename_causes_shadowing(&stranger, &Atom::from("x"));
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn unindexed_binding_query_fails_closed() {
+        with_parsed_module("var known = 1;", |module| {
+            let known = top_level_binding(module, "known");
+            let bindings = HashSet::from_iter([known]);
+            let index = RenameShadowIndex::for_bindings(module, &bindings);
+            let stranger = (Atom::from("stranger"), SyntaxContext::empty());
+            assert!(index.rename_causes_shadowing(&stranger, &Atom::from("x")));
+        });
+    }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@wakaru/cli-darwin-arm64",
+  "version": "1.13.0",
+  "description": "Wakaru CLI binary for macOS ARM64",
+  "author": "Pionxzh",
+  "license": "Apache-2.0",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "bin": {
+    "wakaru": "./wakaru"
+  },
+  "files": ["wakaru"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pionxzh/wakaru.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

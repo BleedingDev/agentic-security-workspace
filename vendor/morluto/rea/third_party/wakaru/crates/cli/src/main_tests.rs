@@ -1,0 +1,2075 @@
+use super::*;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[test]
+fn public_unpack_maps_cli_profiles() {
+    assert_eq!(
+        public_unpack_mode(UnpackMode::Auto),
+        wakaru::UnpackMode::Auto
+    );
+    assert_eq!(
+        public_unpack_mode(UnpackMode::Strict),
+        wakaru::UnpackMode::Strict
+    );
+    assert_eq!(
+        public_unpack_mode(UnpackMode::Inspect),
+        wakaru::UnpackMode::Inspect
+    );
+}
+
+#[test]
+fn parses_unpack_inspect_profile() {
+    let cli = Cli::try_parse_from(["wakaru", "bundle.js", "--unpack=inspect", "-o", "out"])
+        .expect("inspect should be an unpack profile");
+
+    assert!(matches!(cli.unpack, Some(UnpackMode::Inspect)));
+}
+
+#[test]
+fn rejects_removed_scope_hoist_analysis_flag() {
+    assert!(Cli::try_parse_from([
+        "wakaru",
+        "bundle.js",
+        "--unpack",
+        "--scope-hoist-analysis",
+        "-o",
+        "out",
+    ])
+    .is_err());
+}
+
+#[test]
+fn parses_extract_without_js_input() {
+    let cli = Cli::try_parse_from(["wakaru", "extract", "input.js.map", "-o", "src"])
+        .expect("extract command should parse");
+
+    match cli.command {
+        Some(Command::Extract(args)) => {
+            assert_eq!(args.map, PathBuf::from("input.js.map"));
+            assert_eq!(args.output, PathBuf::from("src"));
+        }
+        other => panic!("expected extract command, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_bun_extract_with_binary_asset_options() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "bun",
+        "extract",
+        "compiled-app",
+        "-o",
+        "extracted",
+        "--include-internals",
+        "--json",
+    ])
+    .expect("Bun extraction command should parse");
+
+    match cli.command {
+        Some(Command::Bun(bun_extract::BunArgs {
+            command: bun_extract::BunCommand::Extract(args),
+        })) => {
+            assert_eq!(args.input, PathBuf::from("compiled-app"));
+            assert_eq!(args.output, PathBuf::from("extracted"));
+            assert!(args.include_internals);
+            assert!(args.json);
+        }
+        other => panic!("expected Bun extraction command, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_legacy_extract_flag() {
+    assert!(Cli::try_parse_from([
+        "wakaru",
+        "input.js",
+        "--extract",
+        "-m",
+        "input.js.map",
+        "-o",
+        "src"
+    ])
+    .is_err());
+}
+
+#[test]
+fn parses_debug_trace_command() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "debug",
+        "trace",
+        "input.js",
+        "--from",
+        "UnEsm",
+        "--until",
+        "SmartInline",
+        "--all",
+    ])
+    .expect("debug trace command should parse");
+
+    match cli.command {
+        Some(Command::Debug(DebugArgs {
+            command: DebugCommand::Trace(args),
+        })) => {
+            assert_eq!(args.input, PathBuf::from("input.js"));
+            assert_eq!(args.from.as_deref(), Some("UnEsm"));
+            assert_eq!(args.until.as_deref(), Some("SmartInline"));
+            assert!(args.all);
+        }
+        other => panic!("expected debug trace command, got {other:?}"),
+    }
+}
+
+#[test]
+fn debug_trace_reports_an_empty_traced_range() {
+    let changed_only = trace_output_text(&[], false);
+    assert!(changed_only.contains("no rule changed the rendered output"));
+    assert!(changed_only.contains("--all"));
+    assert!(changed_only.ends_with('\n'));
+
+    let with_unchanged = trace_output_text(&[], true);
+    assert!(with_unchanged.contains("no rule ran in the traced range"));
+    assert!(!with_unchanged.contains("--all"));
+
+    let event = wakaru_core::RuleTraceEvent {
+        rule: "RemoveVoid",
+        changed: true,
+        before: "const x = void 0;\n".to_string(),
+        after: "const x = undefined;\n".to_string(),
+    };
+    let traced = trace_output_text(std::slice::from_ref(&event), false);
+    assert_eq!(traced, format_trace_events(std::slice::from_ref(&event)));
+}
+
+#[test]
+fn parses_debug_validate_command() {
+    let cli = Cli::try_parse_from(["wakaru", "debug", "validate", "out", "--json"])
+        .expect("debug validate command should parse");
+
+    match cli.command {
+        Some(Command::Debug(DebugArgs {
+            command: DebugCommand::Validate(args),
+        })) => {
+            assert_eq!(args.dir, PathBuf::from("out"));
+            assert!(args.input.is_empty());
+            assert!(args.json);
+        }
+        other => panic!("expected debug validate command, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_debug_validate_command_with_repeated_inputs() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "debug",
+        "validate",
+        "out",
+        "--input",
+        "bundle.js",
+        "--input",
+        "chunks",
+    ])
+    .expect("debug validate command should parse");
+
+    match cli.command {
+        Some(Command::Debug(DebugArgs {
+            command: DebugCommand::Validate(args),
+        })) => {
+            assert_eq!(args.dir, PathBuf::from("out"));
+            assert_eq!(
+                args.input,
+                vec![PathBuf::from("bundle.js"), PathBuf::from("chunks")]
+            );
+            assert!(!args.json);
+        }
+        other => panic!("expected debug validate command, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_debug_enumerate_chunks_command() {
+    let cli = Cli::try_parse_from(["wakaru", "debug", "enumerate-chunks", "input.js"])
+        .expect("debug enumerate-chunks command should parse");
+
+    match cli.command {
+        Some(Command::Debug(DebugArgs {
+            command: DebugCommand::EnumerateChunks(args),
+        })) => assert_eq!(args.input, Some(PathBuf::from("input.js"))),
+        other => panic!("expected debug enumerate-chunks command, got {other:?}"),
+    }
+}
+
+#[test]
+fn debug_validate_formats_source_locations_for_text_and_json() {
+    let finding = wakaru_core::OutputFinding {
+        filename: "nested/entry.js".into(),
+        line: 12,
+        column: 7,
+        kind: wakaru_core::OutputFindingKind::AssignToImport,
+        message: "assignment to imported binding \"value\"".into(),
+    };
+
+    assert_eq!(
+        format_validate_finding(&finding),
+        "nested/entry.js:12:7: assign_to_import: assignment to imported binding \"value\""
+    );
+    assert_eq!(
+        validate_finding_json(&finding),
+        serde_json::json!({
+            "filename": "nested/entry.js",
+            "line": 12,
+            "column": 7,
+            "kind": "assign_to_import",
+            "message": "assignment to imported binding \"value\"",
+        })
+    );
+}
+
+#[test]
+fn parses_debug_normalize_command() {
+    let cli = Cli::try_parse_from(["wakaru", "debug", "normalize", "input.js", "--rename"])
+        .expect("debug normalize command should parse");
+
+    match cli.command {
+        Some(Command::Debug(DebugArgs {
+            command: DebugCommand::Normalize(args),
+        })) => {
+            assert_eq!(args.input, Some(PathBuf::from("input.js")));
+            assert!(args.rename);
+            assert!(!args.format);
+        }
+        other => panic!("expected debug normalize command, got {other:?}"),
+    }
+}
+
+#[test]
+fn normalize_rename_then_format_canonicalizes_mangling() {
+    // Mirrors run_normalize's pipeline: alpha-rename via core, then format.
+    let opts = NormalizeOptions {
+        rename_bindings: true,
+        filename: "input.js".to_string(),
+    };
+    let fmt = |code: String| format_cli_output(code, "input.js", selected_formatter(true));
+    let original = fmt(normalize("function load(app_id){return get(app_id)}", &opts).unwrap());
+    let mangled = fmt(normalize("function l(e){return get(e)}", &opts).unwrap());
+    assert_eq!(
+        original, mangled,
+        "mangled output should normalize identically"
+    );
+    assert!(original.contains("get"), "global preserved: {original}");
+}
+
+#[test]
+fn parses_formatter_option() {
+    let cli = Cli::try_parse_from(["wakaru", "input.js", "--formatter"])
+        .expect("formatter option should parse");
+    assert!(cli.formatter);
+}
+
+#[test]
+fn parses_vue_sfc_option() {
+    let cli = Cli::try_parse_from(["wakaru", "input.js", "--vue-sfc"]).expect("vue option parses");
+    assert!(cli.vue_sfc);
+}
+
+#[test]
+fn rejects_vue_sfc_with_raw_unpack() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "bundle.js",
+        "--unpack",
+        "--raw",
+        "--vue-sfc",
+        "-o",
+        "out",
+    ])
+    .expect("raw vue unpack args should parse before runtime validation");
+
+    let err = run_default(cli).expect_err("raw vue output should be rejected");
+    assert!(
+        err.to_string()
+            .contains("--vue-sfc cannot be combined with --raw"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn vue_sfc_writes_recovered_single_file_component() {
+    let dir = temp_test_dir("vue-sfc-output");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("render.js");
+    let output_path = dir.join("App.vue");
+    fs::write(&input_path, vue_render_module_source()).expect("write vue render input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&output_path).expect("read vue sfc output"),
+        "<script>\nexport default {\n    props: {\n        msg: String\n    }\n}\n</script>\n\n<template>\n  <div>{{ msg }}</div>\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_writes_recovered_vite_setup_component() {
+    let dir = temp_test_dir("vue-sfc-vite-setup");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("PanelWrapper.js");
+    let output_path = dir.join("PanelWrapper.vue");
+    fs::write(&input_path, vite_setup_component_module_source())
+        .expect("write vite setup component input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&output_path).expect("read vue sfc output"),
+        "<script setup>\nimport { computed } from \"vue\";\nimport { P as Panel_1 } from \"./Panel.vue\";\n\nconst Panel = computed(()=>createPanelState({\n        title: \"Ready\",\n        enabled: true,\n        rank: 1,\n        group: \"main\"\n    }));\n</script>\n\n<template>\n  <Panel_1 :state=\"Panel\" />\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_single_file_js_primary_output_writes_vue_sidecar_from_input_name() {
+    let dir = temp_test_dir("vue-sfc-js-primary-output");
+    let input_dir = dir.join("custom");
+    let output_dir = dir.join("out");
+    fs::create_dir_all(&input_dir).expect("create input dir");
+    fs::create_dir_all(&output_dir).expect("create output dir");
+    let input_path = input_dir.join("target.min.mjs");
+    let output_path = output_dir.join("renamed.mjs");
+    let sidecar_path = output_dir.join("target.min.vue");
+    fs::write(&input_path, vue_render_module_source()).expect("write vue render input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "--formatter",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    let output_filename = input_path.to_string_lossy().into_owned();
+    let unformatted = decompile(
+        vue_render_module_source(),
+        DecompileOptions {
+            filename: output_filename.clone(),
+            ..Default::default()
+        },
+    )
+    .expect("fixture should decompile")
+    .code;
+    let formatted = format_cli_output(
+        unformatted.clone(),
+        &output_filename,
+        selected_formatter(true),
+    );
+    assert_ne!(
+        formatted, unformatted,
+        "fixture must expose whether --formatter ran"
+    );
+
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    let js = fs::read_to_string(&output_path).expect("read js primary output");
+    assert_eq!(
+        js, formatted,
+        "JS-primary --vue-sfc output should still run the formatter"
+    );
+    assert!(
+        js.contains("export function render"),
+        "primary output should remain JavaScript:\n{js}"
+    );
+    assert_eq!(
+        fs::read_to_string(&sidecar_path).expect("read vue sidecar output"),
+        "<script>\nexport default {\n    props: {\n        msg: String\n    }\n}\n</script>\n\n<template>\n  <div>{{ msg }}</div>\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_sidecar_refuses_to_overwrite_input_under_force() {
+    let dir = temp_test_dir("vue-sfc-sidecar-input-collision");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("App.vue");
+    let output_path = dir.join("App.js");
+    fs::write(&input_path, vue_render_module_source()).expect("write vue render input");
+    let original_input = fs::read_to_string(&input_path).expect("read input before run");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+        "--force",
+    ])
+    .expect("vue sfc cli should parse");
+    let err = run_default(cli).expect_err("sidecar must not overwrite input");
+    assert!(
+        err.to_string()
+            .contains("refusing to write Vue sidecar over input file"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        fs::read_to_string(&input_path).expect("read input after run"),
+        original_input
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_single_file_vue_only_output_errors_when_not_recovered() {
+    let dir = temp_test_dir("vue-sfc-vue-only-miss");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("plain.js");
+    let output_path = dir.join("Plain.vue");
+    fs::write(&input_path, "const value = 1;").expect("write plain input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    let err = run_default(cli).expect_err("vue-only output should require recovered SFC");
+    assert!(
+        err.to_string()
+            .contains("--vue-sfc did not recover a Vue SFC"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !output_path.exists(),
+        "vue-only miss should not write fallback JavaScript to .vue"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_single_file_does_not_write_source_map_for_recovered_sfc() {
+    let dir = temp_test_dir("vue-sfc-output-map");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("render.js");
+    let output_path = dir.join("App.vue");
+    fs::write(&input_path, vue_render_module_source()).expect("write vue render input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "--emit-source-map",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert!(output_path.exists(), "recovered vue sfc should be written");
+    assert!(
+        !append_map_extension(&output_path).exists(),
+        "recovered vue sfc must not get a stale JS source map"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_single_file_js_primary_output_writes_source_map_only_for_js() {
+    let dir = temp_test_dir("vue-sfc-js-primary-output-map");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("App.js");
+    let output_path = dir.join("custom.jsx");
+    let sidecar_path = dir.join("App.vue");
+    fs::write(&input_path, vue_render_module_source()).expect("write vue render input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "--emit-source-map",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert!(output_path.exists(), "primary JS output should be written");
+    assert!(
+        sidecar_path.exists(),
+        "recovered Vue sidecar should be written"
+    );
+    assert!(
+        append_map_extension(&output_path).exists(),
+        "primary JS output should get the source map"
+    );
+    assert!(
+        !append_map_extension(&sidecar_path).exists(),
+        "recovered Vue sidecar must not get a stale JS source map"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_recovers_single_system_register_module() {
+    let dir = temp_test_dir("vue-sfc-system-register");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("legacy.js");
+    let output_path = dir.join("Recovered.vue");
+    fs::write(
+        &input_path,
+        r#"
+System.register(["./vendor-vue.js"], function (exports) {
+  "use strict";
+  var defineComponent, openBlock, createElementBlock;
+  return {
+    setters: [
+      function (module) {
+        defineComponent = module.d, openBlock = module.q, createElementBlock = module.X;
+      }
+    ],
+    execute: function () {
+      exports("_", defineComponent({
+        __name: "LegacyGreeting",
+        setup: function () {
+          return function () {
+            return openBlock(), createElementBlock("p", null, "Legacy");
+          };
+        }
+      }));
+    }
+  };
+});
+"#,
+    )
+    .expect("write vue system register input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&output_path).expect("read vue sfc output"),
+        "<template>\n  <p>Legacy</p>\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_resolves_relative_component_export_alias() {
+    let dir = temp_test_dir("vue-sfc-relative-component");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("render.js");
+    let shared_path = dir.join("main.js");
+    let output_path = dir.join("Recovered.vue");
+    fs::write(
+        &input_path,
+        r#"
+import { q as ob, aa as cb, _ as rd } from "./vendor-vue.js";
+import { B as B_1 } from "./main.js";
+export function render(_ctx, _cache) {
+  return ob(), cb(rd(B_1), { text: "Details" }, null, 8, ["text"]);
+}
+"#,
+    )
+    .expect("write vue render input");
+    fs::write(
+        &shared_path,
+        r#"
+import { defineComponent } from "vue";
+const YP = defineComponent({
+  name: "VTooltip",
+  props: { text: String }
+});
+export { YP as B };
+"#,
+    )
+    .expect("write shared component input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--vue-sfc",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc cli should parse");
+    run_default(cli).expect("vue sfc decompile should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&output_path).expect("read vue sfc output"),
+        "<script setup>\nimport { B as VTooltip } from \"./main.js\";\n</script>\n\n<template>\n  <VTooltip text=\"Details\" />\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_unpack_recovers_webpack_namespace_component() {
+    let dir = temp_test_dir("vue-sfc-webpack");
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("bundle.js");
+    fs::write(&input_path, webpack5_vue_sfc_bundle_source()).expect("write webpack vue bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--unpack",
+        "--vue-sfc",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc unpack cli should parse");
+    run_default(cli).expect("vue sfc webpack unpack should succeed");
+
+    assert!(
+        out_dir.join("src/App.vue.js").exists(),
+        "decompiled JS should remain next to the recovered SFC"
+    );
+    assert_eq!(
+        fs::read_to_string(out_dir.join("src/App.vue")).expect("read recovered vue sfc"),
+        "<script>\nexport default {\n    name: \"WebpackPanel\",\n    props: {\n        message: String\n    }\n}\n</script>\n\n<script setup>\nimport ChildPanel from \"./components/ChildPanel.vue.js\";\n</script>\n\n<template>\n  <section class=\"notice\">\n    <ChildPanel :label=\"message\" />\n    <span>{{ message }}</span>\n  </section>\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_unpack_writes_multiple_recovered_components_from_one_module() {
+    let dir = temp_test_dir("vue-sfc-webpack-multi");
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("bundle.js");
+    fs::write(&input_path, webpack5_multi_vue_sfc_bundle_source())
+        .expect("write webpack vue bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--unpack",
+        "--vue-sfc",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc unpack cli should parse");
+    run_default(cli).expect("vue sfc webpack unpack should succeed");
+
+    assert!(
+        out_dir.join("src/entry.js").exists(),
+        "decompiled JS should remain next to recovered SFCs"
+    );
+    assert_eq!(
+        fs::read_to_string(out_dir.join("src/entry.Child.vue")).expect("read child sfc"),
+        "<script setup>\nconst props = defineProps({\n    msg: String\n});\nconst { msg } = props;\n</script>\n\n<template>\n  <span>{{ msg }}</span>\n</template>\n"
+    );
+    assert_eq!(
+        fs::read_to_string(out_dir.join("src/entry.App.vue")).expect("read app sfc"),
+        "<template>\n  <main>\n    <Child msg=\"Hi\" />\n  </main>\n</template>\n"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn vue_sfc_unpack_writes_source_maps_only_for_js_artifacts() {
+    let dir = temp_test_dir("vue-sfc-webpack-map");
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("bundle.js");
+    fs::write(&input_path, webpack5_vue_sfc_bundle_source()).expect("write webpack vue bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--unpack",
+        "--vue-sfc",
+        "--emit-source-map",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("vue sfc unpack cli should parse");
+    run_default(cli).expect("vue sfc webpack unpack should succeed");
+
+    assert!(
+        out_dir.join("src/App.vue").exists(),
+        "recovered vue sfc should be written"
+    );
+    assert!(
+        out_dir.join("src/App.vue.js").exists(),
+        "decompiled JS should be written"
+    );
+    assert!(
+        out_dir.join("src/App.vue.js.map").exists(),
+        "decompiled JS should keep its source map"
+    );
+    assert!(
+        !out_dir.join("src/App.vue.map").exists(),
+        "recovered vue sfc must not get a stale JS source map"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+fn map_sources_resolved_from(map_path: &Path) -> Vec<PathBuf> {
+    let map_json = fs::read_to_string(map_path).expect("read source map");
+    let map = sourcemap::SourceMap::from_reader(map_json.as_bytes()).expect("parse source map");
+    map.sources()
+        .map(|source| {
+            assert!(
+                !Path::new(source).is_absolute(),
+                "source should be relative to the map: {source}"
+            );
+            fs::canonicalize(map_path.parent().unwrap().join(source))
+                .unwrap_or_else(|e| panic!("{source} should resolve from the map: {e}"))
+        })
+        .collect()
+}
+
+#[test]
+fn single_file_source_map_names_the_input_relative_to_the_map() {
+    let dir = temp_test_dir("single-file-map-sources");
+    fs::create_dir_all(dir.join("in")).expect("create input dir");
+    fs::create_dir_all(dir.join("out")).expect("create output dir");
+    let input_path = dir.join("in/input.js");
+    let output_path = dir.join("out/output.js");
+    fs::write(&input_path, "var a = 1; console.log(a);").expect("write input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--emit-source-map",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("cli should parse");
+    run_default(cli).expect("decompile should succeed");
+
+    assert_eq!(
+        map_sources_resolved_from(&append_map_extension(&output_path)),
+        vec![fs::canonicalize(&input_path).unwrap()]
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn unpack_source_maps_name_the_bundle_relative_to_each_map() {
+    let dir = temp_test_dir("unpack-map-sources");
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("bundle.js");
+    fs::write(&input_path, webpack5_vue_sfc_bundle_source()).expect("write bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--unpack",
+        "--emit-source-map",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("unpack cli should parse");
+    run_default(cli).expect("unpack should succeed");
+
+    let nested_map = out_dir.join("src/App.vue.js.map");
+    assert!(nested_map.exists(), "a module below out/ should get a map");
+    assert_eq!(
+        map_sources_resolved_from(&nested_map),
+        vec![fs::canonicalize(&input_path).unwrap()]
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+/// Every occurrence of `needle` in formatted `code` must carry its own
+/// mapping, and that mapping must point at `needle` in `input`.
+fn assert_map_points_needles_at_input(code: &str, map_json: &str, input: &str, needle: &str) {
+    let map = sourcemap::SourceMap::from_slice(map_json.as_bytes()).expect("valid source map");
+    let input_lines: Vec<&str> = input.split('\n').collect();
+    let mut checked = 0;
+    for (line, text) in code.lines().enumerate() {
+        for (col, _) in text.match_indices(needle) {
+            let (line, col) = (line as u32, col as u32);
+            let token = map
+                .lookup_token(line, col)
+                .unwrap_or_else(|| panic!("{needle} at {line}:{col} should be mapped"));
+            assert_eq!(
+                (token.get_dst_line(), token.get_dst_col()),
+                (line, col),
+                "{needle} at {line}:{col} should have its own mapping"
+            );
+            let source_line = input_lines[token.get_src_line() as usize];
+            assert!(
+                source_line[token.get_src_col() as usize..].starts_with(needle),
+                "{needle} at {line}:{col} maps to {:?}",
+                &source_line[token.get_src_col() as usize..]
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "expected {needle} in:\n{code}");
+}
+
+/// Wider than the formatter's line width once printed, so formatting moves
+/// the arguments onto their own lines.
+const WIDE_CALL_INPUT: &str = "function f(){console.log(alphaAlphaAlpha,betaBetaBetaBeta,gammaGammaGamma,deltaDeltaDelta,console.error)}f();";
+
+#[test]
+fn formatter_carries_single_file_source_map_to_formatted_output() {
+    let dir = temp_test_dir("formatter-single-file-map");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("input.js");
+    let output_path = dir.join("output.js");
+    fs::write(&input_path, WIDE_CALL_INPUT).expect("write input");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--formatter",
+        "--emit-source-map",
+        "-o",
+        output_path.to_str().expect("output path should be utf8"),
+    ])
+    .expect("cli should parse");
+    run_default(cli).expect("decompile should succeed");
+
+    let code = fs::read_to_string(&output_path).expect("read output");
+    assert!(
+        code.contains("\n    console.error"),
+        "arguments should be broken onto their own lines:\n{code}"
+    );
+    let map_json = fs::read_to_string(append_map_extension(&output_path)).expect("read map");
+    assert_map_points_needles_at_input(&code, &map_json, WIDE_CALL_INPUT, "console");
+    assert_map_points_needles_at_input(&code, &map_json, WIDE_CALL_INPUT, "deltaDeltaDelta");
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn formatter_carries_unpack_source_maps_to_formatted_output() {
+    let dir = temp_test_dir("formatter-unpack-map");
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let input_path = dir.join("bundle.js");
+    let bundle = "(()=>{var e={10:(e,t,n)=>{console.log(alphaAlphaAlpha,betaBetaBetaBeta,gammaGammaGamma,deltaDeltaDelta,console.error,n(20).value)},20:e=>{e.exports={value:1}}},t={};function n(r){var o=t[r];if(void 0!==o)return o.exports;var s=t[r]={exports:{}};return e[r](s,s.exports,n),s.exports}n(10)})();";
+    fs::write(&input_path, bundle).expect("write bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        input_path.to_str().expect("input path should be utf8"),
+        "--unpack",
+        "--formatter",
+        "--emit-source-map",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("unpack cli should parse");
+    run_default(cli).expect("unpack should succeed");
+
+    let module = fs::read_dir(&out_dir)
+        .expect("read output dir")
+        .map(|entry| entry.expect("dir entry").path())
+        .find(|path| {
+            path.extension().is_some_and(|ext| ext == "js")
+                && fs::read_to_string(path).is_ok_and(|code| code.contains("console.error"))
+        })
+        .expect("the module that logs should be written");
+    let code = fs::read_to_string(&module).expect("read module");
+    assert!(
+        code.contains("\n  console.error"),
+        "arguments should be broken onto their own lines:\n{code}"
+    );
+    let map_json = fs::read_to_string(append_map_extension(&module)).expect("read map");
+    assert_map_points_needles_at_input(&code, &map_json, bundle, "console");
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn relative_path_climbs_to_the_common_ancestor() {
+    assert_eq!(
+        relative_path(Path::new("/a/out/src"), Path::new("/a/bundle.js")).as_deref(),
+        Some("../../bundle.js")
+    );
+    assert_eq!(
+        relative_path(Path::new("/a"), Path::new("/a/in/x.js")).as_deref(),
+        Some("in/x.js")
+    );
+}
+
+#[test]
+fn parses_json_flag() {
+    let cli =
+        Cli::try_parse_from(["wakaru", "input.js", "--json"]).expect("json flag should parse");
+    assert!(cli.json);
+}
+
+#[test]
+fn parses_json_with_unpack() {
+    let cli = Cli::try_parse_from(["wakaru", "bundle.js", "--unpack", "--json", "-o", "out"])
+        .expect("json with unpack should parse");
+    assert!(cli.json);
+    assert!(cli.unpack.is_some());
+}
+
+#[test]
+fn json_modules_describe_vue_sfc_artifact_roles() {
+    let modules = vec![
+        json_module_for_artifact(&CliOutputArtifact {
+            filename: "src/plain.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::Decompiled,
+            source_filename: None,
+            source_map_filename: Some("src/plain.js".to_string()),
+            source_map: None,
+        }),
+        json_module_for_artifact(&CliOutputArtifact {
+            filename: "src/App.vue.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::VueSfcSourceJs,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: Some("src/App.vue".to_string()),
+            source_map: None,
+        }),
+        json_module_for_artifact(&CliOutputArtifact {
+            filename: "src/App.vue".to_string(),
+            code: "<template />".to_string(),
+            kind: JsonModuleKind::VueSfc,
+            status: JsonModuleStatus::RecoveredVueSfc,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: None,
+            source_map: None,
+        }),
+        json_module_for_artifact(&CliOutputArtifact {
+            filename: "src/Broken.vue.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::VueSfcFallbackJs,
+            source_filename: None,
+            source_map_filename: Some("src/Broken.vue".to_string()),
+            source_map: None,
+        }),
+    ];
+
+    assert_eq!(
+        serde_json::to_value(modules).expect("serialize modules"),
+        serde_json::json!([
+            {
+                "filename": "src/plain.js",
+                "kind": "javascript",
+                "status": "decompiled"
+            },
+            {
+                "filename": "src/App.vue.js",
+                "kind": "javascript",
+                "status": "vue_sfc_source_js",
+                "source_filename": "src/App.vue"
+            },
+            {
+                "filename": "src/App.vue",
+                "kind": "vue_sfc",
+                "status": "recovered_vue_sfc",
+                "source_filename": "src/App.vue"
+            },
+            {
+                "filename": "src/Broken.vue.js",
+                "kind": "javascript",
+                "status": "vue_sfc_fallback_js"
+            }
+        ])
+    );
+}
+
+#[test]
+fn json_unpack_total_counts_input_modules_not_artifacts() {
+    let artifacts = vec![
+        CliOutputArtifact {
+            filename: "src/App.vue.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::VueSfcSourceJs,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: Some("src/App.vue".to_string()),
+            source_map: None,
+        },
+        CliOutputArtifact {
+            filename: "src/App.vue".to_string(),
+            code: "<template />".to_string(),
+            kind: JsonModuleKind::VueSfc,
+            status: JsonModuleStatus::RecoveredVueSfc,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: None,
+            source_map: None,
+        },
+    ];
+
+    let json = json_unpack_output_for_artifacts(
+        &[],
+        wakaru::OutputSafety::Normal,
+        &artifacts,
+        &[],
+        1,
+        0,
+        Duration::from_millis(12),
+    );
+
+    assert_eq!(json.total, 1);
+    assert_eq!(json.modules.len(), 2);
+    assert_eq!(json.safety, "normal");
+    assert_eq!(json.elapsed_ms, 12);
+}
+
+#[test]
+fn json_decompile_omits_vue_fields_for_plain_js() {
+    let json = JsonDecompileOutput {
+        code: Some("export {};".to_string()),
+        source_map: None,
+        kind: None,
+        status: None,
+        source_filename: None,
+        vue_sidecar_filename: None,
+        warnings: Vec::new(),
+        elapsed_ms: 3,
+    };
+
+    assert_eq!(
+        serde_json::to_value(json).expect("serialize decompile json"),
+        serde_json::json!({
+            "code": "export {};",
+            "warnings": [],
+            "elapsed_ms": 3
+        })
+    );
+}
+
+#[test]
+fn provenance_names_ignore_interleaved_vue_sfc_sidecars() {
+    let out_dir = PathBuf::from("/tmp/wakaru-out");
+    let artifacts = vec![
+        CliOutputArtifact {
+            filename: "src/App.vue.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::VueSfcSourceJs,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: Some("src/App.vue".to_string()),
+            source_map: None,
+        },
+        CliOutputArtifact {
+            filename: "src/App.vue".to_string(),
+            code: "<template />".to_string(),
+            kind: JsonModuleKind::VueSfc,
+            status: JsonModuleStatus::RecoveredVueSfc,
+            source_filename: Some("src/App.vue".to_string()),
+            source_map_filename: None,
+            source_map: None,
+        },
+        CliOutputArtifact {
+            filename: "src/after.js".to_string(),
+            code: "export {};".to_string(),
+            kind: JsonModuleKind::JavaScript,
+            status: JsonModuleStatus::Decompiled,
+            source_filename: None,
+            source_map_filename: Some("src/after.js".to_string()),
+            source_map: None,
+        },
+    ];
+    let resolved = vec![
+        (out_dir.join("src/App.vue.js"), artifacts[0].code.as_str()),
+        (out_dir.join("src/App.vue"), artifacts[1].code.as_str()),
+        (out_dir.join("src/after.js"), artifacts[2].code.as_str()),
+    ];
+
+    let final_names = provenance_final_names(&artifacts, &resolved, &out_dir);
+
+    assert_eq!(
+        final_names.get("src/App.vue").map(String::as_str),
+        Some("src/App.vue.js")
+    );
+    assert_eq!(
+        final_names.get("src/after.js").map(String::as_str),
+        Some("src/after.js")
+    );
+}
+
+#[test]
+fn format_elapsed_uses_seconds_for_long_durations() {
+    let d = Duration::from_millis(1234);
+    assert_eq!(format_elapsed(d), "1.23s");
+}
+
+#[test]
+fn format_elapsed_uses_millis_for_short_durations() {
+    let d = Duration::from_millis(456);
+    assert_eq!(format_elapsed(d), "456ms");
+}
+
+#[test]
+fn format_elapsed_zero() {
+    let d = Duration::from_millis(0);
+    assert_eq!(format_elapsed(d), "0ms");
+}
+
+#[test]
+fn parses_formatter_with_raw_unpack() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "bundle.js",
+        "--unpack",
+        "--raw",
+        "--formatter",
+        "-o",
+        "out",
+    ])
+    .expect("formatter with raw should parse");
+
+    assert!(cli.raw);
+    assert!(cli.formatter);
+}
+
+#[test]
+fn parses_multiple_unpack_inputs() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "--unpack",
+        "-o",
+        "out",
+        "bundle.js",
+        "src_greet_js.bundle.js",
+    ])
+    .expect("multi-file unpack should parse");
+
+    assert!(cli.unpack.is_some());
+    assert_eq!(
+        cli.inputs,
+        vec![
+            PathBuf::from("bundle.js"),
+            PathBuf::from("src_greet_js.bundle.js")
+        ]
+    );
+}
+
+#[test]
+fn parses_profile_flag() {
+    let cli = Cli::try_parse_from(["wakaru", "input.js", "--profile", "profile.json"])
+        .expect("--profile should parse");
+    assert_eq!(cli.profile, Some(PathBuf::from("profile.json")));
+    assert!(!cli.profile_rules);
+}
+
+#[test]
+fn parses_profile_rules_flag() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "input.js",
+        "--profile",
+        "profile.json",
+        "--profile-rules",
+    ])
+    .expect("--profile-rules should parse with --profile");
+    assert!(cli.profile_rules);
+}
+
+#[test]
+fn rejects_profile_rules_without_profile() {
+    assert!(Cli::try_parse_from(["wakaru", "input.js", "--profile-rules"]).is_err());
+}
+
+#[test]
+fn parses_source_map_aliases() {
+    let cli = Cli::try_parse_from(["wakaru", "input.js", "--source-map", "input.js.map"])
+        .expect("--source-map should parse");
+    assert_eq!(cli.sourcemap, Some(PathBuf::from("input.js.map")));
+
+    let cli = Cli::try_parse_from(["wakaru", "input.js", "--sourcemap", "input.js.map"])
+        .expect("--sourcemap alias should parse");
+    assert_eq!(cli.sourcemap, Some(PathBuf::from("input.js.map")));
+}
+
+#[test]
+fn unpack_rejects_input_source_map() {
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        "bundle.js",
+        "--unpack",
+        "--source-map",
+        "bundle.js.map",
+        "-o",
+        "out",
+    ])
+    .expect("arguments should parse");
+    let error = run_default(cli).expect_err("unpack input source maps must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("--source-map is not supported with --unpack"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn decompile_rejects_directory_input() {
+    let dir = temp_test_dir("decompile-dir");
+    fs::create_dir_all(&dir).expect("create temp dir");
+
+    let cli = Cli::try_parse_from(["wakaru", dir.to_str().expect("temp path should be utf8")])
+        .expect("directory input should parse");
+    let err = run_default(cli).expect_err("decompile should reject directory input");
+    assert!(
+        err.to_string()
+            .contains("cannot decompile a directory. Pass a JavaScript file or use --unpack"),
+        "unexpected error: {err}"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn unpack_output_survives_worker_pool_teardown_and_reuse() {
+    let dir = temp_test_dir("unpack-worker-lifetime");
+    fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("bundle.js");
+    let mut source = String::from(
+        "var wrap = (q, K) => () => (K || q((K = { exports: {} }).exports, K), K.exports); ",
+    );
+    for index in 0..64 {
+        source.push_str(&format!(
+            "var value{index} = wrap((exports, module) => {{ module.exports = {index}; }}); ",
+        ));
+    }
+    source.push_str("console.log(value0(), value63());");
+    fs::write(&input, source).unwrap();
+
+    let unpack_on_workers = |workers| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let result = pool.install(|| {
+            run_public_unpack(
+                std::slice::from_ref(&input),
+                false,
+                UnpackMode::Strict,
+                DceMode::Off,
+                RewriteLevel::Standard,
+                false,
+                false,
+            )
+            .unwrap()
+        });
+        drop(pool);
+        // Consume and later free worker-allocated output after the pool owner
+        // is gone. Repeat with fresh pools to exercise allocator thread reuse.
+        let mut modules = result.output.modules;
+        modules.sort();
+        assert!(modules.len() >= 64);
+        assert!(modules.iter().all(|(_, code)| !code.is_empty()));
+        modules
+    };
+    let expected = unpack_on_workers(1);
+    for workers in [4, 2, 4] {
+        assert_eq!(unpack_on_workers(workers), expected);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unpack_directory_inputs_are_recursive_detected_js_files_only() {
+    let dir = temp_test_dir("unpack-dir");
+    let nested = dir.join("nested");
+    let hidden = dir.join(".hidden");
+    let node_modules = dir.join("node_modules");
+    fs::create_dir_all(&nested).expect("create nested dir");
+    fs::create_dir_all(&hidden).expect("create hidden dir");
+    fs::create_dir_all(&node_modules).expect("create node_modules dir");
+
+    fs::write(dir.join("plain.js"), "const value = 1;").expect("write plain file");
+    fs::write(dir.join("runtime-like.js"), runtime_like_plain_source())
+        .expect("write runtime-like plain file");
+    fs::write(nested.join("chunk.js"), webpack5_chunk_source()).expect("write chunk");
+    fs::write(dir.join("runtime.js"), webpack5_runtime_entry_source())
+        .expect("write runtime entry");
+    fs::write(hidden.join("hidden.js"), webpack5_chunk_source()).expect("write hidden chunk");
+    fs::write(node_modules.join("vendor.js"), webpack5_chunk_source())
+        .expect("write node_modules chunk");
+    fs::write(dir.join("chunk.js.map"), webpack5_chunk_source()).expect("write sourcemap");
+
+    let execution = run_public_unpack(
+        std::slice::from_ref(&dir),
+        false,
+        UnpackMode::Strict,
+        DceMode::Off,
+        RewriteLevel::Standard,
+        false,
+        false,
+    )
+    .expect("read and unpack directory inputs");
+    assert_eq!(
+        execution.scan_stats,
+        Some(DirectoryScanStats {
+            scanned: 4,
+            detected: 2,
+            skipped: 2,
+        })
+    );
+    assert!(!execution.output.modules.is_empty());
+    assert!(
+        execution
+            .output
+            .provenance
+            .iter()
+            .any(|module| module.input.ends_with("nested\\chunk.js")
+                || module.input.ends_with("nested/chunk.js")),
+        "missing detected chunk provenance: {:?}",
+        execution.output.provenance
+    );
+    assert!(
+        execution
+            .output
+            .provenance
+            .iter()
+            .any(|module| module.input.ends_with("runtime.js")),
+        "missing detected runtime provenance: {:?}",
+        execution.output.provenance
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn unpack_mixed_explicit_and_directory_inputs_processes_plain_explicit_file() {
+    let dir = temp_test_dir("unpack-mixed-input-policy");
+    let chunks = dir.join("chunks");
+    fs::create_dir_all(&chunks).expect("create chunks dir");
+    let explicit = dir.join("explicit.js");
+    fs::write(&explicit, "const explicitValue = 1;").expect("write explicit file");
+    fs::write(chunks.join("chunk.js"), webpack5_chunk_source()).expect("write chunk");
+
+    let execution = run_public_unpack(
+        &[explicit.clone(), chunks],
+        false,
+        UnpackMode::Strict,
+        DceMode::Off,
+        RewriteLevel::Standard,
+        false,
+        false,
+    )
+    .expect("mixed explicit and directory inputs should unpack");
+
+    assert_eq!(
+        execution.scan_stats,
+        Some(DirectoryScanStats {
+            scanned: 1,
+            detected: 1,
+            skipped: 0,
+        })
+    );
+    assert!(
+        execution
+            .output
+            .modules
+            .iter()
+            .any(|(_, code)| code.contains("explicitValue")),
+        "plain explicit input was dropped: {:?}",
+        execution.output.modules
+    );
+    assert!(
+        execution
+            .output
+            .provenance
+            .iter()
+            .any(|module| { module.input.ends_with("explicit.js") && !module.ranges.is_empty() }),
+        "plain explicit provenance was dropped: {:?}",
+        execution.output.provenance
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn explicit_bun_standalone_extracts_javascript_entries() {
+    let dir = temp_test_dir("bun-standalone");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let executable = dir.join("app");
+    fs::write(&executable, synthetic_bun_standalone()).expect("write Bun executable");
+
+    let sources = read_explicit_unpack_sources(&executable).expect("extract Bun sources");
+
+    assert_eq!(sources.len(), 1, "non-JavaScript assets must be ignored");
+    assert_eq!(sources[0].code(), "console.log('entry');");
+    assert!(
+        sources[0].filename().ends_with("app#bun/src/entry.ts"),
+        "unexpected virtual filename: {}",
+        sources[0].filename()
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn explicit_legacy_bun_standalone_extracts_javascript_entries() {
+    let dir = temp_test_dir("legacy-bun-standalone");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let executable = dir.join("app");
+    let mut bytes = b"\x7fELF".to_vec();
+    bytes.extend_from_slice(include_bytes!(
+        "../tests/fixtures/bun-standalone-assets/standalone-v1.3.3.bin"
+    ));
+    fs::write(&executable, bytes).expect("write legacy Bun executable");
+
+    let sources = read_explicit_unpack_sources(&executable).expect("extract legacy Bun sources");
+
+    assert_eq!(sources.len(), 1, "non-JavaScript assets must be ignored");
+    assert!(
+        sources[0].code().contains("console.log"),
+        "unexpected embedded JavaScript: {}",
+        sources[0].code()
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn executable_without_bun_graph_is_rejected_clearly() {
+    let dir = temp_test_dir("non-bun-executable");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let executable = dir.join("app");
+    fs::write(&executable, b"\x7fELFnot bun").expect("write executable");
+
+    let error = read_explicit_unpack_sources(&executable)
+        .expect_err("ordinary executable should not be treated as JavaScript");
+    assert!(
+        error
+            .to_string()
+            .contains("does not contain a supported Bun standalone graph"),
+        "unexpected error: {error}"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn bun_embedded_paths_are_safe_and_stable() {
+    assert_eq!(
+        sanitize_bun_embedded_path("/$bunfs/root/src/entry.ts", 0),
+        "src/entry.ts"
+    );
+    assert_eq!(
+        sanitize_bun_embedded_path("B:\\~BUN\\root\\..\\index", 2),
+        "index.js"
+    );
+    assert_eq!(sanitize_bun_embedded_path("../../", 7), "embedded-7.js");
+    assert!(is_executable_container(b"\xbf\xba\xfe\xcarest"));
+}
+
+#[test]
+fn unpack_directory_skips_malformed_javascript_candidate() {
+    let dir = temp_test_dir("unpack-dir-malformed");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    fs::write(dir.join("malformed.js"), "function {").expect("write malformed file");
+    fs::write(dir.join("chunk.js"), webpack5_chunk_source()).expect("write chunk");
+
+    let execution = run_public_unpack(
+        std::slice::from_ref(&dir),
+        false,
+        UnpackMode::Strict,
+        DceMode::Off,
+        RewriteLevel::Standard,
+        false,
+        false,
+    )
+    .expect("malformed directory candidate should not abort the scan");
+
+    assert_eq!(
+        execution.scan_stats,
+        Some(DirectoryScanStats {
+            scanned: 2,
+            detected: 1,
+            skipped: 1,
+        })
+    );
+    assert!(!execution.output.modules.is_empty());
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn unpack_directory_without_detected_files_errors() {
+    let dir = temp_test_dir("unpack-dir-empty");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    fs::write(dir.join("plain.js"), "const value = 1;").expect("write plain file");
+
+    let err = run_public_unpack(
+        std::slice::from_ref(&dir),
+        false,
+        UnpackMode::Strict,
+        DceMode::Off,
+        RewriteLevel::Standard,
+        false,
+        false,
+    )
+    .err()
+    .expect("directory with no detected bundles should error");
+    assert!(
+        err.to_string()
+            .contains("no bundle or chunk files detected in directory input"),
+        "unexpected error: {err}"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn output_file_requires_force_to_overwrite() {
+    let dir = temp_test_dir("output-file");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("out.js");
+    fs::write(&path, "old").expect("write temp file");
+
+    assert!(ensure_output_file(&path, false).is_err());
+    assert!(ensure_output_file(&path, true).is_ok());
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn output_dir_requires_force_when_non_empty() {
+    let dir = temp_test_dir("output-dir");
+    fs::create_dir_all(&dir).expect("create temp dir");
+    fs::write(dir.join("entry.js"), "old").expect("write temp file");
+
+    assert!(ensure_output_dir(&dir, false).is_err());
+    assert!(ensure_output_dir(&dir, true).expect("force should allow non-empty dir"));
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn unpack_cli_does_not_write_overlapping_dot_payload_outside_output_dir() {
+    let dir = temp_test_dir("unpack-cli-overlap");
+    let out_dir = dir.join("out");
+    let bundle_path = dir.join("bundle.js");
+    let outside_target = dir.join("node_modules/@wakaru/cli/bin/wakaru");
+    fs::create_dir_all(outside_target.parent().expect("outside target parent"))
+        .expect("create outside target parent");
+    fs::write(&outside_target, "original").expect("write outside marker");
+    fs::write(&bundle_path, overlapping_dot_webpack5_bundle()).expect("write bundle");
+
+    let cli = Cli::try_parse_from([
+        "wakaru",
+        bundle_path.to_str().expect("bundle path should be utf8"),
+        "--unpack",
+        "-o",
+        out_dir.to_str().expect("output path should be utf8"),
+    ])
+    .expect("cli should parse");
+    run_default(cli).expect("unpack should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&outside_target).expect("read outside marker"),
+        "original",
+        "outside marker must not be overwritten"
+    );
+    assert!(
+        out_dir
+            .join("..../node_modules/@wakaru/cli/bin/wakaru.js")
+            .exists(),
+        "payload should be written under the output directory"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temp dir");
+}
+
+#[test]
+fn output_dir_reports_when_existing_writes_need_checks() {
+    let empty_dir = temp_test_dir("output-dir-empty");
+    fs::create_dir_all(&empty_dir).expect("create temp dir");
+    assert!(
+        !ensure_output_dir(&empty_dir, false).expect("empty dir should be accepted"),
+        "empty directories can write directly without checking existing files"
+    );
+    fs::remove_dir_all(&empty_dir).expect("remove empty temp dir");
+
+    let new_dir = temp_test_dir("output-dir-new");
+    assert!(
+        !ensure_output_dir(&new_dir, false).expect("new dir should be created"),
+        "new directories can write directly without checking existing files"
+    );
+    fs::remove_dir_all(&new_dir).expect("remove new temp dir");
+
+    let non_empty_dir = temp_test_dir("output-dir-non-empty");
+    fs::create_dir_all(&non_empty_dir).expect("create temp dir");
+    fs::write(non_empty_dir.join("entry.js"), "old").expect("write temp file");
+    assert!(
+        ensure_output_dir(&non_empty_dir, true).expect("force should allow non-empty dir"),
+        "non-empty forced directories should preserve write-if-changed checks"
+    );
+    fs::remove_dir_all(&non_empty_dir).expect("remove non-empty temp dir");
+}
+
+pub(crate) fn temp_test_dir(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("wakaru-cli-test-{name}-{nanos}"))
+}
+
+fn synthetic_bun_standalone() -> Vec<u8> {
+    const RECORD_SIZE: usize = 52;
+    const TRAILER: &[u8] = b"\n---- Bun! ----\n";
+
+    fn append(data: &mut Vec<u8>, bytes: &[u8], nul: bool) -> (u32, u32) {
+        let pointer = (data.len() as u32, bytes.len() as u32);
+        data.extend_from_slice(bytes);
+        if nul {
+            data.push(0);
+        }
+        pointer
+    }
+
+    fn put_pointer(record: &mut [u8], offset: usize, pointer: (u32, u32)) {
+        record[offset..offset + 4].copy_from_slice(&pointer.0.to_le_bytes());
+        record[offset + 4..offset + 8].copy_from_slice(&pointer.1.to_le_bytes());
+    }
+
+    let mut data = Vec::new();
+    let entry_name = append(&mut data, b"/$bunfs/root/src/entry.ts", true);
+    let entry_contents = append(&mut data, b"console.log('entry');", true);
+    let asset_name = append(&mut data, b"/$bunfs/root/logo.png", true);
+    let asset_contents = append(&mut data, b"PNG", true);
+    let modules_offset = data.len() as u32;
+
+    let mut entry = [0u8; RECORD_SIZE];
+    put_pointer(&mut entry, 0, entry_name);
+    put_pointer(&mut entry, 8, entry_contents);
+    entry[48] = 2; // UTF-8
+    entry[49] = 2; // TypeScript
+    entry[50] = 1; // ESM
+    data.extend_from_slice(&entry);
+
+    let mut asset = [0u8; RECORD_SIZE];
+    put_pointer(&mut asset, 0, asset_name);
+    put_pointer(&mut asset, 8, asset_contents);
+    asset[49] = 5; // file
+    data.extend_from_slice(&asset);
+
+    let mut executable = b"\x7fELFsynthetic-prefix".to_vec();
+    executable.extend_from_slice(&data);
+    executable.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    executable.extend_from_slice(&modules_offset.to_le_bytes());
+    executable.extend_from_slice(&((RECORD_SIZE * 2) as u32).to_le_bytes());
+    executable.extend_from_slice(&0u32.to_le_bytes()); // entry point
+    executable.extend_from_slice(&0u32.to_le_bytes()); // argv offset
+    executable.extend_from_slice(&0u32.to_le_bytes()); // argv length
+    executable.extend_from_slice(&0u32.to_le_bytes()); // flags
+    executable.extend_from_slice(TRAILER);
+    executable
+}
+
+pub(crate) fn vue_render_module_source() -> &'static str {
+    r#"
+import { toDisplayString as _toDisplayString, openBlock as _openBlock, createElementBlock as _createElementBlock } from "vue";
+const __sfc__ = { props: { msg: String } };
+export function render(_ctx, _cache) {
+  return (_openBlock(), _createElementBlock("div", null, _toDisplayString(_ctx.msg), 1));
+}
+__sfc__.render = render;
+export default __sfc__;
+"#
+}
+
+fn vite_setup_component_module_source() -> &'static str {
+    r#"
+import { defineComponent, computed, openBlock, createVNode } from "vue";
+import { P } from "./Panel.vue";
+export default defineComponent({
+  __name: "PanelWrapper",
+  setup() {
+    const Panel = computed(() => createPanelState({
+      title: "Ready",
+      enabled: true,
+      rank: 1,
+      group: "main"
+    }));
+    return () => (
+      openBlock(), createVNode(P, { state: Panel.value }, null, 8, ["state"])
+    );
+  }
+});
+"#
+}
+
+fn webpack5_chunk_source() -> &'static str {
+    r#"
+(self.webpackChunk = self.webpackChunk || []).push([
+  [1],
+  {
+    100: function(module, exports, require) {
+      "use strict";
+      require.r(exports);
+      exports.default = 1;
+    }
+  }
+]);
+"#
+}
+
+fn webpack5_runtime_entry_source() -> &'static str {
+    r#"
+(() => {
+  var modules = {};
+  function require(id) { return {}; }
+  require.m = modules;
+  require.f = {};
+  require.e = function(id) { return Promise.resolve(id); };
+  require.u = function(id) { return id + ".bundle.js"; };
+  require.t = function(value) { return value; };
+  require.e(529).then(require.t.bind(require, 529, 19));
+})();
+"#
+}
+
+fn webpack5_vue_sfc_bundle_source() -> &'static str {
+    r#"
+(() => {
+  var __webpack_modules__ = ({
+    "./node_modules/vue/index.js": ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+      __webpack_require__.r(__webpack_exports__);
+      __webpack_require__.d(__webpack_exports__, {
+        createElementBlock: () => createElementBlock,
+        createVNode: () => createVNode,
+        defineComponent: () => defineComponent,
+        openBlock: () => openBlock,
+        toDisplayString: () => toDisplayString
+      });
+      function createElementBlock() {}
+      function createVNode() {}
+      function defineComponent(options) { return options; }
+      function openBlock() {}
+      function toDisplayString(value) { return String(value); }
+    }),
+    "./src/components/ChildPanel.vue": ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+      __webpack_require__.r(__webpack_exports__);
+      __webpack_require__.d(__webpack_exports__, { default: () => __WEBPACK_DEFAULT_EXPORT__ });
+      var vue__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__("./node_modules/vue/index.js");
+      const __WEBPACK_DEFAULT_EXPORT__ = (0, vue__WEBPACK_IMPORTED_MODULE_0__.defineComponent)({
+        name: "ChildPanel",
+        props: { label: String }
+      });
+    }),
+    "./src/App.vue": ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+      __webpack_require__.r(__webpack_exports__);
+      __webpack_require__.d(__webpack_exports__, { default: () => __WEBPACK_DEFAULT_EXPORT__ });
+      var vue__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__("./node_modules/vue/index.js");
+      var _components_ChildPanel_vue__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__("./src/components/ChildPanel.vue");
+      const _hoisted_1 = { class: "notice" };
+      function render(_ctx, _cache) {
+        return (0, vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0, vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("section", _hoisted_1, [
+          (0, vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)(_components_ChildPanel_vue__WEBPACK_IMPORTED_MODULE_1__["default"], { label: _ctx.message }, null, 8, ["label"]),
+          (0, vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("span", null, (0, vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.message), 1)
+        ]);
+      }
+      const __WEBPACK_DEFAULT_EXPORT__ = (0, vue__WEBPACK_IMPORTED_MODULE_0__.defineComponent)({
+        name: "WebpackPanel",
+        props: { message: String },
+        render
+      });
+    })
+  });
+  var __webpack_module_cache__ = {};
+  function __webpack_require__(moduleId) {
+    var cachedModule = __webpack_module_cache__[moduleId];
+    if (cachedModule !== undefined) return cachedModule.exports;
+    var module = __webpack_module_cache__[moduleId] = { exports: {} };
+    __webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+    return module.exports;
+  }
+  __webpack_require__.d = (exports, definition) => {
+    for (var key in definition) {
+      if (__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+        Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+      }
+    }
+  };
+  __webpack_require__.o = (obj, prop) => Object.prototype.hasOwnProperty.call(obj, prop);
+  __webpack_require__.r = (exports) => {
+    if (typeof Symbol !== "undefined" && Symbol.toStringTag) {
+      Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+    }
+    Object.defineProperty(exports, "__esModule", { value: true });
+  };
+  __webpack_require__("./src/App.vue");
+})();
+"#
+}
+
+fn webpack5_multi_vue_sfc_bundle_source() -> &'static str {
+    r#"
+(() => {
+  var __webpack_modules__ = ({
+    "./node_modules/vue/index.js": ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+      __webpack_require__.r(__webpack_exports__);
+      __webpack_require__.d(__webpack_exports__, {
+        createElementBlock: () => createElementBlock,
+        createVNode: () => createVNode,
+        defineComponent: () => defineComponent,
+        openBlock: () => openBlock,
+        toDisplayString: () => toDisplayString
+      });
+      function createElementBlock() {}
+      function createVNode() {}
+      function defineComponent(options) { return options; }
+      function openBlock() {}
+      function toDisplayString(value) { return String(value); }
+    }),
+    "./src/entry.js": ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+      __webpack_require__.r(__webpack_exports__);
+      var vue__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__("./node_modules/vue/index.js");
+      const Child = (0, vue__WEBPACK_IMPORTED_MODULE_0__.defineComponent)({
+        __name: "Child",
+        props: { msg: String },
+        setup(props) {
+          return (_ctx, _cache) => ((0, vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0, vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("span", null, props.msg, 1));
+        }
+      });
+      const App = (0, vue__WEBPACK_IMPORTED_MODULE_0__.defineComponent)({
+        __name: "App",
+        setup() {
+          return (_ctx, _cache) => ((0, vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0, vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("main", null, [
+            (0, vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)(Child, { msg: "Hi" })
+          ]));
+        }
+      });
+    })
+  });
+  var __webpack_module_cache__ = {};
+  function __webpack_require__(moduleId) {
+    var cachedModule = __webpack_module_cache__[moduleId];
+    if (cachedModule !== undefined) return cachedModule.exports;
+    var module = __webpack_module_cache__[moduleId] = { exports: {} };
+    __webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+    return module.exports;
+  }
+  __webpack_require__.d = (exports, definition) => {
+    for (var key in definition) {
+      if (__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+        Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+      }
+    }
+  };
+  __webpack_require__.o = (obj, prop) => Object.prototype.hasOwnProperty.call(obj, prop);
+  __webpack_require__.r = (exports) => {
+    if (typeof Symbol !== "undefined" && Symbol.toStringTag) {
+      Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+    }
+    Object.defineProperty(exports, "__esModule", { value: true });
+  };
+  __webpack_require__("./src/entry.js");
+})();
+"#
+}
+
+fn runtime_like_plain_source() -> &'static str {
+    r#"
+(() => {
+  const api = {};
+  api.e = 1;
+  api.u = 2;
+  api.t = 3;
+  api.m = 4;
+})();
+"#
+}
+
+fn overlapping_dot_webpack5_bundle() -> &'static str {
+    r#"
+(() => {
+  var __webpack_modules__ = ({
+    "....//node_modules/@wakaru/cli/bin/wakaru": ((module) => {
+      module.exports = "pwned";
+    })
+  });
+  var __webpack_module_cache__ = {};
+  function __webpack_require__(moduleId) {
+    var module = __webpack_module_cache__[moduleId] = { exports: {} };
+    __webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+    return module.exports;
+  }
+  console.log(__webpack_require__("....//node_modules/@wakaru/cli/bin/wakaru"));
+})();
+"#
+}
+
+#[test]
+fn renders_provenance_json_with_final_names_and_default_input() {
+    let provenance = vec![
+        CliModuleProvenance {
+            filename: "b.js".to_string(),
+            input: String::new(),
+            ranges: vec![(10, 20), (30, 40)],
+            inspection_context_ranges: Vec::new(),
+        },
+        CliModuleProvenance {
+            filename: "a \"quoted\".js".to_string(),
+            input: "chunk-1.js".to_string(),
+            ranges: vec![(0, 5)],
+            inspection_context_ranges: Vec::new(),
+        },
+        CliModuleProvenance {
+            filename: "module-1/chunk_a.js".to_string(),
+            input: String::new(),
+            ranges: vec![(50, 60)],
+            inspection_context_ranges: vec![(40, 80), (90, 120)],
+        },
+    ];
+    let mut final_names = HashMap::new();
+    // CLI-side dedup renamed b.js on disk.
+    final_names.insert("b.js", "b_2.js".to_string());
+
+    let json = render_provenance_json(
+        &provenance,
+        &final_names,
+        "bundle.js",
+        &[CliBundleFormat::Structural(wakaru::BundleFormat::Webpack5)],
+    );
+
+    assert!(
+        json.contains(r#""format": "webpack5""#),
+        "format metadata missing:\n{json}"
+    );
+    assert!(
+        json.contains(r#""strategy": "mixed""#),
+        "strategy metadata missing:\n{json}"
+    );
+    assert!(
+        json.contains(r#""b_2.js": {"input": "bundle.js", "ranges": [[10,20],[30,40]], "extraction": "structural"}"#),
+        "renamed module with default input missing:\n{json}"
+    );
+    assert!(
+        json.contains(r#""a \"quoted\".js": {"input": "chunk-1.js", "ranges": [[0,5]], "extraction": "structural"}"#),
+        "escaped filename with explicit input missing:\n{json}"
+    );
+    assert!(
+        json.contains(r#""module-1/chunk_a.js": {"input": "bundle.js", "ranges": [[50,60]], "extraction": "heuristic", "context_ranges": [[40,80],[90,120]]}"#),
+        "nested heuristic module metadata missing:\n{json}"
+    );
+    // Must be alphabetically sorted and valid JSON shape.
+    assert!(json.find("a \\\"quoted\\\"").unwrap() < json.find("b_2.js").unwrap());
+    assert!(json.starts_with(
+        "{\n  \"format\": \"webpack5\",\n  \"strategy\": \"mixed\",\n  \"modules\": {\n"
+    ));
+    assert!(json.ends_with("  }\n}\n"));
+}
+
+#[test]
+fn public_diagnostic_keeps_facade_code_and_severity() {
+    let warning = CliWarning::new(
+        "module.js".to_string(),
+        wakaru::DiagnosticCode::FactCollectionFailed,
+        wakaru::DiagnosticSeverity::Warning,
+        "could not collect facts".to_string(),
+    );
+
+    assert_eq!(warning.filename, "module.js");
+    assert_eq!(warning.kind, "fact_collection_failed");
+    assert!(!warning.is_error);
+    assert_eq!(warning.message, "could not collect facts");
+}
+
+#[test]
+fn regular_unpack_json_has_no_chunk_enumeration_surface() {
+    let json = JsonUnpackOutput {
+        detected_formats: vec!["webpack5".to_string()],
+        safety: "normal".to_string(),
+        modules: Vec::new(),
+        warnings: Vec::new(),
+        total: 0,
+        failed: 0,
+        elapsed_ms: 1,
+    };
+    let rendered = serde_json::to_string(&json).expect("serialize");
+    assert!(
+        !rendered.contains("chunk_enumeration"),
+        "debug metadata leaked into regular unpack JSON:\n{rendered}"
+    );
+}
+
+#[test]
+fn debug_enumerate_chunks_serializes_relative_imports_at_root() {
+    let output = enumerate_chunks_json(
+        r#"import value from "./aaaa1111.js"; import("./lazy-beta.js");"#,
+        "entry.js",
+    )
+    .expect("enumerate chunks");
+    let rendered = serde_json::to_string(&output).expect("serialize");
+    assert!(rendered.contains(r#""input":"entry.js""#), "{rendered}");
+    assert!(rendered.contains(r#""detected_format":null"#), "{rendered}");
+    assert!(rendered.contains(
+        r#""relative_imports":[{"specifier":"./aaaa1111.js","kind":"import"},{"specifier":"./lazy-beta.js","kind":"dynamic_import"}]"#
+    ), "unexpected shape:\n{rendered}");
+}
+
+#[test]
+fn debug_enumerate_chunks_returns_null_without_facts() {
+    let output =
+        enumerate_chunks_json("console.log('plain');", "plain.js").expect("enumerate plain source");
+    assert!(output.detected_format.is_none());
+    assert!(output.enumeration.is_none());
+}
+
+#[test]
+fn debug_enumerate_chunks_reports_webpack_fixture_without_unpacking() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../core/tests/bundles/webpack-gen/dist/wp5-array/bundle.js"
+    );
+    let source = std::fs::read_to_string(fixture).expect("fixture read");
+    let output = enumerate_chunks_json(&source, "bundle.js").expect("enumerate fixture");
+    assert_eq!(output.detected_format.as_deref(), Some("webpack5"));
+    let rendered = output.enumeration.expect("fixture enumeration");
+    assert_eq!(rendered.public_path.status, "runtime_computed");
+    let [asset] = rendered.assets.as_slice() else {
+        panic!("expected one asset");
+    };
+    assert_eq!(asset.kind, "js");
+    assert_eq!(asset.status, "enumerated");
+    assert_eq!(asset.urls.len(), 1);
+    assert_eq!(asset.urls[0].url, "chunk-1.js");
+    assert_eq!(asset.urls[0].source, "ensure_call");
+}

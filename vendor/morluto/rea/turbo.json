@@ -1,0 +1,143 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "tasks": {
+    "build": {
+      "inputs": [
+        ".nvmrc",
+        "package.json",
+        "package-lock.json",
+        "scripts/check-dependency-install.mjs",
+        "scripts/clean-build-output.mjs",
+        "scripts/generate-mcp-tool-catalog.mjs",
+        "scripts/generate-package-metadata.mjs",
+        "scripts/generate-skill-metadata.mjs",
+        "scripts/generate-product-catalog.mjs",
+        "scripts/generate-completion-ledger.mjs",
+        "scripts/lib/**/*.mjs",
+        "scripts/verify/managed/**",
+        "scripts/fixtures/managed/**",
+        ".oxfmtrc.json",
+        "skill-src/**",
+        "src/**/*.ts",
+        "!src/**/*.test.ts",
+        "!src/**/*.fixture.ts",
+        "!src/generatedMcpToolCatalog.ts",
+        "tsconfig.json",
+        "tsconfig.build.json"
+      ],
+      "outputs": [
+        "dist/**",
+        ".cache/tsconfig.build.tsbuildinfo",
+        "src/generatedMcpToolCatalog.ts",
+        "skills/**",
+        "docs/public/product-catalog.json",
+        "docs/verification/managed-conformance-manifest.json",
+        "docs/verification/managed-conformance-ledger.json"
+      ]
+    },
+    "typecheck": {
+      "dependsOn": ["build"],
+      "inputs": [
+        ".nvmrc",
+        "package.json",
+        "package-lock.json",
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "tsconfig.json",
+        "tsconfig.build.json",
+        "vitest.config.ts",
+        "scripts/**/*.d.mts"
+      ],
+      "outputs": [".cache/tsconfig.typecheck.tsbuildinfo"]
+    },
+    "metadata:check": {
+      "inputs": [
+        "package.json",
+        "package-lock.json",
+        "scripts/generate-package-metadata.mjs",
+        "scripts/lib/generated-file.mjs",
+        "skill-src/reverse-engineer-anything/SKILL.md",
+        "src/generatedPackageMetadata.ts"
+      ]
+    },
+    "lint": {
+      "inputs": [
+        ".nvmrc",
+        ".oxlintrc.json",
+        "package.json",
+        "package-lock.json",
+        "scripts/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
+        "src/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
+        "tests/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
+        "vitest.config.ts"
+      ]
+    },
+    "format:check": {},
+    "knip": {
+      "dependsOn": ["build"],
+      "inputs": [
+        ".nvmrc",
+        "knip.json",
+        "package.json",
+        "package-lock.json",
+        "scripts/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "tsconfig.json",
+        "tsconfig.build.json"
+      ]
+    },
+    "jscpd": {
+      "inputs": [
+        ".gitignore",
+        ".jscpd.json",
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**"
+      ]
+    },
+    "scan:todos": {
+      "inputs": [
+        "bridge/**/*.{java,py}",
+        "scripts/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
+        "src/**/*.ts",
+        "tests/**/*.ts"
+      ]
+    },
+    "test:run": {
+      "dependsOn": ["build"],
+      "inputs": [
+        ".nvmrc",
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "scripts/**",
+        "bridge/**",
+        "vitest.config.ts"
+      ]
+    },
+    "docs:check:built": {
+      "dependsOn": ["build"],
+      "inputs": [
+        ".nvmrc",
+        "package.json",
+        "package-lock.json",
+        "scripts/generate-*.mjs",
+        "scripts/check-doc-facts.mjs",
+        "scripts/lib/*.mjs",
+        "scripts/verify/managed/*.mjs",
+        "scripts/fixtures/managed/*.mjs",
+        "scripts/verify/apple/*.mjs",
+        "scripts/fixtures/apple/*.mjs",
+        "src/generated*.ts",
+        "src/contracts/**/*.ts",
+        "docs/**",
+        "skill-src/**",
+        "skills/**/SKILL.md",
+        "README.md"
+      ]
+    }
+  }
+}

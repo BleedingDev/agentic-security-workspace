@@ -1,0 +1,50 @@
+---
+title: Quick Start
+icon: Rocket
+description: Decompile your first file or unpack your first bundle.
+---
+
+Wakaru turns minified and bundled JavaScript into readable code.
+Run it without a global install:
+
+```bash
+# decompile a single file
+npx wakaru input.js -o output.js
+
+# unpack a bundle into individual modules
+npx wakaru bundle.js --unpack -o out/
+```
+
+The first command writes readable JavaScript to `output.js`. The second
+writes recovered modules to `out/`. Use a new or empty output directory.
+
+Open the output in your editor and search for a function, message, or URL
+you recognize. [Read an unpacked bundle](/guides/read-an-unpacked-bundle)
+walks through a small example.
+
+## Install
+
+For regular use, install the CLI globally:
+
+```bash
+npm install -g wakaru@latest
+wakaru --version
+```
+
+Prebuilt binaries for macOS, Linux, and Windows are on
+[GitHub Releases](https://github.com/pionxzh/wakaru/releases).
+
+## Try it in the browser
+
+[Try it in the playground](https://wakarujs.com/playground/) with your own
+code or a built-in example. Everything runs in your browser.
+See the [Playground guide](/guides/playground) for the available modes.
+
+## Next steps
+
+<Cards>
+  <Card title="What is Wakaru" href="/what-is-wakaru" />
+  <Card title="Unpack a bundle" href="/guides/unpack-a-bundle" />
+  <Card title="Read an unpacked bundle" href="/guides/read-an-unpacked-bundle" />
+  <Card title="CLI reference" href="/reference/cli" />
+</Cards>

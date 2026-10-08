@@ -1,0 +1,96 @@
+---
+title: What is Wakaru
+icon: CircleQuestionMark
+description: What Wakaru does, what it deliberately does not do, and how it fits with other tools.
+---
+
+Wakaru is a JavaScript decompiler. It takes bundled, transpiled, minified
+production JavaScript and recovers readable, modern source. It is written in
+Rust and runs as a CLI, a Rust crate, or fully in your browser via
+WebAssembly.
+
+## Three layers of transformation, reversed
+
+Production JavaScript is usually the result of three tools stacked on top of
+each other: a transpiler, a bundler, and a minifier. Wakaru reverses each
+layer. Here is what that looks like on one small module:
+
+```js title="Before: minified Babel output"
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: !0 });
+exports.loadProfile = void 0;
+var _api = _interopRequireDefault(require("./api"));
+// _interopRequireDefault and _asyncToGenerator helper definitions omitted
+var loadProfile = function () {
+    var e = _asyncToGenerator(function* (e) {
+        var t = yield _api.default.fetchUser(e), r = null != t.name ? t.name : "anonymous";
+        return { name: r, avatar: null == t.profile ? void 0 : t.profile.avatar };
+    });
+    return function (t) { return e.apply(this, arguments); };
+}();
+exports.loadProfile = loadProfile;
+```
+
+```js title="After: wakaru profile.min.js"
+import _api from "./api";
+export const loadProfile = async (e) => {
+    const t = await _api.fetchUser(e);
+    const name = t.name ?? "anonymous";
+    return {
+        name,
+        avatar: t.profile?.avatar
+    };
+};
+```
+
+The interop `require` became an `import`. The `exports` assignment became an
+`export`. The generator state machine became `async`/`await`. The `null !=`
+checks became `??` and `?.`.
+
+### Bundlers
+
+A bundler combines modules and adds code to load them. Wakaru recognizes
+supported bundle formats, separates the modules, and recovers imports
+between them. For example, a webpack bundle becomes a directory of files
+you can search and read individually.
+
+### Transpilers
+
+A transpiler replaces modern syntax with code that works in older runtimes.
+Wakaru recognizes those patterns and restores constructs such as
+`async` functions, classes, and JSX. The example above recovers an async
+function from Babel's helper code.
+
+### Minifiers
+
+A minifier trades readability for size: `true` becomes `!0`, statements
+collapse into comma chains, and comparisons flip. Wakaru expands these
+patterns into readable expressions and statements.
+
+See [Supported inputs](/reference/supported-inputs) for the full list of
+bundlers, transpilers, and minifiers.
+
+## What it is not
+
+**Not a formatter.** A formatter or beautifier only changes whitespace and
+layout. Wakaru rewrites the AST: it reverses minifier artifacts, restores
+transpiled syntax, removes bundler runtime patterns, and splits bundles into
+modules.
+
+**Not a deobfuscator.** For code that deliberately hides its behavior, start
+with a dedicated deobfuscator. See [Obfuscated code](/guides/obfuscated-code)
+for how to recognize it and combine tools.
+
+**Not a name guesser.** When a source map with original names is available,
+Wakaru recovers them. Without one, it applies conservative renaming
+heuristics where the code gives evidence, but most mangled names stay short.
+Pair it with an LLM renamer like
+[humanify](https://github.com/jehna/humanify) if you want guessed names.
+
+## Does the output behave the same?
+
+Wakaru is designed to preserve behavior while recovering readable structure.
+Three [rewrite levels](/guides/rewrite-levels) let you choose between
+behavioral fidelity and stronger readability-oriented recovery. Each level
+has a documented semantic contract, and a Test262 round-trip harness
+continuously measures semantic preservation.

@@ -1,0 +1,95 @@
+---
+source: crates/core/tests/webpack4_unpack_raw.rs
+expression: code
+---
+"use strict";
+require.r(exports);
+var r = require("./module-2.js"), o = require("./module-10.js");
+function i(e, t) {
+    for(var n = arguments.length, i = Array(n > 2 ? n - 2 : 0), a = 2; a < n; a++)i[a - 2] = arguments[a];
+    return r.k.apply(void 0, [
+        o.b,
+        e,
+        t
+    ].concat(i));
+}
+function a(e, t) {
+    for(var n = arguments.length, i = Array(n > 2 ? n - 2 : 0), a = 2; a < n; a++)i[a - 2] = arguments[a];
+    return r.k.apply(void 0, [
+        o.d,
+        e,
+        t
+    ].concat(i));
+}
+function u(e, t, n) {
+    for(var i = arguments.length, a = Array(i > 3 ? i - 3 : 0), u = 3; u < i; u++)a[u - 3] = arguments[u];
+    return r.k.apply(void 0, [
+        o.f,
+        e,
+        t,
+        n
+    ].concat(a));
+}
+require.d(exports, "take", function() {
+    return r.s;
+});
+require.d(exports, "takem", function() {
+    return r.t;
+});
+require.d(exports, "put", function() {
+    return r.n;
+});
+require.d(exports, "all", function() {
+    return r.b;
+});
+require.d(exports, "race", function() {
+    return r.o;
+});
+require.d(exports, "call", function() {
+    return r.e;
+});
+require.d(exports, "apply", function() {
+    return r.c;
+});
+require.d(exports, "cps", function() {
+    return r.h;
+});
+require.d(exports, "fork", function() {
+    return r.k;
+});
+require.d(exports, "spawn", function() {
+    return r.r;
+});
+require.d(exports, "join", function() {
+    return r.m;
+});
+require.d(exports, "cancel", function() {
+    return r.f;
+});
+require.d(exports, "select", function() {
+    return r.p;
+});
+require.d(exports, "actionChannel", function() {
+    return r.a;
+});
+require.d(exports, "cancelled", function() {
+    return r.g;
+});
+require.d(exports, "flush", function() {
+    return r.j;
+});
+require.d(exports, "getContext", function() {
+    return r.l;
+});
+require.d(exports, "setContext", function() {
+    return r.q;
+});
+require.d(exports, "takeEvery", function() {
+    return i;
+});
+require.d(exports, "takeLatest", function() {
+    return a;
+});
+require.d(exports, "throttle", function() {
+    return u;
+});

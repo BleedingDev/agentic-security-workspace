@@ -1,0 +1,6 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import _default from "./module-45.js";
+export default _default();

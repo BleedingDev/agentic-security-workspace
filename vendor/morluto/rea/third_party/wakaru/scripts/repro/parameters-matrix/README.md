@@ -1,0 +1,32 @@
+# Parameters Reproduction Matrix
+
+This harness checks how Babel, TypeScript, SWC, and esbuild handle default
+parameters and destructured parameters, then runs wakaru on the generated
+JavaScript. Esbuild is checked at ES2015 because it does not lower
+default/destructured parameters to ES5.
+
+The matrix also includes standalone Terser rows and Babel/TypeScript/SWC/esbuild
+output minified through Terser, because parameter lowering can expose different
+shapes after minification.
+
+It is for investigation, not as a committed snapshot source. Use it to find
+compiler shapes worth minimizing into focused Rust unit tests.
+
+```powershell
+node scripts/repro/parameters-matrix/matrix.mjs
+```
+
+Add `--details` to print full lowered and recovered code for missed cases.
+Add `--level minimal`, `--level standard`, or `--level aggressive` to run
+wakaru with a specific rewrite level.
+
+Rows are grouped by distinct lowered output per snippet. The grouping key only
+normalizes CRLF to LF and trims leading/trailing whitespace, so exact lowered
+shape is still preserved while duplicate tool outputs are collapsed.
+
+By default the script asks Cargo to refresh `target/debug/wakaru(.exe)` once,
+then uses that binary for the matrix. Set `WAKARU` to test a specific binary.
+
+The transformer packages are installed in the shared repro tool cache
+(`docs/testing.md`), so the first run may download Babel, TypeScript, SWC,
+esbuild, or Terser packages. The `target/` directory is ignored by git.

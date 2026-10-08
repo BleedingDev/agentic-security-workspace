@@ -1,0 +1,1570 @@
+mod common;
+
+use common::{assert_eq_normalized, render, render_rule};
+use wakaru_core::{
+    rules::{UnNullishCoalescing, UnOptionalChaining},
+    RewriteLevel,
+};
+
+fn apply(input: &str) -> String {
+    apply_with_level(input, RewriteLevel::Standard)
+}
+
+fn apply_with_level(input: &str, level: RewriteLevel) -> String {
+    render_rule(input, |unresolved_mark| {
+        UnOptionalChaining::new(unresolved_mark, level)
+    })
+}
+
+#[test]
+fn transforms_member_access_with_null_check() {
+    let input = r#"obj === null || obj === void 0 ? void 0 : obj.a"#;
+    let expected = r#"obj?.a"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_method_call_with_null_check() {
+    let input = r#"obj === null || obj === void 0 ? void 0 : obj.method()"#;
+    let expected = r#"obj?.method()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_method_call_with_args() {
+    let input = r#"obj === null || obj === void 0 ? void 0 : obj.method(1, 2)"#;
+    let expected = r#"obj?.method(1, 2)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_strict_babel_temp_variable_assignment_form() {
+    let input = r#"var _a;
+(_a = a) === null || _a === void 0 ? void 0 : _a.b"#;
+    let expected = r#"a?.b"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn aggressive_transforms_strict_temp_variable_assignment_form() {
+    let input = r#"var _a;
+(_a = a) === null || _a === void 0 ? void 0 : _a.b"#;
+    let expected = r#"a?.b"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_strict_babel_optional_call_form() {
+    let input = r#"var _a;
+(_a = obj.getRootNode) === null || _a === void 0 ? void 0 : _a.call(obj)"#;
+    let expected = r#"obj.getRootNode?.()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_optional_member_call_pattern_into_optional_call() {
+    let input = r#"te?.getRootNode?.call(te)"#;
+    let expected = r#"te?.getRootNode?.()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_strict_babel_optional_call_with_memoized_context() {
+    let input = r#"var _obj, _obj_method;
+(_obj_method = (_obj = getObj()).method) === null || _obj_method === void 0 ? void 0 : _obj_method.call(_obj, arg)"#;
+    let expected = r#"getObj().method?.(arg)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_strict_babel_optional_call_from_optional_member() {
+    let input = r#"var _a;
+(_a = te?.getRootNode) === null || _a === void 0 ? void 0 : _a.call(te)"#;
+    let expected = r#"te?.getRootNode?.()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_optional_call_with_wrong_context() {
+    let input = r#"(_a = te?.getRootNode) === null || _a === void 0 ? void 0 : _a.call(other)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_nested_babel_optional_call_from_lowered_optional_member() {
+    let input = r#"var _a, _b;
+(_a = (_b = runtime?.plugin) === null || _b === void 0 ? void 0 : _b.createHook) === null || _a === void 0 ? void 0 : _a.call(_b, "payload")"#;
+    let expected = r#"runtime?.plugin?.createHook?.("payload")"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_recover_nested_optional_call_with_shadowed_undefined() {
+    let input = r#"
+function f(undefined) {
+  (_a = (_b = runtime?.plugin) === null || _b === undefined ? undefined : _b.createHook) === null || _a === void 0 ? void 0 : _a.call(_b, "payload");
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_guarded_babel_optional_call_statement() {
+    let input = r#"
+var _, K;
+if (!((_ = (K = this.handle) === null || K === void 0 ? void 0 : K.close) === null || _ === void 0)) {
+  _.call(K);
+}
+"#;
+    let expected = r#"
+this.handle?.close?.();
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_guarded_optional_call_statement_with_undeclared_temps() {
+    // Without declarations, `_` and `K` are globals (or a ReferenceError in
+    // strict code), so their writes cannot be dropped.
+    let input = r#"
+if (!((_ = (K = this.handle) === null || K === void 0 ? void 0 : K.close) === null || _ === void 0)) {
+  _.call(K);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn preserves_loose_nested_chain_when_inner_temp_is_read_later() {
+    // Recovering the inner chain drops `t = a()`, but `t` is read afterwards.
+    let input = r#"
+var e, t;
+const x = null == (e = null == (t = a()) ? void 0 : t.b) ? void 0 : e.c;
+use(t);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn preserves_loose_nested_chain_when_inner_temp_is_exported() {
+    let input = r#"
+var e;
+export var t;
+export const x = null == (e = null == (t = a()) ? void 0 : t.b) ? void 0 : e.c;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn does_not_transform_guarded_optional_call_statement_with_wrong_context() {
+    let input = r#"
+if (!((_a = te?.getRootNode) === null || _a === void 0)) {
+  _a.call(other);
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_short_circuit_babel_optional_call_statement() {
+    let input = r#"var _, K; (_ = (K = this.handle) === null || K === void 0 ? void 0 : K.close) === null || _ === void 0 || _.call(K)"#;
+    let expected = r#"this.handle?.close?.()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_loose_direct_optional_call_statement() {
+    // Emitted by esbuild and Terser for `handler?.(value)`.
+    let input = r#"handler == null || handler(value)"#;
+    let expected = r#"handler?.(value)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_strict_direct_optional_call_expression() {
+    let input = r#"handler === null || handler === undefined ? undefined : handler(value)"#;
+    let expected = r#"handler?.(value)"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_loose_direct_optional_call_expression() {
+    let input = r#"handler == null ? undefined : handler(value)"#;
+    let expected = r#"handler?.(value)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn minimal_preserves_loose_direct_optional_call_expression() {
+    let input = r#"handler == null ? undefined : handler(value)"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn transforms_strict_direct_optional_call_statement() {
+    let input = r#"handler === null || handler === undefined || handler(value)"#;
+    let expected = r#"handler?.(value)"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_null_first_loose_direct_optional_call_statement() {
+    // Terser commonly flips the loose null check while minifying.
+    let input = r#"null == handler || handler(value)"#;
+    let expected = r#"handler?.(value)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn minimal_preserves_loose_direct_optional_call_statement() {
+    // `document.all` makes loose null checks observably different from `?.`.
+    let input = r#"handler == null || handler(value)"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_loose_direct_optional_call_with_mismatched_callee() {
+    let input = r#"handler == null || other(value)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_loose_direct_optional_eval_call() {
+    // `eval?.(source)` is indirect eval, unlike `eval(source)`.
+    let input = r#"eval == null || eval(source)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_loose_optional_call_when_expression_value_is_observed() {
+    // The guarded expression yields `true` when absent; optional call yields `undefined`.
+    let input = r#"const result = handler == null || handler(value)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_declared_scratch_temp_assignment_form() {
+    let input = r#"
+let n;
+const x = (n = service.connection) === null || n === void 0 ? void 0 : n.status;
+"#;
+    let expected = r#"
+const x = service.connection?.status;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_eval_observable_consumed_temp_decl() {
+    let input = r#"
+function f() {
+  let n;
+  eval("n");
+  return (n = service.connection) === null || n === void 0 ? void 0 : n.status;
+}
+"#;
+    let expected = r#"
+function f() {
+  let n;
+  eval("n");
+  return service.connection?.status;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_nested_babel_optional_member_from_recovered_optional_chain() {
+    let input = r#"var _a;
+(_a = runtime?.plugin) === null || _a === void 0 ? void 0 : _a.version"#;
+    let expected = r#"runtime?.plugin?.version"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_preserves_undeclared_generated_looking_temp() {
+    // `T1` has no declaration anywhere: it is not a compiler temporary (Babel,
+    // SWC, and tsc always declare theirs). In module code the assignment
+    // throws ReferenceError; in sloppy code it writes a global. The name shape
+    // alone is an ordinary minified identifier, so `standard` keeps the
+    // assignment (Generated Temporaries hard rule in rewrite-assumptions.md).
+    let input = r#"(T1 = source.adapter) === null || T1 === void 0 ? void 0 : T1.name"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_preserves_undeclared_minified_temp_in_ternary_and_loose_forms() {
+    let input = r#"
+function f(obj) {
+  return (e1 = obj) === null || e1 === void 0 ? void 0 : e1.x;
+}
+function g(obj) {
+  return (e1 = obj) == null ? undefined : e1.x;
+}
+function h(obj) {
+  return (_a = obj) === null || _a === void 0 ? void 0 : _a.call(obj);
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_declared_minified_temp() {
+    // The same shape with a resolver-proven, otherwise-unreferenced
+    // declaration is the compiler temporary the declared-temp path proves.
+    let input = r#"
+function f(obj) {
+  var e1;
+  return (e1 = obj) === null || e1 === void 0 ? void 0 : e1.x;
+}
+"#;
+    let expected = r#"
+function f(obj) {
+  return obj?.x;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn aggressive_preserves_undeclared_generated_looking_temp() {
+    // No level accepts an undeclared name: deleting the assignment drops a
+    // ReferenceError (module code) or a global write (sloppy code). The
+    // Generated Temporaries hard rule has no aggressive exemption.
+    let input = r#"(T1 = source.adapter) === null || T1 === void 0 ? void 0 : T1.name"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_strict_optional_member_chain() {
+    let input = r#"
+var _r$foo$bar, _r;
+const a = (_r = r) === null || _r === void 0 || (_r = _r.foo) === null || _r === void 0 || (_r = _r.bar) === null || _r === void 0 ? void 0 : _r.baz;
+"#;
+    let expected = r#"
+var _r$foo$bar;
+const a = r?.foo?.bar?.baz;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_strict_chain_with_direct_root() {
+    let input = r#"
+var _user$profile;
+const name = user === null || user === void 0 || (_user$profile = user.profile) === null || _user$profile === void 0 ? void 0 : _user$profile.name;
+"#;
+    let expected = r#"
+const name = user?.profile?.name;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_nested_strict_chain_with_direct_root() {
+    let input = r#"
+var _user$profile;
+const name = user === null || user === void 0 ? void 0 : (_user$profile = user.profile) === null || _user$profile === void 0 ? void 0 : _user$profile.name;
+"#;
+    let expected = r#"
+const name = user?.profile?.name;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_flattened_loose_chain_with_direct_root() {
+    let input = r#"
+var _user$profile;
+const name = user == null || (_user$profile = user.profile) == null ? void 0 : _user$profile.name;
+"#;
+    let expected = r#"
+const name = user?.profile?.name;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn minimal_does_not_transform_babel_flattened_strict_optional_member_chain() {
+    let input = r#"
+var _r$foo$bar, _r;
+const a = (_r = r) === null || _r === void 0 || (_r = _r.foo) === null || _r === void 0 || (_r = _r.bar) === null || _r === void 0 ? void 0 : _r.baz;
+"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn pipeline_transforms_babel_flattened_strict_optional_member_chain_with_nullish() {
+    let input = r#"
+var _r$foo$bar, _r;
+const a = (_r$foo$bar = (_r = r) === null || _r === void 0 || (_r = _r.foo) === null || _r === void 0 || (_r = _r.bar) === null || _r === void 0 ? void 0 : _r.baz) !== null && _r$foo$bar !== void 0 ? _r$foo$bar : "fallback";
+"#;
+    let expected = r#"
+const a = r?.foo?.bar?.baz ?? "fallback";
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_recovers_babel_parameter_optional_chain_inside_classic_jsx() {
+    let input = r#"
+export function UserCard({
+  user,
+  theme = "dark"
+}) {
+  var _user$tags, _user$profile$name, _user$profile;
+  const tags = [...((_user$tags = user === null || user === void 0 ? void 0 : user.tags) !== null && _user$tags !== void 0 ? _user$tags : []), "active"];
+  return React.createElement("article", {
+    className: `card card--${theme}`
+  }, React.createElement("h2", null, (_user$profile$name = user === null || user === void 0 || (_user$profile = user.profile) === null || _user$profile === void 0 ? void 0 : _user$profile.name) !== null && _user$profile$name !== void 0 ? _user$profile$name : "Anonymous"), React.createElement("ul", null, tags.map(tag => React.createElement("li", {
+    key: tag
+  }, tag))));
+}
+"#;
+    let expected = r#"
+export function UserCard({ user, theme = "dark" }) {
+  const tags = [...user?.tags ?? [], "active"];
+  return <article className={`card card--${theme}`}><h2>{user?.profile?.name ?? "Anonymous"}</h2><ul>{tags.map((tag) => <li key={tag}>{tag}</li>)}</ul></article>;
+}
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_transforms_esbuild_nested_optional_chain_with_nullish() {
+    let input = r#"
+var _a, _b, _c;
+var x = (_c = (_b = (_a = value == null ? void 0 : value.foo) == null ? void 0 : _a.bar) == null ? void 0 : _b.baz) != null ? _c : "fallback";
+"#;
+    let expected = r#"
+const x = value?.foo?.bar?.baz ?? "fallback";
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_standard_preserves_babel_loose_optional_call_nullish_wrapper() {
+    let input = r#"
+var _obj$method, _obj;
+const out = (_obj$method = (_obj = obj) == null ? void 0 : _obj.method == null ? void 0 : _obj.method(arg)) != null ? _obj$method : fallback;
+"#;
+    let expected = r#"
+let _obj;
+const out = ((_obj = obj) == null ? undefined : _obj.method == null ? undefined : _obj.method(arg)) ?? fallback;
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn aggressive_recovers_babel_loose_optional_call_inside_nullish_wrapper() {
+    let input = r#"
+var _obj$method, _obj;
+const out = (_obj$method = (_obj = obj) == null ? void 0 : _obj.method == null ? void 0 : _obj.method(arg)) != null ? _obj$method : fallback;
+"#;
+    let expected = r#"
+const out = obj?.method?.(arg) ?? fallback;
+"#;
+    let optional = apply_with_level(input, RewriteLevel::Aggressive);
+    let output = render_rule(&optional, |unresolved_mark| {
+        UnNullishCoalescing::new(unresolved_mark, RewriteLevel::Aggressive)
+    });
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_loose_optional_member_chain() {
+    let input = r#"
+var _r$foo$bar, _r;
+const a = (_r = r) == null || (_r = _r.foo) == null || (_r = _r.bar) == null ? void 0 : _r.baz;
+"#;
+    let expected = r#"
+var _r$foo$bar;
+const a = r?.foo?.bar?.baz;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_pattern_1_babel_duplicated_access() {
+    let input = r#"
+var _root, _root2;
+if ((_root = root) != null && (_root = _root[key]) != null && (_root = _root.group) != null && _root.items && (_root2 = root) != null && (_root2 = _root2[key]) != null && (_root2 = _root2.group) != null && _root2.items.length) {
+  sink("clear");
+} else {
+  sink("fill");
+}
+"#;
+    let expected = r#"
+if (root?.[key]?.group?.items && root?.[key]?.group?.items.length) {
+  sink("clear");
+} else {
+  sink("fill");
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_pattern_1_mixed_duplicated_access() {
+    let input = r#"
+let first, firstGroup, second, secondGroup;
+if (root != null && (first = root[key]) !== null && first !== undefined && (firstGroup = first.group) !== null && firstGroup !== undefined && firstGroup.items && root != null && (second = root[key]) !== null && second !== undefined && (secondGroup = second.group) !== null && secondGroup !== undefined && secondGroup.items.length) {
+  sink("clear");
+} else {
+  sink("fill");
+}
+"#;
+    let expected = r#"
+if (root?.[key]?.group?.items && root?.[key]?.group?.items.length) {
+  sink("clear");
+} else {
+  sink("fill");
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_pattern_2_loose_suffix_comparisons() {
+    let input = r#"
+var _item;
+if ((_item = item) != null && (_item = _item.meta) != null && _item.enabled && item.kind != "alpha" && item.kind != "beta" && item.kind != "gamma") {}
+"#;
+    let expected = r#"
+if (item?.meta?.enabled && item.kind != "alpha" && item.kind != "beta" && item.kind != "gamma") {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_pattern_2_strict_suffix_comparisons() {
+    let input = r#"
+var _item;
+if ((_item = item) != null && (_item = _item.meta) != null && _item.enabled && item.kind !== "alpha" && item.kind !== "beta" && item.kind !== "gamma") {}
+"#;
+    let expected = r#"
+if (item?.meta?.enabled && item.kind !== "alpha" && item.kind !== "beta" && item.kind !== "gamma") {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_pattern_2_includes_suffix_condition() {
+    let input = r#"
+var _item;
+const blockedKinds = ["alpha", "beta", "gamma"];
+if ((_item = item) != null && (_item = _item.meta) != null && _item.enabled && !blockedKinds.includes(item.kind)) {}
+"#;
+    let expected = r#"
+const blockedKinds = ["alpha", "beta", "gamma"];
+if (item?.meta?.enabled && !blockedKinds.includes(item.kind)) {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_transforms_logical_and_chain_after_conditional_statement_recovery() {
+    let input = r#"
+var _item;
+(_item = item) != null && (_item = _item.meta) != null && _item.enabled && item.kind != "alpha" ? sink("clear") : sink("fill");
+"#;
+    let expected = r#"
+if (item?.meta?.enabled && item.kind != "alpha") {
+  sink("clear");
+} else {
+  sink("fill");
+}
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_transforms_logical_and_chain_after_short_circuit_statement_recovery() {
+    let input = r#"
+var _item;
+const blockedKinds = ["alpha", "beta", "gamma"];
+(_item = item) != null && (_item = _item.meta) != null && _item.enabled && !blockedKinds.includes(item.kind) && sink(item);
+"#;
+    let expected = r#"
+const blockedKinds = ["alpha", "beta", "gamma"];
+if (item?.meta?.enabled && !blockedKinds.includes(item.kind)) {
+  sink(item);
+}
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn pipeline_transforms_issue_142_swc_terser_mixed_loose_root_chain() {
+    // Reproduces issue #142 from:
+    //   var a = (null == r ? void 0 : r.app_info?.base_info?.app_name) ?? "game";
+    //   @swc/core 1.15.40 target es5, then terser 5.48.0 compress+mangle.
+    let input = r#"
+var _ref, _r_app_info_base_info, _r_app_info, a = null !== (_ref = null == r || null === (_r_app_info = r.app_info) || void 0 === _r_app_info || null === (_r_app_info_base_info = _r_app_info.base_info) || void 0 === _r_app_info_base_info ? void 0 : _r_app_info_base_info.app_name) && void 0 !== _ref ? _ref : "game";
+"#;
+    let expected = r#"
+const a = r?.app_info?.base_info?.app_name ?? "game";
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_optional_call_with_memoized_context() {
+    let input = r#"
+var _m, _o;
+const x = (_o = obj) === null || _o === void 0 || (_m = _o.method) === null || _m === void 0 ? void 0 : _m.call(_o, arg);
+"#;
+    let expected = r#"
+const x = obj?.method?.(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_optional_call_with_nested_memoized_context() {
+    let input = r#"
+var _m, _p, _o;
+const x = (_o = obj) === null || _o === void 0 || (_p = _o.foo) === null || _p === void 0 || (_m = _p.method) === null || _m === void 0 ? void 0 : _m.call(_p, arg);
+"#;
+    let expected = r#"
+const x = obj?.foo?.method?.(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_flattened_loose_optional_call_with_nested_memoized_context() {
+    let input = r#"
+var _m, _p, _o;
+const x = (_o = obj) == null || (_p = _o.foo) == null || (_m = _p.method) == null ? void 0 : _m.call(_p, arg);
+"#;
+    let expected = r#"
+const x = obj?.foo?.method?.(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_does_not_transform_babel_loose_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null || _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_babel_loose_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null || _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let expected = r#"
+const out = obj?.method?.(arg);
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_preserves_babel_old_loose_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null ? void 0 : _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_babel_old_loose_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null ? void 0 : _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let expected = r#"
+const out = obj?.method?.(arg);
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_preserves_babel_loose_nested_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null || (_obj = _obj.foo) == null || _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_babel_loose_nested_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj;
+const out = (_obj = obj) == null || (_obj = _obj.foo) == null || _obj.method == null ? void 0 : _obj.method(arg);
+"#;
+    let expected = r#"
+const out = obj?.foo?.method?.(arg);
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_preserves_babel_old_loose_nested_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj, _obj_foo;
+const out = (_obj = obj) == null ? void 0 : (_obj_foo = _obj.foo) == null ? void 0 : _obj_foo.method == null ? void 0 : _obj_foo.method(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_babel_old_loose_nested_optional_call_with_repeated_property() {
+    let input = r#"
+var _obj, _obj_foo;
+const out = (_obj = obj) == null ? void 0 : (_obj_foo = _obj.foo) == null ? void 0 : _obj_foo.method == null ? void 0 : _obj_foo.method(arg);
+"#;
+    let expected = r#"
+const out = obj?.foo?.method?.(arg);
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_babel_flattened_optional_call_with_wrong_nested_context() {
+    let input = r#"
+var _m, _p, _o;
+const x = (_o = obj) === null || _o === void 0 || (_p = _o.foo) === null || _p === void 0 || (_m = _p.method) === null || _m === void 0 ? void 0 : _m.call(_o, arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_preserves_babel_flattened_temp_when_observed_later() {
+    let input = r#"
+var _r;
+const a = (_r = r) === null || _r === void 0 || (_r = _r.foo) === null || _r === void 0 ? void 0 : _r.bar;
+use(_r);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_swc_nested_optional_member_chain() {
+    let input = r#"
+var _r_foo_bar, _r_foo, _r;
+const a = (_r = r) === null || _r === void 0 ? void 0 : (_r_foo = _r.foo) === null || _r_foo === void 0 ? void 0 : (_r_foo_bar = _r_foo.bar) === null || _r_foo_bar === void 0 ? void 0 : _r_foo_bar.baz;
+"#;
+    let expected = r#"
+const a = r?.foo?.bar?.baz;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_mixed_required_member_chain() {
+    let input = r#"
+var _obj_foo;
+const out = (_obj_foo = obj.foo) === null || _obj_foo === void 0 || (_obj_foo = _obj_foo.bar.baz) === null || _obj_foo === void 0 ? void 0 : _obj_foo.qux;
+"#;
+    let expected = r#"
+const out = obj.foo?.bar.baz?.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_tsc_mixed_required_member_chain() {
+    let input = r#"
+var _a, _b;
+const out = (_b = (_a = obj.foo) === null || _a === void 0 ? void 0 : _a.bar.baz) === null || _b === void 0 ? void 0 : _b.qux;
+"#;
+    let expected = r#"
+const out = obj.foo?.bar.baz?.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_esbuild_mixed_required_member_chain() {
+    let input = r#"
+var _a, _b;
+const out = (_b = (_a = obj.foo) == null ? void 0 : _a.bar.baz) == null ? void 0 : _b.qux;
+"#;
+    let expected = r#"
+const out = obj.foo?.bar.baz?.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_old_loose_nested_mixed_required_member_chain() {
+    let input = r#"
+var _obj_foo, _obj_foo_bar_baz;
+const out = (_obj_foo = obj.foo) == null ? void 0 : (_obj_foo_bar_baz = _obj_foo.bar.baz) == null ? void 0 : _obj_foo_bar_baz.qux;
+"#;
+    let expected = r#"
+const out = obj.foo?.bar.baz?.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_mixed_leading_optional_member_chain() {
+    let input = r#"
+var _a;
+const out = (_a = obj === null || obj === void 0 ? void 0 : obj.foo.bar) === null || _a === void 0 ? void 0 : _a.baz.qux;
+"#;
+    let expected = r#"
+const out = obj?.foo.bar?.baz.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_old_loose_nested_mixed_leading_optional_member_chain() {
+    let input = r#"
+var _obj, _obj_foo_bar;
+const out = (_obj = obj) == null ? void 0 : (_obj_foo_bar = _obj.foo.bar) == null ? void 0 : _obj_foo_bar.baz.qux;
+"#;
+    let expected = r#"
+const out = obj?.foo.bar?.baz.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_esbuild_mixed_leading_optional_member_chain() {
+    let input = r#"
+var _a;
+const out = (_a = obj == null ? void 0 : obj.foo.bar) == null ? void 0 : _a.baz.qux;
+"#;
+    let expected = r#"
+const out = obj?.foo.bar?.baz.qux;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_old_loose_computed_member_chain_with_nullish() {
+    let input = r#"
+var _obj_key_value, _obj, _obj_key;
+const out = (_obj_key_value = (_obj = obj) == null ? void 0 : (_obj_key = _obj[key]) == null ? void 0 : _obj_key.value) != null ? _obj_key_value : fallback;
+"#;
+    let expected = r#"
+const out = obj?.[key]?.value ?? fallback;
+"#;
+    let output = render(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_swc_nested_optional_call_chain() {
+    let input = r#"
+var _obj_foo_method, _obj_foo, _obj;
+const out = (_obj = obj) === null || _obj === void 0 ? void 0 : (_obj_foo = _obj.foo) === null || _obj_foo === void 0 ? void 0 : (_obj_foo_method = _obj_foo.method) === null || _obj_foo_method === void 0 ? void 0 : _obj_foo_method.call(_obj_foo, arg);
+"#;
+    let expected = r#"
+const out = obj?.foo?.method?.(arg);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn logical_and_form_stays_as_is() {
+    let input = r#"x !== null && x !== void 0 && x.foo"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn does_not_transform_different_variable_in_access() {
+    // alt uses `other`, not `obj` — should not transform to optional chain
+    let input = r#"obj === null || obj === void 0 ? void 0 : other.prop"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn does_not_transform_when_cons_is_not_void() {
+    let input = r#"obj === null || obj === void 0 ? "fallback" : obj.prop"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+// --- loose equality form: x == null ? undefined : x.prop ---
+
+#[test]
+fn transforms_loose_eq_null_member_access() {
+    let input = r#"const x = U == null ? undefined : U.userID"#;
+    let expected = r#"const x = U?.userID"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn minimal_does_not_transform_loose_eq_null_member_access() {
+    let input = r#"const x = U == null ? undefined : U.userID"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn transforms_loose_eq_null_method_call() {
+    let input = r#"const x = U == null ? undefined : U.getName()"#;
+    let expected = r#"const x = U?.getName()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_loose_neq_null_nullish_form() {
+    // x != null ? x.prop : undefined  →  x?.prop
+    let input = r#"const x = U != null ? U.name : undefined"#;
+    let expected = r#"const x = U?.name"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_nested_loose_eq_null() {
+    // Nested: (x == null ? undefined : x.a) == null ? undefined : (x == null ? undefined : x.a).b
+    // After first pass: x?.a, then second nesting would need chaining
+    let input = r#"const x = U == null ? undefined : U.a"#;
+    let expected = r#"const x = U?.a"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_loose_eq_when_cons_is_not_undefined() {
+    let input = r#"const x = U == null ? "default" : U.name"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn transforms_loose_eq_null_in_expression_position() {
+    // Inside if condition
+    let input = r#"if ((U == null ? undefined : U.message) && true) {}"#;
+    let expected = r#"if (U?.message && true) {}"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+// --- loose equality edge cases (from Codex review) ---
+
+#[test]
+fn transforms_loose_eq_null_with_void_0_consequent() {
+    let input = r#"const x = U == null ? void 0 : U.name"#;
+    let expected = r#"const x = U?.name"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_loose_eq_null_reversed_operand_order() {
+    // null == U instead of U == null
+    let input = r#"const x = null == U ? undefined : U.prop"#;
+    let expected = r#"const x = U?.prop"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn transforms_loose_eq_undefined() {
+    // x == undefined is equivalent to x == null in JS
+    let input = r#"const x = U == undefined ? undefined : U.name"#;
+    let expected = r#"const x = U?.name"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+// --- loose equality assignment form ---
+
+#[test]
+fn does_not_transform_loose_eq_assignment_member_access() {
+    let input = r#"const x = (n = e.ownerDocument) == null ? undefined : n.defaultView"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_loose_eq_babel_assignment_member_access() {
+    let input = r#"var _a;
+const x = (_a = e.ownerDocument) == null ? undefined : _a.defaultView"#;
+    let expected = r#"const x = e.ownerDocument?.defaultView"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_declared_loose_eq_babel_assignment_member_access() {
+    let input = r#"
+var _;
+const x = (_ = K.unhoistableHeaders) == null ? undefined : _.has(A);
+"#;
+    let expected = r#"
+const x = K.unhoistableHeaders?.has(A);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_loose_eq_assignment_method_call() {
+    let input = r#"const x = (t = obj.getRootNode) == null ? undefined : t.call(obj)"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_loose_eq_babel_optional_call_form() {
+    let input = r#"var _a;
+const x = (_a = obj.getRootNode) == null ? undefined : _a.call(obj)"#;
+    let expected = r#"const x = obj.getRootNode?.()"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn aggressive_transforms_loose_eq_assignment_method_call() {
+    let input = r#"var t;
+const x = (t = obj.getRootNode) == null ? undefined : t.call(obj)"#;
+    let expected = r#"const x = obj.getRootNode?.()"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_loose_neq_assignment_form() {
+    let input = r#"const x = (n = e.body) != null ? n.scrollWidth : undefined"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_loose_neq_assignment_form() {
+    let input = r#"var n;
+const x = (n = e.body) != null ? n.scrollWidth : undefined"#;
+    let expected = r#"const x = e.body?.scrollWidth"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_loose_eq_assignment_with_computed_access() {
+    let input = r#"const x = (t = e[n.type]) == null ? undefined : t.duration"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_transforms_loose_eq_assignment_with_computed_access() {
+    let input = r#"var t;
+const x = (t = e[n.type]) == null ? undefined : t.duration"#;
+    let expected = r#"const x = e[n.type]?.duration"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_assignment_side_effect_for_observable_temp() {
+    let input = r#"
+let n = 0;
+const x = (n = obj) == null ? undefined : n.value;
+use(n);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_preserves_declared_scratch_temp_when_it_is_observed_later() {
+    let input = r#"
+let n;
+const x = (n = obj) == null ? undefined : n.value;
+use(n);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_preserves_observed_underscore_temp_assignment() {
+    let input = r#"
+let _a = 0;
+const x = (_a = obj) == null ? undefined : _a.value;
+use(_a);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_preserves_observed_temp_assignment_pattern() {
+    // `use(n)` reads the value the pattern assigned; removing the assignment
+    // would change it. The hard rule applies at aggressive too.
+    let input = r#"
+let n = 0;
+const x = (n = obj) == null ? undefined : n.value;
+use(n);
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn aggressive_preserves_initialized_temp_assignment_pattern() {
+    // Not the Babel `var n;` shape. A reference count cannot tell a writable
+    // `let` from a `const`, an import, a parameter observed through sloppy
+    // `arguments`, or a `let` still in its TDZ — each of which makes the
+    // deleted assignment observable. No producer emits this shape, so there
+    // is no aggressive shortcut for it.
+    let input = r#"
+let n = 0;
+const x = (n = obj) == null ? undefined : n.value;
+"#;
+    let output = apply_with_level(input, RewriteLevel::Aggressive);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn keeps_loose_assignment_when_computed_key_reads_temp() {
+    // Babel loose lowers `list?.[list.length - 1]`; a minifier then folds
+    // `list = getList()` into the null check. The index reads the temp too.
+    let input = r#"
+var e, t;
+t = (null == (e = getList()) ? void 0 : e[e.length - 1]) || null;
+"#;
+    let expected = r#"
+var e, t;
+t = (e = getList())?.[e.length - 1] || null;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+    assert!(!output.contains("import ") && !output.contains("export "));
+}
+
+#[test]
+fn keeps_loose_assignment_when_call_argument_reads_temp() {
+    let input = r#"
+var e;
+const x = (e = obj) == null ? void 0 : e.foo(e);
+"#;
+    let expected = r#"
+var e;
+const x = (e = obj)?.foo(e);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn keeps_loose_assignment_when_nested_computed_key_reads_temp() {
+    let input = r#"
+var e;
+const x = (e = getList()) == null ? void 0 : e.foo[e.length - 1];
+"#;
+    let expected = r#"
+var e;
+const x = (e = getList())?.foo[e.length - 1];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+    assert!(!output.contains("getList()?.foo[e.length"));
+}
+
+#[test]
+fn still_drops_loose_temp_when_only_the_object_slot_reads_it() {
+    let input = r#"
+var e;
+const x = (e = obj.foo) == null ? void 0 : e.bar;
+"#;
+    let expected = r#"
+const x = obj.foo?.bar;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn still_drops_strict_temp_when_only_the_object_slot_reads_it() {
+    let input = r#"
+var e;
+const x = (e = expr) === null || e === void 0 ? void 0 : e.prop;
+"#;
+    let expected = r#"
+const x = expr?.prop;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn still_drops_loose_temp_when_computed_key_does_not_read_it() {
+    let input = r#"
+var e;
+const x = (e = obj) == null ? void 0 : e[i];
+"#;
+    let expected = r#"
+const x = obj?.[i];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_optional_call_unassigned_temp_argument() {
+    let input = r#"
+var e;
+const x = (e = fn) == null ? void 0 : e(e);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+    assert!(!output.contains("fn?."));
+}
+
+#[test]
+fn preserves_strict_computed_key_that_reads_temp() {
+    // The strict proof counts four references. An index read is a fifth, so
+    // the ternary stays. Do not widen that count to accept this shape.
+    let input = r#"
+var e;
+const x = (e = getList()) === null || e === void 0 ? void 0 : e[e.length - 1];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+    assert!(!output.contains("getList()?."));
+}
+
+#[test]
+fn preserves_loose_computed_temp_when_it_is_observed_later() {
+    let input = r#"
+var e;
+const x = null == (e = getList()) ? void 0 : e[e.length - 1];
+use(e);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_loose_computed_temp_when_declaration_is_initialized() {
+    let input = r#"
+let e = 0;
+const x = null == (e = getList()) ? void 0 : e[e.length - 1];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn minimal_preserves_loose_computed_temp_assignment() {
+    // Loose `== null` is not `?.` when `document.all` is observable.
+    let input = r#"
+var e;
+const x = null == (e = getList()) ? void 0 : e[e.length - 1];
+"#;
+    let output = apply_with_level(input, RewriteLevel::Minimal);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn shadow_param_is_not_the_loose_assignment_temp() {
+    let input = r#"
+var e;
+function read(e) {
+    return e;
+}
+const x = (e = obj.foo) == null ? void 0 : e.bar;
+"#;
+    let expected = r#"
+function read(e) {
+    return e;
+}
+const x = obj.foo?.bar;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_loose_nested_chain_when_final_key_reads_inner_temp() {
+    // The inner chain `t.b` would become `a()?.b` and drop `t = a()`, but the
+    // final key still reads `t`.
+    let input = r#"
+var e, t;
+const x = null == (e = null == (t = a()) ? void 0 : t.b) ? void 0 : e[t.length];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_flattened_strict_chain_when_key_reads_reused_temp() {
+    // `_a` holds `_a.b` at the key; dropping either write changes the index.
+    let input = r#"
+var _a;
+const x = (_a = a()) === null || _a === void 0 || (_a = _a.b) === null || _a === void 0 ? void 0 : _a[_a.length];
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn preserves_flattened_strict_chain_when_argument_reads_outer_temp() {
+    let input = r#"
+var _a, _b;
+const x = (_a = a()) === null || _a === void 0 || (_b = _a.b) === null || _b === void 0 ? void 0 : _b.c(_a);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+// --- logical AND boolean-context recovery ---
+
+#[test]
+fn logical_and_expression_value_stays_as_is() {
+    let input = r#"x !== null && x !== undefined && x.foo"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_transforms_issue_166_logical_and_chain_in_negation() {
+    let input = r#"
+let l;
+let i;
+const hidden = !(tt != null && (l = tt[bt]) !== null && l !== undefined && (i = l.blocks) !== null && i !== undefined && i.hideList.includes(t.name));
+"#;
+    let expected = r#"
+const hidden = !tt?.[bt]?.blocks?.hideList.includes(t.name);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_nested_ternary_member_call_tail() {
+    let input = r#"
+let _b;
+const hidden = !((_b = settings?.role?.blocks) == null ? undefined : _b.hideList.includes(blockName));
+"#;
+    let expected = r#"
+const hidden = !settings?.role?.blocks?.hideList.includes(blockName);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_babel_7_8_loose_nested_ternary_member_call_tail() {
+    // Reproduces @babel/plugin-proposal-optional-chaining 7.8 loose output for:
+    //   const hidden = !settings?.role?.blocks?.hideList.includes(blockName);
+    let input = r#"
+var _settings, _settings$role, _settings$role$blocks;
+const hidden = !((_settings = settings) == null ? void 0 : (_settings$role = _settings.role) == null ? void 0 : (_settings$role$blocks = _settings$role.blocks) == null ? void 0 : _settings$role$blocks.hideList.includes(blockName));
+"#;
+    let expected = r#"
+const hidden = !settings?.role?.blocks?.hideList.includes(blockName);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_transforms_issue_166_logical_and_chain_in_if_test() {
+    let input = r#"
+let e;
+let l;
+if (tt != null && (e = tt[bt]) !== null && e !== undefined && (l = e.blocks) !== null && l !== undefined && l.hideList) {
+    update();
+}
+"#;
+    let expected = r#"
+if (tt?.[bt]?.blocks?.hideList) {
+    update();
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn standard_preserves_logical_and_chain_when_temp_is_observed_later() {
+    let input = r#"
+let l;
+const hidden = !(settings != null && (l = settings.role) !== null && l !== undefined && l.blocks);
+use(l);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn standard_preserves_let_temp_declared_after_the_pattern() {
+    // `n` is in its temporal dead zone when the pattern assigns it, so the
+    // input throws ReferenceError. "No initializer" is not "safe to assign":
+    // only hoisted `var` declarators are the compiler-temp shape.
+    let input = r#"
+const obj = { value: 1 };
+const x = (n = obj) == null ? undefined : n.value;
+let n;
+use(x);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn standard_preserves_let_temp_used_in_a_hoisted_function_before_its_declaration() {
+    // Textually the `let` precedes the function body that assigns `n`, but the
+    // hoisted declaration is called first, so the assignment is still in the
+    // TDZ. The proof requires the declaration and every use to share a
+    // function.
+    let input = r#"
+read();
+let n;
+function read() {
+  return (n = obj) == null ? undefined : n.value;
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn standard_preserves_let_temp_used_only_inside_a_nested_function() {
+    // Same rule from the other side: a `let` in the outer scope consumed only
+    // inside a nested function is not a compiler temp (they are declared in
+    // the function that uses them) and its TDZ cannot be judged textually.
+    let input = r#"
+let n;
+const read = () => (n = obj) == null ? undefined : n.value;
+use(read);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn standard_preserves_let_temp_declared_in_a_skippable_switch_case() {
+    // Textually before the use and in the same function, yet `mode === 1`
+    // jumps past `let n;`, so the assignment throws in its TDZ. Only a `let`
+    // that is a direct statement of a block/function/module body counts as
+    // definitely initialized at later uses in that list.
+    let input = r#"
+switch (mode) {
+  case 0:
+    let n;
+    break;
+  case 1:
+    const x = (n = obj) == null ? undefined : n.value;
+    use(x);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn standard_transforms_let_temp_declared_in_the_enclosing_function_body() {
+    // The shape VarDeclToLetConst produces from a hoisted `var _a;` before the
+    // cleanup passes: a `let` at the top of the function body, every use
+    // after it in the same body.
+    let input = r#"
+function f(obj) {
+  let n;
+  if (ready) {
+    return (n = obj) == null ? undefined : n.value;
+  }
+  return fallback;
+}
+"#;
+    let expected = r#"
+function f(obj) {
+  if (ready) {
+    return obj?.value;
+  }
+  return fallback;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn preserves_exported_temp_assignment() {
+    // Importers read the live `_a` binding, so its write is observable.
+    let input = r#"
+export var _a;
+export const x = (_a = o) === null || _a === void 0 ? void 0 : _a.b;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}

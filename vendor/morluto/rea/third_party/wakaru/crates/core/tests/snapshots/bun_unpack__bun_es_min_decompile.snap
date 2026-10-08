@@ -1,0 +1,176 @@
+---
+source: crates/core/tests/bun_unpack.rs
+expression: output
+---
+function d(t, wordCount) {
+    return t + wordCount;
+}
+function x(totalWords, e) {
+    return totalWords * e;
+}
+function h(t) {
+    if (!t) {
+        return "";
+    }
+    return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function _(t) {
+    let e = new Date(t);
+    let o = e.getFullYear();
+    let r = String(e.getMonth() + 1).padStart(2, "0");
+    let s = String(e.getDate()).padStart(2, "0");
+    return `${o}-${r}-${s}`;
+}
+function $(t, e) {
+    if (t.length <= e) {
+        return t;
+    }
+    return `${t.slice(0, e - 3)}...`;
+}
+const n = Object.freeze({
+    DEBUG: 0,
+    INFO: 1,
+    WARN: 2,
+    ERROR: 3
+});
+class f {
+    constructor(t = n.INFO, e = ""){
+        this._level = t;
+        this._prefix = e;
+    }
+    _format(t, e) {
+        let o = new Date().toISOString();
+        let r = Object.keys(n).find((a)=>n[a] === t) || "UNKNOWN";
+        let s = [
+            o,
+            `[${r}]`
+        ];
+        if (this._prefix) {
+            s.push(`(${this._prefix})`);
+        }
+        s.push(e);
+        return s.join(" ");
+    }
+    debug(t, ...e) {
+        if (this._level <= n.DEBUG) {
+            console.debug(this._format(n.DEBUG, t), ...e);
+        }
+    }
+    info(t, ...e) {
+        if (this._level <= n.INFO) {
+            console.info(this._format(n.INFO, t), ...e);
+        }
+    }
+    warn(t, ...e) {
+        if (this._level <= n.WARN) {
+            console.warn(this._format(n.WARN, t), ...e);
+        }
+    }
+    error(t, ...e) {
+        if (this._level <= n.ERROR) {
+            console.error(this._format(n.ERROR, t), ...e);
+        }
+    }
+    child(t) {
+        return new f(this._level, this._prefix ? `${this._prefix}:${t}` : t);
+    }
+}
+const c = new WeakMap;
+const l = new WeakMap;
+const g = Symbol("change");
+const O = Symbol("reset");
+class m {
+    constructor(t = {}){
+        c.set(this, {
+            ...t
+        });
+        l.set(this, []);
+    }
+    get(t) {
+        let e = c.get(this);
+        if (e) {
+            return e[t];
+        }
+    }
+    set(t, e) {
+        let o = c.get(this);
+        let old = o[t];
+        o[t] = e;
+        if (old !== e) {
+            this._notify(g, {
+                key: t,
+                old,
+                value: e
+            });
+        }
+    }
+    reset(t = {}) {
+        c.set(this, {
+            ...t
+        });
+        this._notify(O, t);
+    }
+    get size() {
+        return Object.keys(c.get(this)).length;
+    }
+    subscribe(t) {
+        let e = l.get(this);
+        e.push(t);
+        return ()=>{
+            let o = e.indexOf(t);
+            if (o !== -1) {
+                e.splice(o, 1);
+            }
+        };
+    }
+    _notify(t, e) {
+        for (let o of l.get(this)){
+            o(t, e);
+        }
+    }
+}
+function b(t) {
+    return fetch(`https://api.example.com${t}`).then((e)=>{
+        if (!e.ok) {
+            throw Error(`HTTP ${e.status}`);
+        }
+        return e.json();
+    });
+}
+function w(t) {
+    return b(`/users/${t}`);
+}
+function S(t) {
+    return b(`/users/${t}/posts`);
+}
+const p = new f(n.INFO);
+export async function main() {
+    p.info("Starting app");
+    let user = await w(1);
+    p.info(`User: ${h(user.name)}`);
+    let summary = (await S(user.id)).map((i)=>({
+            title: $(h(i.title), 50),
+            date: _(i.createdAt || new Date().toISOString()),
+            wordCount: i.body ? i.body.split(" ").length : 0
+        }));
+    let totalWords = summary.reduce((acc, item)=>d(acc, item.wordCount), 0);
+    let avg = Math.round(x(totalWords, 1 / summary.length));
+    p.info(`${summary.length} posts, avg ${avg} words`);
+    let a = new m({
+        count: 0,
+        user: user.name
+    });
+    a.subscribe((i, u)=>{
+        if (i === g) {
+            p.debug(`${u.key} = ${u.value}`);
+        }
+    });
+    a.set("count", totalWords);
+    return {
+        user,
+        summary,
+        totalWords,
+        avg
+    };
+}
+main().then((t)=>console.log("Done:", t));

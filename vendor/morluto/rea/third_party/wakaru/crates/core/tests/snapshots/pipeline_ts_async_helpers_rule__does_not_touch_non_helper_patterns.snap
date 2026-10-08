@@ -1,0 +1,8 @@
+---
+source: crates/core/tests/pipeline_ts_async_helpers_rule.rs
+expression: output
+---
+const V = someOtherThing || fallback;
+function foo() {
+    return V(1, 2, 3);
+}
