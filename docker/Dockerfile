@@ -1,0 +1,112 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+ARG BASE_IMAGE="python:3.12-slim-bookworm"
+# The latest main will be used if arg unspecified
+ARG VLLM_COMMIT_HASH=""
+
+FROM $BASE_IMAGE
+
+ARG IS_TEST="false"
+ARG BM_INFRA="false"
+
+# Update pip
+RUN pip install --upgrade pip
+
+# Install some basic utilities
+RUN apt-get update && apt-get install -y \
+    git \
+    libopenmpi-dev \
+    libomp-dev \
+    procps \
+    curl \
+    netcat-openbsd \
+    rclone \
+    wget \
+    bc \
+    ca-certificates \
+    unzip \
+    build-essential \
+    cmake \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Conditionally install google-cloud-cli for benchmarking infrastructure
+RUN if [ "$BM_INFRA" = "true" ]; then \
+        apt-get update && apt-get install -y gnupg curl \
+        && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list \
+        && curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+        && apt-get update && apt-get install -y google-cloud-cli \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# The buildkite-agent CLI, so a pod can upload its own artifacts - it shares no
+# filesystem with the agent that scheduled it. The credential is not baked in;
+# the pod is handed one at run time.
+#
+# Staged to /tmp and moved, because COPY cannot be conditional and this file
+# builds the published vllm/vllm-tpu image as well as the test one. Only the
+# test image keeps the binary.
+COPY --from=buildkite/agent:3 /usr/local/bin/buildkite-agent /tmp/buildkite-agent
+RUN if [ "$IS_TEST" = "true" ]; then \
+        mv /tmp/buildkite-agent /usr/local/bin/buildkite-agent \
+        && buildkite-agent --version; \
+    else \
+        rm /tmp/buildkite-agent; \
+    fi
+
+# Build vLLM
+WORKDIR /workspace/vllm
+ARG VLLM_REPO=https://github.com/vllm-project/vllm.git
+ARG VLLM_COMMIT_HASH
+
+RUN git clone $VLLM_REPO . && \
+    if [ -n "$VLLM_COMMIT_HASH" ]; then \
+        git checkout $VLLM_COMMIT_HASH; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/pip pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements/tpu.txt --retries 3
+RUN --mount=type=cache,target=/root/.cache/pip pip install setuptools-rust>=1.9.0
+RUN --mount=type=cache,target=/root/.cache/pip VLLM_TARGET_DEVICE="tpu" pip install --no-build-isolation -e .
+
+# Install test dependencies
+RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install -e tests/vllm_test_utils
+RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install \
+    git+https://github.com/thuml/depyf.git \
+    pytest-asyncio \
+    "lm-eval[api,math]==0.4.12" \
+    pytest-cov \
+    tblib
+
+# Install tpu_inference
+WORKDIR /workspace/tpu_inference
+# Install requirements first and cache so we don't need to re-install on code change.
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt --retries 3
+COPY requirements_benchmarking.txt .
+# These are needed for the E2E benchmarking tests (i.e. tests/e2e/benchmarking/mlperf.sh)
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements_benchmarking.txt --retries 3
+# Install test requirements
+COPY requirements_test.txt .
+RUN  --mount=type=cache,target=/root/.cache/pip if [ "$IS_TEST" = "true" ]; then \
+        pip install -r requirements_test.txt --retries 3; \
+    fi
+COPY . .
+RUN --mount=type=cache,target=/root/.cache/pip pip install -e .
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

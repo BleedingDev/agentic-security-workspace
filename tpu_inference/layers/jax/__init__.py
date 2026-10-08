@@ -1,0 +1,175 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import Iterable, Iterator
+
+from flax import nnx
+
+
+class JaxModule(nnx.Module):
+    """Base module for JAX layers, extending flax.nnx.Module.
+    """
+
+    def _get_name(self) -> str:
+        return self.__class__.__name__
+
+    def named_parameters(self,
+                         prefix: str = "",
+                         recurse=True) -> Iterator[tuple[str, nnx.Param]]:
+        """Yields the named parameters of the module.
+        
+        Arguments:
+            prefix: Prefix to add to the parameter names.
+            recurse: If True, then yields parameters of this module and all submodules.
+                Otherwise, yields only parameters that are direct members of this module.
+
+        Yields:
+            (string, Param): Tuple containing a name and parameter
+        """
+        for name, param in self.__dict__.items():
+            if isinstance(param, nnx.Param):
+                yield (f"{prefix}.{name}" if prefix else name), param
+
+        if not recurse:
+            return
+
+        for name, child in self.named_children():
+            child_prefix = f"{prefix}.{name}" if prefix else name
+            yield from child.named_parameters(prefix=child_prefix,
+                                              recurse=True)
+
+    def named_children(
+            self) -> Iterator[tuple[str, "JaxModule | JaxModuleList"]]:
+        """Returns an iterator over immediate children modules.
+        
+        Yields:
+            (string, Module | list): Tuple containing a name and child module
+        """
+        for name, value in self.__dict__.items():
+            if isinstance(value, JaxModule):
+                yield name, value
+            elif isinstance(value, (list, nnx.List)):
+                # Only treat a list as a submodule container if it actually
+                # holds modules (or nested module lists). Plain data lists —
+                # e.g. a layer's ``output_sizes`` on a merged linear — must not
+                # be mistaken for children, otherwise named_parameters() /
+                # named_modules() would try to recurse into ints.
+                if any(
+                        isinstance(item, (JaxModule, list, nnx.List))
+                        for item in value):
+                    yield name, JaxModuleList(value)
+
+    def children(self) -> Iterator["JaxModule | JaxModuleList"]:
+        """Yields immediate child modules.
+
+        Mirrors ``torch.nn.Module.children`` so vLLM's upstream loader
+        (``AutoWeightsLoader.load_weights``) works against JAX models.
+        """
+        for _, child in self.named_children():
+            yield child
+
+    def named_modules(
+        self,
+        memo: set | None = None,
+        prefix: str = "",
+        remove_duplicate: bool = True,
+    ) -> Iterator[tuple[str, "JaxModule | JaxModuleList"]]:
+        """Yields (name, module) for self and every descendant module.
+
+        Mirrors ``torch.nn.Module.named_modules`` semantics so vLLM's
+        upstream loader code (which calls ``model.named_modules()`` from
+        ``track_weights_loading``) works against JAX models.
+
+        Note: traversal goes through ``named_children``, which walks
+        ``self.__dict__`` and only recognises ``JaxModule`` /
+        list / ``nnx.List`` attributes. Submodules registered inside
+        dicts, tuples, or non-``JaxModule`` containers are not visible.
+        """
+        if memo is None:
+            memo = set()
+        if remove_duplicate and id(self) in memo:
+            return
+        memo.add(id(self))
+        yield prefix, self
+        for name, child in self.named_children():
+            child_prefix = f"{prefix}.{name}" if prefix else name
+            yield from child.named_modules(memo, child_prefix,
+                                           remove_duplicate)
+
+
+class JaxModuleList(nnx.List):
+    """A list container for JaxModule objects."""
+
+    def __init__(self, modules: Iterable[JaxModule]):
+        """Initializes the JaxModuleList.
+
+        Args:
+            modules: An optional list of JaxModule objects to initialize the list.
+        """
+        super().__init__()
+        for module in modules:
+            self.append(module)
+
+    def _get_name(self) -> str:
+        return self.__class__.__name__
+
+    def named_parameters(self,
+                         prefix: str = "",
+                         recurse=True) -> Iterator[tuple[str, nnx.Param]]:
+        """Yields the named parameters of all modules in the list."""
+
+        for idx, module in enumerate(self):
+            module_prefix = f"{prefix}.{idx}" if prefix else str(idx)
+            yield from module.named_parameters(prefix=module_prefix,
+                                               recurse=recurse)
+
+    def named_children(
+            self) -> Iterator[tuple[str, "JaxModule | JaxModuleList"]]:
+        """Returns an iterator over the modules in the list with their indices as names.
+
+        Yields:
+            (string, JaxModule): Tuple containing the index as a string and the module
+        """
+        for idx, item in enumerate(self):
+            if isinstance(item, JaxModule):
+                yield str(idx), item
+            elif isinstance(item, list):
+                yield str(idx), JaxModuleList(item)
+
+    def children(self) -> Iterator["JaxModule | JaxModuleList"]:
+        """Yields the contained modules (see ``torch.nn.ModuleList.children``)."""
+        for _, child in self.named_children():
+            yield child
+
+    def named_modules(
+        self,
+        memo: set | None = None,
+        prefix: str = "",
+        remove_duplicate: bool = True,
+    ) -> Iterator[tuple[str, "JaxModule | JaxModuleList"]]:
+        """Yields (name, module) for self, every module in the list, and their descendants.
+
+        Mirrors ``torch.nn.ModuleList.named_modules``: the list itself
+        is yielded first, then each contained module recursively.
+        """
+        if memo is None:
+            memo = set()
+        if remove_duplicate and id(self) in memo:
+            return
+        memo.add(id(self))
+        yield prefix, self
+        for idx, module in enumerate(self):
+            module_prefix = f"{prefix}.{idx}" if prefix else str(idx)
+            yield from module.named_modules(memo, module_prefix,
+                                            remove_duplicate)

@@ -1,0 +1,667 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import tempfile
+from unittest.mock import MagicMock, patch
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+import torch
+from jax.sharding import Mesh
+from transformers import PretrainedConfig
+from vllm.config import (ModelConfig, ParallelConfig, VllmConfig,
+                         set_current_vllm_config)
+from vllm.distributed.parallel_state import (ensure_model_parallel_initialized,
+                                             init_distributed_environment)
+from vllm.engine.arg_utils import EngineArgs
+from vllm.model_executor.models.registry import ModelRegistry
+
+from tpu_inference.distributed.jax_parallel_state import \
+    init_pp_distributed_environment
+from tpu_inference.models.common import model_loader
+from tpu_inference.models.jax.qwen3 import Qwen3ForCausalLM
+
+
+class MockModelA:
+
+    def __init__(self, vllm_config, rng=None, mesh=None):
+        pass
+
+    def __call__(self, kv_caches, input_ids, attention_metadata):
+        pass
+
+
+class MockModelB:
+
+    def __init__(self, vllm_config, rng=None, mesh=None):
+        pass
+
+    def __call__(self, kv_caches, input_ids, attention_metadata):
+        pass
+
+
+@pytest.fixture(scope="module")
+def mesh() -> Mesh:
+    """Provides a JAX device mesh for sharding."""
+    devices = np.array(jax.devices()[:1])
+    devices = devices.reshape((1, 1, 1, -1))
+    # Pass the 1D list of devices directly. Its ndim will match len(axis_names).
+    return Mesh(devices, axis_names=("data", "attn_dp", "expert", "model"))
+
+
+@pytest.fixture
+def vllm_config() -> MagicMock:
+    """Provides a mock VllmConfig object."""
+    model = "Qwen/Qwen3-0.6B"
+    mock_config = MagicMock(spec=VllmConfig)
+    mock_config.model_config = ModelConfig(model)
+    mock_config.model_config.dtype = jnp.bfloat16
+    mock_config.load_config = MagicMock()
+    mock_config.load_config.download_dir = None
+    mock_config.load_config.load_format = "auto"
+    mock_config.load_config.model_loader_extra_config = dict()
+    mock_config.additional_config = dict()
+    mock_config.cache_config = MagicMock(cache_dtype="auto")
+    mock_config.parallel_config = ParallelConfig(pipeline_parallel_size=1)
+    mock_config.quant_config = None
+    return mock_config
+
+
+# --- Added RNG Fixture ---
+@pytest.fixture
+def rng() -> jax.Array:
+    """Provides a JAX PRNGKey."""
+    return jax.random.PRNGKey(0)
+
+
+# --- Added jax get_pp_group Fixture ---
+@pytest.fixture
+def mock_get_pp_group():
+    with patch("tpu_inference.distributed.jax_parallel_state.get_pp_group",
+               return_value=MagicMock(is_first_rank=True,
+                                      is_last_rank=True,
+                                      rank_in_group=0,
+                                      world_size=1)):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def mock_register_oot():
+    """Prevents Duplicate layer name errors from register_oot."""
+    with patch(
+            "vllm.model_executor.layers.mla.MultiHeadLatentAttentionWrapper.register_oot"
+    ):
+        yield
+
+
+# ==============================================================================
+# >> Test Cases
+# ==============================================================================
+
+
+def test_get_model_architecture_supported(vllm_config):
+    """
+    Tests that _get_model_architecture returns the correct model class
+    for a supported architecture.
+    """
+    config = vllm_config.model_config.hf_config
+    model_class = model_loader._get_model_architecture(config)
+    assert model_class == Qwen3ForCausalLM
+
+
+def test_get_model_architecture_unsupported():
+    """
+    Tests that _get_model_architecture raises a ValueError for an
+    unsupported architecture.
+    """
+    config = PretrainedConfig(architectures=["UnsupportedModel"])
+    with pytest.raises(ValueError, match="not registered"):
+        model_loader._get_model_architecture(config)
+
+
+@pytest.mark.parametrize("env_value,is_draft", [
+    ("flax_nnx", False),
+    ("vllm", False),
+    ("flax_nnx", True),
+    ("vllm", True),
+])
+def test_resolve_model_impl_type_explicit(env_value, is_draft):
+    """An explicit (non-auto) impl type is returned as-is, from
+    MODEL_IMPL_TYPE for the target model and DRAFT_MODEL_IMPL_TYPE for the
+    draft model, without consulting the architecture."""
+    env_attr = "DRAFT_MODEL_IMPL_TYPE" if is_draft else "MODEL_IMPL_TYPE"
+    with patch.object(model_loader.envs, env_attr, env_value), \
+         patch.object(model_loader, "resolve_model_architecture") as mock_res:
+        impl = model_loader.resolve_model_impl_type(MagicMock(),
+                                                    is_draft_model=is_draft)
+    assert impl == env_value
+    mock_res.assert_not_called()
+
+
+@pytest.mark.parametrize("is_draft", [False, True])
+def test_resolve_model_impl_type_auto(is_draft):
+    """'auto' delegates to resolve_model_architecture with the draft flag."""
+    env_attr = "DRAFT_MODEL_IMPL_TYPE" if is_draft else "MODEL_IMPL_TYPE"
+    cfg = MagicMock()
+    with patch.object(model_loader.envs, env_attr, "auto"), \
+         patch.object(model_loader, "resolve_model_architecture",
+                      return_value="flax_nnx") as mock_res:
+        impl = model_loader.resolve_model_impl_type(cfg,
+                                                    is_draft_model=is_draft)
+    assert impl == "flax_nnx"
+    mock_res.assert_called_once_with(cfg, is_draft)
+
+
+@pytest.fixture(autouse=True)
+def clear_model_registry_after_test():
+    """Clear the model registry after each test to prevent side effects."""
+    yield
+    model_loader._MODEL_REGISTRY.clear()
+
+
+def test_register_model_validation():
+    """Tests that register_model validates the model interface."""
+
+    class ValidModel:
+
+        def __init__(self, vllm_config, rng=None, mesh=None):
+            pass
+
+        def __call__(self, kv_caches, input_ids, attention_metadata, **kwargs):
+            pass
+
+    class MissingInitArgModel:
+
+        def __init__(self, rng=None, mesh=None):  # Missing vllm_config
+            pass
+
+        def __call__(self, kv_caches, input_ids, attention_metadata):
+            pass
+
+    class MissingCallArgModel:
+
+        def __init__(self, vllm_config, rng=None, mesh=None):
+            pass
+
+        def __call__(self, kv_caches, input_ids):  # Missing attention_metadata
+            pass
+
+    class NoCallModel:
+
+        def __init__(self, vllm_config, rng=None, mesh=None):
+            pass
+
+    # This should succeed
+    model_loader.register_model("ValidModel", ValidModel)
+
+    # These should fail
+    with pytest.raises(TypeError, match="vllm_config"):
+        model_loader.register_model("InvalidInit", MissingInitArgModel)
+
+    with pytest.raises(TypeError, match="attention_metadata"):
+        model_loader.register_model("InvalidCall", MissingCallArgModel)
+
+    with pytest.raises(TypeError, match="__call__ method"):
+        model_loader.register_model("NoCallModel", NoCallModel)
+
+
+def test_register_model_new_arch():
+    """Tests registering a new model architecture."""
+    arch = "NewArch"
+    model_loader.register_model(arch, MockModelA)
+
+    # Check tpu_inference registry
+    config = PretrainedConfig(architectures=[arch])
+    model_class = model_loader._get_model_architecture(config)
+    assert model_class == MockModelA
+
+    # Check vLLM registry
+    vllm_model_class = ModelRegistry._try_load_model_cls(arch)
+    assert vllm_model_class is not None
+    assert vllm_model_class.__name__ == f"VllmCompatible{MockModelA.__name__}"
+    assert issubclass(vllm_model_class, MockModelA)
+    assert issubclass(vllm_model_class, torch.nn.Module)
+
+
+def test_register_model_update_arch():
+    """Tests updating an existing registered model architecture."""
+    arch = "UpdatableArch"
+    config = PretrainedConfig(architectures=[arch])
+
+    # Register initial model
+    model_loader.register_model(arch, MockModelA)
+
+    # Verify initial registration in both registries
+    model_class_1 = model_loader._get_model_architecture(config)
+    assert model_class_1 == MockModelA
+    vllm_model_class_1 = ModelRegistry._try_load_model_cls(arch)
+    assert vllm_model_class_1.__name__ == f"VllmCompatible{MockModelA.__name__}"
+    assert issubclass(vllm_model_class_1, MockModelA)
+
+    # Update the registration
+    model_loader.register_model(arch, MockModelB)
+
+    # Verify the update in both registries
+    model_class_2 = model_loader._get_model_architecture(config)
+    assert model_class_2 == MockModelB
+    vllm_model_class_2 = ModelRegistry._try_load_model_cls(arch)
+    assert vllm_model_class_2.__name__ == f"VllmCompatible{MockModelB.__name__}"
+    assert issubclass(vllm_model_class_2, MockModelB)
+
+
+def test_register_model_vllm_wrapper_methods():
+    """Tests that the vLLM wrapper has correct dummy methods."""
+    arch = "WrapperMethodTestArch"
+    model_loader.register_model(arch, MockModelA)
+
+    vllm_model_class = ModelRegistry._try_load_model_cls(arch)
+    instance = vllm_model_class()
+
+    # `forward` should be unimplemented.
+    with pytest.raises(NotImplementedError, match="JAX model"):
+        instance.forward(input_ids=None, positions=None)
+
+    # `embed_input_ids` should be unimplemented.
+    with pytest.raises(NotImplementedError, match="JAX model"):
+        instance.embed_input_ids(input_ids=None, positions=None)
+
+    # `load_weights` should be a no-op that returns None.
+    assert instance.load_weights() is None
+
+
+@pytest.mark.parametrize("tie_word_embeddings", [True, False])
+def test_get_flax_model(vllm_config, mesh, tie_word_embeddings):
+    """
+    An integration test for the main public function `get_flax_model`.
+    It verifies that the function returns two valid, JIT-compiled functions
+    that execute correctly and produce outputs with the expected sharding.
+
+    The model under test is Qwen3-0.6B, whose config sets tie_word_embeddings
+    to True by default, but also provides lm_head weights in the checkpoint.
+    This test runs with both tie_word_embeddings=True and False to ensure
+    that the model loading logic handles both cases correctly.
+    """
+    rng = jax.random.PRNGKey(42)
+    assert hasattr(vllm_config.model_config.hf_config, "tie_word_embeddings")
+    vllm_config.model_config.hf_config.tie_word_embeddings = tie_word_embeddings
+
+    # 1. Get the compiled model and logit computation functions
+    init_pp_distributed_environment(ip="",
+                                    rank=0,
+                                    world_size=1,
+                                    device=jax.devices()[0],
+                                    need_pp=False)
+    with jax.set_mesh(mesh), set_current_vllm_config(vllm_config):
+        model = model_loader.get_flax_model(vllm_config, rng, mesh)
+
+    assert callable(model.model_fn)
+    assert callable(model.compute_logits_fn)
+
+    # Verify that JAX model instance possesses the named_modules attribute
+    assert hasattr(model.model, "named_modules")
+
+
+def test_step_fn_kv_cache_sharding_is_a_fixed_point(vllm_config, mesh, rng):
+    """The step fn must return kv-caches sharded exactly as it received them.
+
+    The runner feeds each step's kv-cache output straight back in as the next
+    step's input, so any divergence between the allocated sharding and the
+    sharding the step fn returns changes the jit cache key and forces a
+    recompile mid-run -- which `ForbidCompile` turns into a hard error. This
+    pins the fixed point across the token buckets a draining batch walks
+    through, and asserts the replay compiles nothing.
+    """
+    from tpu_inference.layers.common.attention_metadata import \
+        AttentionMetadata
+    from tpu_inference.runner.kv_cache import create_kv_caches
+    from tpu_inference.runner.utils import ForbidCompile
+
+    init_pp_distributed_environment(ip="",
+                                    rank=0,
+                                    world_size=1,
+                                    device=jax.devices()[0],
+                                    need_pp=False)
+    with jax.set_mesh(mesh), set_current_vllm_config(vllm_config):
+        model = model_loader.get_flax_model(vllm_config, rng, mesh)
+
+        hf_config = vllm_config.model_config.hf_config
+        num_layers = hf_config.num_hidden_layers
+        kv_caches = create_kv_caches(
+            num_blocks=64,
+            block_size=32,
+            num_kv_heads=hf_config.num_key_value_heads,
+            head_size=hf_config.head_dim,
+            mesh=mesh,
+            layer_names=[f"layer.{i}" for i in range(num_layers)],
+            cache_dtype=jnp.bfloat16,
+        )
+        allocated = jax.tree.map(lambda c: c.sharding, kv_caches)
+        cache_index = tuple((f"layer.{i}", i) for i in range(num_layers))
+
+        def step(caches, num_tokens, with_options=True):
+            step_fn = (model.model_fn
+                       if with_options else model.model.step_fn_no_options)
+            num_reqs = min(num_tokens, 8)
+            attention_metadata = AttentionMetadata(
+                input_positions=jnp.zeros((num_tokens, ), dtype=jnp.int32),
+                block_tables=jnp.zeros((num_reqs, 4),
+                                       dtype=jnp.int32).reshape(-1),
+                seq_lens=jnp.ones((num_reqs, ), dtype=jnp.int32),
+                query_start_loc=jnp.arange(num_reqs + 1, dtype=jnp.int32),
+                request_distribution=jnp.array([0, 0, num_reqs],
+                                               dtype=jnp.int32),
+            )
+            return step_fn(
+                model.state_leaves,
+                caches,
+                jnp.ones((num_tokens, ), dtype=jnp.int32),
+                attention_metadata,
+                None,
+                jnp.zeros((num_tokens, ), dtype=jnp.int32),
+                cache_index,
+                None,
+                None,
+                True,
+                True,
+            )[0]
+
+        # A batch drains through decreasing token buckets; every one of them
+        # must hand back caches sharded the way they were allocated.
+        buckets = (64, 32, 16, 8)
+        for num_tokens in buckets:
+            kv_caches = step(kv_caches, num_tokens)
+            got = jax.tree.map(lambda c: c.sharding, kv_caches)
+            drifted = [(want, have) for want, have in zip(
+                jax.tree.leaves(allocated), jax.tree.leaves(got))
+                       if want != have]
+            assert not drifted, (
+                f"kv-cache sharding drifted at num_tokens={num_tokens}: "
+                f"{len(drifted)} leaf(s) changed, e.g. allocated "
+                f"{drifted[0][0]} came back as {drifted[0][1]}")
+
+        # Replaying the same buckets with the returned caches must reuse the
+        # compiled executables rather than trigger a fresh lowering.
+        with ForbidCompile():
+            for num_tokens in buckets:
+                kv_caches = step(kv_caches, num_tokens)
+
+        # The eagle3 drafter and the `continue_decode` loop both call the step
+        # fn from inside an outer jit, where `kv_caches` arrives as tracers
+        # with no queryable sharding. That must still work.
+        traced_step = jax.jit(
+            lambda caches: step(caches, buckets[0], with_options=False))
+        traced_step(kv_caches)
+
+
+def test_get_flax_model_with_pooling(vllm_config, mesh, rng):
+    """Tests that get_flax_model correctly instantiates a pooler when runner_type is 'pooling'."""
+    vllm_config.model_config.runner_type = "pooling"
+    from vllm.config import PoolerConfig
+    vllm_config.model_config.pooler_config = PoolerConfig(
+        task="embed", tok_pooling_type="STEP", seq_pooling_type="CLS")
+
+    with patch("tpu_inference.models.common.model_loader._get_nnx_model"
+               ) as mock_get_nnx:
+        mock_model = MagicMock()
+        mock_get_nnx.return_value = mock_model
+
+        init_pp_distributed_environment(ip="",
+                                        rank=0,
+                                        world_size=1,
+                                        device=jax.devices()[0],
+                                        need_pp=False)
+
+        with jax.set_mesh(mesh), set_current_vllm_config(vllm_config):
+            model_interface = model_loader.get_flax_model(
+                vllm_config, rng, mesh)
+
+        assert model_interface.pooler_fn != model_loader._not_support
+        assert model_interface.pooler_fn.__name__ == "compute_pooler_output"
+
+
+def test_get_vllm_model(mock_get_pp_group, mesh):
+    """
+    An integration test for the main public function `get_vllm_model`.
+    It verifies that the function returns two valid, JIT-compiled functions
+    that execute correctly and produce outputs with the expected sharding.
+    """
+    rng = jax.random.PRNGKey(42)
+
+    engine_args = EngineArgs(model="Qwen/Qwen3-0.6B")
+    vllm_config = engine_args.create_engine_config()
+    vllm_config.model_config.dtype = torch.bfloat16
+
+    with set_current_vllm_config(vllm_config):
+        temp_file = tempfile.mkstemp()[1]
+        init_distributed_environment(
+            world_size=1,
+            rank=0,
+            local_rank=0,
+            distributed_init_method=f"file://{temp_file}",
+            backend="gloo",
+        )
+        ensure_model_parallel_initialized(
+            tensor_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+        )
+
+    model = model_loader.get_vllm_model(vllm_config, rng, mesh)
+
+    assert callable(model.model_fn)
+    assert callable(model.compute_logits_fn)
+
+
+def test_get_vllm_model_random_weights(mock_get_pp_group, mesh):
+    rng = jax.random.PRNGKey(42)
+
+    engine_args = EngineArgs(model="Qwen/Qwen3-0.6B")
+    vllm_config = engine_args.create_engine_config()
+    vllm_config.model_config.dtype = torch.bfloat16
+    vllm_config.load_config.load_format = "dummy"
+
+    with set_current_vllm_config(vllm_config):
+        temp_file = tempfile.mkstemp()[1]
+        init_distributed_environment(
+            world_size=1,
+            rank=0,
+            local_rank=0,
+            distributed_init_method=f"file://{temp_file}",
+            backend="gloo",
+        )
+        ensure_model_parallel_initialized(
+            tensor_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+        )
+
+    with patch(
+            "vllm.model_executor.model_loader.dummy_loader.DummyModelLoader.load_weights"
+    ) as mock_load:
+        model = model_loader.get_vllm_model(vllm_config, rng, mesh)
+
+    assert callable(model.model_fn)
+    assert callable(model.compute_logits_fn)
+    mock_load.assert_called()
+
+
+# ==============================================================================
+# >> Test Suite for get_model Fallback Logic
+# ==============================================================================
+
+
+@pytest.mark.usefixtures("mesh")  # This fixture is module-scoped, but fine
+class TestGetModel:
+    """Tests the main get_model() entrypoint and its fallback logic."""
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "flax_nnx"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_flax_happy_path(self, mock_get_flax, mock_get_vllm,
+                                       vllm_config, rng, mesh):
+        """Tests that 'flax_nnx' impl calls get_flax_model."""
+        mock_get_flax.return_value = "flax_model_sentinel"
+
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_called_once_with(vllm_config, rng, mesh, False)
+        mock_get_vllm.assert_not_called()
+        assert result == "flax_model_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "flax_nnx"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_flax_fallback_to_vllm_with_pp_on_unsupported_models(
+            self, mock_get_flax, mock_get_vllm, vllm_config, rng, mesh):
+        """Tests that 'flax_nnx' impl calls get_vllm_model when PP is enabled on
+        unsupported models (e.g. GptOssForCausalLM)."""
+        mock_get_flax.return_value = "flax_model_sentinel"
+        mock_get_vllm.return_value = "vllm_model_sentinel"
+        vllm_config.parallel_config.pipeline_parallel_size = 2
+        vllm_config.model_config.hf_config.architectures = [
+            "GptOssForCausalLM"
+        ]
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_not_called()
+        mock_get_vllm.assert_called_once_with(vllm_config, rng, mesh, False,
+                                              None)
+        assert result == "vllm_model_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "flax_nnx"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_flax_no_fallback_with_pp_on_supported_models(
+            self, mock_get_flax, mock_get_vllm, vllm_config, rng, mesh):
+        """Tests that 'flax_nnx' impl calls get_flax_model when PP is enabled on
+        supported models (e.g. Qwen3ForCausalLM)."""
+        mock_get_flax.return_value = "flax_model_sentinel"
+        vllm_config.parallel_config.pipeline_parallel_size = 2
+        vllm_config.model_config.hf_config.architectures = ["Qwen3ForCausalLM"]
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_called_once_with(vllm_config, rng, mesh, False)
+        mock_get_vllm.assert_not_called()
+        assert result == "flax_model_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "vllm"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_vllm_happy_path(self, mock_get_flax, mock_get_vllm,
+                                       vllm_config, rng, mesh):
+        """Tests that 'vllm' impl calls get_vllm_model."""
+        mock_get_vllm.return_value = "vllm_model_sentinel"
+
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_not_called()
+        mock_get_vllm.assert_called_once_with(vllm_config, rng, mesh, False,
+                                              None)
+        assert result == "vllm_model_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "flax_nnx"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_flax_fallback_on_unsupported_arch(
+            self, mock_get_flax, mock_get_vllm, vllm_config, rng, mesh):
+        """
+        Tests that 'flax_nnx' falls back to get_vllm_model on
+        UnsupportedArchitectureError.
+        """
+        # Mock get_flax_model to raise the specific error
+        mock_get_flax.side_effect = model_loader.UnsupportedArchitectureError(
+            "Model not supported")
+        mock_get_vllm.return_value = "vllm_fallback_sentinel"
+
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        # Check that both were called
+        mock_get_flax.assert_called_once_with(vllm_config, rng, mesh, False)
+        mock_get_vllm.assert_called_once_with(vllm_config, rng, mesh, False,
+                                              None)
+        assert result == "vllm_fallback_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "flax_nnx"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_flax_reraises_other_errors(self, mock_get_flax,
+                                                  mock_get_vllm, vllm_config,
+                                                  rng, mesh):
+        """
+        Tests that 'flax_nnx' re-raises other ValueErrors
+        and does not fall back.
+        """
+        # Mock get_flax_model to raise a *different* error
+        mock_get_flax.side_effect = ValueError("A different error")
+
+        with pytest.raises(ValueError, match="A different error"):
+            model_loader.get_model(vllm_config, rng, mesh)
+
+        # Check that flax was called but vllm was not
+        mock_get_flax.assert_called_once_with(vllm_config, rng, mesh, False)
+        mock_get_vllm.assert_not_called()
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "jetpack"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_not_implemented(self, mock_get_flax, mock_get_vllm,
+                                       vllm_config, rng, mesh):
+        """Tests that an unknown impl raises NotImplementedError."""
+        with pytest.raises(NotImplementedError):
+            model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_not_called()
+        mock_get_vllm.assert_not_called()
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "auto"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_auto_resolves_to_flax_nnx(self, mock_get_flax,
+                                                 mock_get_vllm, vllm_config,
+                                                 rng, mesh):
+        """
+        Tests that 'auto' resolves to 'flax_nnx' for standard architectures
+        (not in _VLLM_REQUIRED_ARCHITECTURES).
+        """
+        # vllm_config uses Qwen3 which is NOT in _VLLM_REQUIRED_ARCHITECTURES
+        mock_get_flax.return_value = "flax_model_sentinel"
+
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_called_once_with(vllm_config, rng, mesh, False)
+        mock_get_vllm.assert_not_called()
+        assert result == "flax_model_sentinel"
+
+    @patch.dict(os.environ, {"MODEL_IMPL_TYPE": "auto"}, clear=True)
+    @patch("tpu_inference.models.common.model_loader.get_vllm_model")
+    @patch("tpu_inference.models.common.model_loader.get_flax_model")
+    def test_get_model_auto_resolves_to_vllm_for_gpt_oss(
+            self, mock_get_flax, mock_get_vllm, vllm_config, rng, mesh):
+        """
+        Tests that 'auto' resolves to 'vllm' for architectures in
+        _VLLM_REQUIRED_ARCHITECTURES (e.g., GptOssForCausalLM).
+        """
+        # Mock the architecture to be GptOssForCausalLM
+        vllm_config.model_config.hf_config.architectures = [
+            "GptOssForCausalLM"
+        ]
+        mock_get_vllm.return_value = "vllm_model_sentinel"
+
+        result = model_loader.get_model(vllm_config, rng, mesh)
+
+        mock_get_flax.assert_not_called()
+        mock_get_vllm.assert_called_once_with(vllm_config, rng, mesh, False,
+                                              None)
+        assert result == "vllm_model_sentinel"
