@@ -1,0 +1,278 @@
+package testcmd
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	scalibrconfig "github.com/google/osv-scalibr/plugin/config"
+	"github.com/google/osv-scanner/v2/cmd/osv-scanner/internal/cmd"
+	"github.com/google/osv-scanner/v2/internal/cachedregexp"
+	"github.com/google/osv-scanner/v2/internal/testlogger"
+	"github.com/google/osv-scanner/v2/internal/testutility"
+	"github.com/urfave/cli/v3"
+)
+
+// CommandsUnderTest should be set in TestMain by every cmd package test
+var CommandsUnderTest []cmd.CommandBuilder
+
+// fetchCommandsToTest returns the commands that should be tested, ensuring that
+// the default "scan" command is included to avoid a panic
+func fetchCommandsToTest() []cmd.CommandBuilder {
+	for _, builder := range CommandsUnderTest {
+		command := builder(nil, nil, nil)
+
+		if command.Name == "scan" {
+			return CommandsUnderTest
+		}
+	}
+
+	return append(CommandsUnderTest, func(_, _ io.Writer, _ scalibrconfig.ClientFactories) *cli.Command {
+		return &cli.Command{
+			Name: "scan",
+			Action: func(_ context.Context, _ *cli.Command) error {
+				return errors.New("<this test is unexpectedly calling the default scan command>")
+			},
+		}
+	})
+}
+
+func run(t *testing.T, tc Case) (string, string) {
+	t.Helper()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	cf := tc.ClientFactories
+	if cf == nil {
+		if SharedClientFactories == nil {
+			t.Fatalf("testcmd.SharedClientFactories is not initialized. Please initialize it in TestMain using testcmd.NewClientFactories(nil).")
+		}
+
+		httpClient := tc.HTTPClient
+		grpcRecorder := tc.GRPCRecorder
+
+		if !tc.NoVCR {
+			cassetteName := t.Name()
+			if tc.CassetteName != "" {
+				cassetteName = tc.CassetteName
+			}
+			if httpClient == nil {
+				httpClient = InsertCassetteWithName(t, cassetteName)
+			}
+			if grpcRecorder == nil {
+				grpcRecorder = InsertGRPCRecorderWithName(t, cassetteName)
+			}
+		}
+
+		cf = &TestClientFactories{
+			ClientFactories:      SharedClientFactories,
+			HTTPClientOverride:   httpClient,
+			GRPCRecorderOverride: grpcRecorder,
+		}
+	}
+
+	// Inject a per-test --local-db-path tempdir if offline databases are used without an explicit --local-db-path flag
+	if !slices.ContainsFunc(tc.Args, func(arg string) bool {
+		return arg == "--local-db-path" || strings.HasPrefix(arg, "--local-db-path=")
+	}) {
+		if slices.Contains(tc.Args, "--download-offline-databases") || slices.Contains(tc.Args, "--offline-vulnerabilities") {
+			dbDir := testutility.CreateTestDir(t)
+			// In urfave/cli, flags for subcommands must be placed after the subcommand name.
+			// Check if tc.Args[1] is an explicit subcommand name (e.g. "scan", "source") rather
+			// than a flag (e.g. "--offline") or missing when tc.Args has fewer than 2 elements.
+			// For example:
+			//   With subcommand:    ["", "scan", "--download-offline-databases", "dir/"]
+			//                    -> ["", "scan", "--local-db-path", dbDir, "--download-offline-databases", "dir/"]
+			//   Without subcommand: ["", "--download-offline-databases", "dir/"] or [""]
+			//                    -> ["", "--download-offline-databases", "dir/", "--local-db-path", dbDir]
+			// This avoids an out-of-bounds slice panic and avoids misinterpreting flags as subcommands.
+			if len(tc.Args) >= 2 && !strings.HasPrefix(tc.Args[1], "-") {
+				subcmd := tc.Args[1]
+				newArgs := make([]string, 0, len(tc.Args)+2)
+				newArgs = append(newArgs, "", subcmd, "--local-db-path", dbDir)
+				newArgs = append(newArgs, tc.Args[2:]...)
+				tc.Args = newArgs
+			} else {
+				tc.Args = append(slices.Clone(tc.Args), "--local-db-path", dbDir)
+			}
+		}
+	}
+	ec := cmd.Run(tc.Args, stdout, stderr, cf, fetchCommandsToTest())
+
+	if ec != tc.Exit {
+		t.Errorf("cli exited with code %d, not %d", ec, tc.Exit)
+		t.Errorf("stdout: %s", stdout.String())
+		t.Errorf("stderr: %s", stderr.String())
+	}
+
+	return stdout.String(), stderr.String()
+}
+
+func RunAndNormalize(t *testing.T, tc Case) (string, string) {
+	t.Helper()
+
+	stdout, stderr := run(t, tc)
+
+	stdout = normalizeDirScanOrder(t, stdout)
+	stderr = normalizeDirScanOrder(t, stderr)
+	stderr = normalizeLoadDbErrOrder(stderr)
+
+	if len(tc.ReplaceRules) > 0 {
+		if len(stdout) == 0 || !json.Valid([]byte(stdout)) {
+			t.Fatalf("invalid JSON when expecting json\n stdout: %s\n stderr: %s", stdout, stderr)
+		}
+
+		stdout = normalizeJSON(t, stdout, tc.ReplaceRules...)
+	}
+
+	stdout = normalizeUUID(t, stdout)
+
+	return stdout, stderr
+}
+
+func RunAndMatchSnapshots(t *testing.T, tc Case) {
+	t.Helper()
+
+	if tc.Skip != "" {
+		testutility.Skip(t, tc.Skip)
+	}
+
+	stdout, stderr := RunAndNormalize(t, tc)
+
+	testutility.NewSnapshot().WithLabel("stdout").MatchText(t, stdout)
+	testutility.NewSnapshot().WithLabel("stderr").WithWindowsReplacements(map[string]string{
+		"CreateFile": "stat",
+	}).MatchText(t, stderr)
+}
+
+// normalizeJSON runs the given JSONReplaceRules on the given JSON input and returns the normalized JSON string
+func normalizeJSON(t *testing.T, jsonInput string, jsonReplaceRules ...testutility.JSONReplaceRule) string {
+	t.Helper()
+
+	for _, rule := range jsonReplaceRules {
+		jsonInput = testutility.ReplaceJSONInput(t, jsonInput, rule.Path, rule.ReplaceFunc)
+	}
+
+	jsonFormatted := bytes.Buffer{}
+	err := json.Indent(&jsonFormatted, []byte(jsonInput), "", "  ")
+
+	if err != nil {
+		t.Fatalf("Failed to marshal JSON: %s", err)
+	}
+
+	return jsonFormatted.String()
+}
+
+// Sorts the output between directory scan markers to allow for consistent test results when doing unsorted dir walks
+func normalizeDirScanOrder(t *testing.T, input string) string {
+	t.Helper()
+
+	inputLines := strings.Split(input, "\n")
+
+	var completeOutput = make([]string, 0, len(inputLines))
+	var toSort []string
+	var toKeep []string
+	printingDirScanLogs := false
+
+	for _, line := range inputLines {
+		if strings.Contains(line, testlogger.BeginDirectoryScan) {
+			if printingDirScanLogs {
+				t.Fatalf("directory scan began twice before finishing?")
+			}
+			printingDirScanLogs = true
+
+			continue
+		}
+
+		if strings.Contains(line, testlogger.EndDirectoryScan) {
+			if !printingDirScanLogs {
+				t.Fatalf("directory scan ended before starting?")
+			}
+
+			printingDirScanLogs = false
+			sort.Strings(toSort)
+			completeOutput = append(completeOutput, toSort...)
+			completeOutput = append(completeOutput, toKeep...)
+			toSort = nil
+			toKeep = nil
+
+			continue
+		}
+
+		if printingDirScanLogs {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "Scanned ") || strings.HasPrefix(trimmed, "Scanning ") {
+				toSort = append(toSort, line)
+			} else {
+				toKeep = append(toKeep, line)
+			}
+
+			continue
+		}
+
+		completeOutput = append(completeOutput, line)
+	}
+
+	return strings.Join(completeOutput, "\n")
+}
+
+// normalizeUUID normalizes each unique instance of uuid string into it's own placeholder, so relations are preserved.
+func normalizeUUID(t *testing.T, input string) string {
+	t.Helper()
+
+	uuidV4Regexp := cachedregexp.MustCompile(
+		"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89ABab][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")
+
+	uuidMapping := map[string]int{}
+	allUUIDs := uuidV4Regexp.FindAllString(input, -1)
+
+	for _, id := range allUUIDs {
+		if _, ok := uuidMapping[id]; ok {
+			continue
+		}
+
+		// Create a incrementing uuid mapping for each unique uuid we encounter
+		uuidMapping[id] = len(uuidMapping)
+	}
+
+	replacerRules := make([]string, 0, len(uuidMapping)*2)
+	for s, i := range uuidMapping {
+		replacerRules = append(replacerRules, s, fmt.Sprintf("uuid-placeholder-%d", i))
+	}
+
+	return strings.NewReplacer(replacerRules...).Replace(input)
+}
+
+// Sorts lines starting with "could not load db for" to allow for consistent test results
+func normalizeLoadDbErrOrder(input string) string {
+	lines := strings.Split(input, "\n")
+	var result []string
+	var block []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "could not load db for ") {
+			block = append(block, line)
+		} else {
+			if len(block) > 0 {
+				sort.Strings(block)
+				result = append(result, block...)
+				block = nil
+			}
+			result = append(result, line)
+		}
+	}
+	if len(block) > 0 {
+		sort.Strings(block)
+		result = append(result, block...)
+	}
+
+	return strings.Join(result, "\n")
+}
