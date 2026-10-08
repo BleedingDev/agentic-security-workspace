@@ -1,0 +1,3 @@
+*.bat text eol=crlf
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter

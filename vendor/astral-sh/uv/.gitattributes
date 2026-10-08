@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.inc linguist-language=Rust
+
+uv.schema.json linguist-generated=true text=auto eol=lf
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter
