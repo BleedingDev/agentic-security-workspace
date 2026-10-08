@@ -1,0 +1,11 @@
+---
+title: References to Sensitive Data Unencrypted via Android Room Database 
+platform: android
+id: MASTG-TEST-0304
+type: [static, code]
+maswe: [MASWE-0001]
+best-practices: []
+knowledge: [MASTG-KNOW-0037]
+status: placeholder
+note: This test checks if the app uses the default SQLite API (e.g., `SQLiteOpenHelper`, `context.openOrCreateDatabase`) to store sensitive data (e.g., tokens, PII) in an unencrypted database file within the app's sandbox. It confirms the absence of secure alternatives like SQLCipher or encrypted databases.
+---

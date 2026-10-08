@@ -1,0 +1,35 @@
+---
+title: Incorrect Implementation of Server Hostname Verification
+platform: android
+id: MASTG-TEST-0283
+type: [static, code, manual]
+maswe: [MASWE-0027]
+---
+
+## Overview
+
+This test evaluates whether an Android app implements a [`HostnameVerifier`](https://developer.android.com/reference/javax/net/ssl/HostnameVerifier) that uses [`verify(...)`](https://developer.android.com/reference/javax/net/ssl/HostnameVerifier#verify(java.lang.String,%20javax.net.SSL.SSLSession)) [in an unsafe manner](https://developer.android.com/privacy-and-security/risks/unsafe-hostname), effectively turning off hostname validation for the affected connections.
+
+Such unsafe implementations can allow an attacker to run a [MITM attack](../../../Document/0x04f-Testing-Network-Communication.md#intercepting-network-traffic-through-mitm) with a valid (or self-signed) certificate and intercept or tamper with the app's traffic.
+
+## Steps
+
+1. Use @MASTG-TECH-0013 to reverse engineer the app.
+2. Use @MASTG-TECH-0014 to look for the relevant APIs.
+
+## Observation
+
+The output should contain a list of locations where `HostnameVerifier` is used.
+
+## Evaluation
+
+The test case fails if the app does **not** properly validate that the server's hostname matches the certificate.
+
+**Further Validation Required:**
+
+Inspect each reported code location using @MASTG-TECH-0023, looking for cases such as:
+
+- **Always accepting hostnames:** overriding `verify(...)` to unconditionally return `true`, regardless of the actual hostname or certificate.
+- **Overly broad matching rules:** using permissive wildcard logic that matches unintended domains.
+- **Incomplete verification coverage:** failing to invoke hostname verification on all SSL/TLS channels, such as those created via `SSLSocket`, or during renegotiation.
+- **Missing manual verification:** not performing hostname verification when it is not done automatically, such as when using the low-level `SSLSocket` API.

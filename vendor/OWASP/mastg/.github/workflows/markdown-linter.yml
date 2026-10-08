@@ -1,0 +1,24 @@
+name: Markdown Linter
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  markdown-lint-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Install markdownlint-rule-search-replace plugin
+        run: npm install markdownlint-rule-search-replace --save-dev  
+      - name: markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v16.0.0
+        with:
+          config: ".markdownlint.jsonc"
+
