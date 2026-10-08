@@ -1,3 +1,5 @@
 *.toml text=auto
 *.yaml text=auto
 values/spec-newline-*.toml binary
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter
