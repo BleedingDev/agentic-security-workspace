@@ -1,0 +1,7 @@
+---
+source: tui/src/resume_picker.rs
+expression: "footer_snapshot(&state, 96, 20)"
+---
+───────────────────────────────────────────────────────────────────────────────── 0 / 0 · 100% ─
+ enter resume   esc clear   ⌃c quit   tab focus   ←/→ option
+ ⌃o comfy   ⌃t preview   ⌃e exp   ↑/↓ browse

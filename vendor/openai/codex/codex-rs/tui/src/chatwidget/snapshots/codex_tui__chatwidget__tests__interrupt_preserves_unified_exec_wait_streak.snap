@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+expression: snapshot
+---
+cells=1
+■ Conversation interrupted - use /feedback if something went wrong

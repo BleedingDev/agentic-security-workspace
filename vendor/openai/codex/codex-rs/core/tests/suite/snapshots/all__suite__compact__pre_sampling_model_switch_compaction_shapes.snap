@@ -1,0 +1,48 @@
+---
+source: core/tests/suite/compact.rs
+expression: "format_labeled_requests_snapshot(\"Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Pre-sampling Compaction Request\", &requests[1]),\n(\"Post-Compaction Follow-up Request (Next Model)\", &requests[2]),])"
+---
+Scenario: Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.
+
+## Window 1
+-- request 1 (turn; Initial Request (Previous Model)) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    before switch
+
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (compaction; Pre-sampling Compaction Request) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    before switch
+04:message/assistant:
+    before switch
+05:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 01, settings changed (model, parallel_tool_calls, tools))
+-- request 3 (turn; Post-Compaction Follow-up Request (Next Model)) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <MODEL_SWITCH>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    before switch
+04:message/user:
+    <COMPACTION_SUMMARY>
+    PRE_SAMPLING_SUMMARY
+05:message/user:
+    after switch
