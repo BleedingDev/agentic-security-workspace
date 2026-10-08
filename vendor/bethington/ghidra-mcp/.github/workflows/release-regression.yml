@@ -1,0 +1,111 @@
+name: Release Regression
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+    inputs:
+      ghidra_path:
+        description: "Path to the Ghidra install on the self-hosted runner"
+        required: true
+        default: "F:\\ghidra_12.1.4_PUBLIC"
+      test_tier:
+        description: "Deploy regression tier to run"
+        required: true
+        type: choice
+        default: "release"
+        options:
+          - release
+          - selected-contract
+          - benchmark-read
+          - benchmark-write
+          - multi-program
+          - negative-contract
+          - endpoint-catalog
+  workflow_call:
+    inputs:
+      ghidra_path:
+        description: "Path to the Ghidra install on the self-hosted runner"
+        required: true
+        type: string
+      test_tier:
+        description: "Deploy regression tier to run"
+        required: false
+        type: string
+        default: "release"
+
+# OSSF Scorecard Token-Permissions: default to read-only. The
+# regression runner reads the checked-out tree and uploads test
+# artifacts (via actions/upload-artifact, which does NOT need
+# repo-write — it uses its own scoped token).
+permissions:
+  contents: read
+
+jobs:
+  live-ghidra-regression:
+    name: Live Ghidra Release Regression
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'live-ghidra-regression')
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 30
+    env:
+      GHIDRA_REGRESSION_PATH: ${{ inputs.ghidra_path || vars.GHIDRA_PATH || 'F:\ghidra_12.1.4_PUBLIC' }}
+      GHIDRA_REGRESSION_TIER: ${{ inputs.test_tier || 'release' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: maven
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python and dependencies
+        shell: powershell
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group test
+
+      # A "Build Benchmark.dll" step used to run here:
+      #     uv run python fun-doc\benchmark\build.py
+      # `fun-doc/` (and its benchmark fixture) moved to the d2-game-exe
+      # repository on 2026-08-10 (commit 10960f76). Six of the eight tiers
+      # raised in reset_benchmark_fixture() from that day until the fixture was
+      # rebuilt in this repository under tests/fixtures/benchmark/.
+      #
+      # There is nothing to build now: both binaries are committed. What is
+      # worth checking is that they still match the generator, because a stale
+      # committed binary would take the addresses in regression/*.yaml with it.
+      # Seconds here, against a full build + Ghidra restart + deploy after.
+      - name: Verify the benchmark fixture matches its generator
+        shell: powershell
+        run: uv run python tests\fixtures\benchmark\make_fixture.py --check
+
+      - name: Install Ghidra jars
+        shell: powershell
+        run: uv run python -m tools.setup install-ghidra-deps --ghidra-path "$env:GHIDRA_REGRESSION_PATH"
+
+      - name: Build extension
+        shell: powershell
+        run: uv run python -m tools.setup build
+
+      - name: Deploy and run release regression
+        shell: powershell
+        run: uv run python -m tools.setup deploy --ghidra-path "$env:GHIDRA_REGRESSION_PATH" --test "$env:GHIDRA_REGRESSION_TIER"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-regression-artifacts
+          path: |
+            tests/junit.xml
+            target/*.zip
+            deploy-debug.log
+          if-no-files-found: ignore

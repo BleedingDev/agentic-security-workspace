@@ -1,0 +1,417 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.2.0
+  workflow_dispatch:  # Allows manual triggering
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.2.0)'
+        required: true
+        default: '1.2.0'
+      create_tag:
+        description: 'Create and push tag for this release'
+        type: boolean
+        default: true
+      run_live_regression:
+        description: 'Run live Ghidra release regression on a self-hosted Windows runner before publishing'
+        type: boolean
+        default: false
+      ghidra_path:
+        description: 'Ghidra path for live regression self-hosted runner'
+        required: false
+        default: 'F:\ghidra_12.1.4_PUBLIC'
+
+env:
+  GHIDRA_VERSION: 12.1.4
+  GHIDRA_DATE: 20260921
+
+# OSSF Scorecard Token-Permissions: default to read-only. The
+# create-release job elevates to contents:write for tag + asset
+# creation; the release-regression reusable workflow is read-only.
+permissions:
+  contents: read
+
+jobs:
+  release-regression:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_live_regression == 'true'
+    uses: ./.github/workflows/release-regression.yml
+    with:
+      ghidra_path: ${{ github.event.inputs.ghidra_path }}
+      test_tier: release
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [release-regression]
+    # `skipped` is still accepted HERE, but it no longer means "publish anyway":
+    # the "Verify recorded live-regression evidence" step below runs whenever
+    # this job did not get a real regression run, and fails the job without one.
+    # Keeping the job-level condition permissive is what lets that step produce
+    # a named, readable failure instead of a silently skipped job.
+    if: always() && (needs.release-regression.result == 'success' || needs.release-regression.result == 'skipped')
+    permissions:
+      contents: write  # Required for creating releases and tags
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      with:
+        fetch-depth: 0  # Fetch full history for proper tagging
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Determine version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        fi
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "TAG=v${VERSION}" >> $GITHUB_OUTPUT
+        echo "Release version: ${VERSION}"
+
+    - name: Create and push tag (if manual trigger)
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_tag == 'true'
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git tag -a "${{ steps.version.outputs.TAG }}" -m "Release ${{ steps.version.outputs.VERSION }}"
+        git push origin "${{ steps.version.outputs.TAG }}"
+
+    - name: Download Ghidra
+      run: |
+        echo "Downloading Ghidra ${{ env.GHIDRA_VERSION }}..."
+        wget --no-verbose -O ghidra.zip https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${{ env.GHIDRA_VERSION }}_build/ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC_${{ env.GHIDRA_DATE }}.zip
+        7z x -bd ghidra.zip
+
+    - name: Install Ghidra JARs to Maven local repository
+      run: |
+        GHIDRA_DIR="ghidra_${{ env.GHIDRA_VERSION }}_PUBLIC"
+        GV="${{ env.GHIDRA_VERSION }}"
+        echo "Installing Ghidra JARs from ${GHIDRA_DIR}..."
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Generic/lib/Generic.jar"           -DgroupId=ghidra -DartifactId=Generic           -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar" -DgroupId=ghidra -DartifactId=SoftwareModeling -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Project/lib/Project.jar"           -DgroupId=ghidra -DartifactId=Project           -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Docking/lib/Docking.jar"           -DgroupId=ghidra -DartifactId=Docking           -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Utility/lib/Utility.jar"           -DgroupId=ghidra -DartifactId=Utility           -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Gui/lib/Gui.jar"                   -DgroupId=ghidra -DartifactId=Gui               -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/FileSystem/lib/FileSystem.jar"     -DgroupId=ghidra -DartifactId=FileSystem       -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Graph/lib/Graph.jar"               -DgroupId=ghidra -DartifactId=Graph             -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/DB/lib/DB.jar"                     -DgroupId=ghidra -DartifactId=DB               -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Emulation/lib/Emulation.jar"       -DgroupId=ghidra -DartifactId=Emulation         -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Features/Base/lib/Base.jar"                  -DgroupId=ghidra -DartifactId=Base             -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Features/Decompiler/lib/Decompiler.jar"      -DgroupId=ghidra -DartifactId=Decompiler       -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Features/PDB/lib/PDB.jar"                    -DgroupId=ghidra -DartifactId=PDB               -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Features/FunctionID/lib/FunctionID.jar"      -DgroupId=ghidra -DartifactId=FunctionID       -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Framework/Help/lib/Help.jar"              -DgroupId=ghidra -DartifactId=Help             -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Debug/Debugger-api/lib/Debugger-api.jar"                     -DgroupId=ghidra -DartifactId=Debugger-api              -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Debug/Framework-TraceModeling/lib/Framework-TraceModeling.jar" -DgroupId=ghidra -DartifactId=Framework-TraceModeling -Dversion=${GV} -Dpackaging=jar
+        mvn -q install:install-file -Dfile="${GHIDRA_DIR}/Ghidra/Debug/Debugger-rmi-trace/lib/Debugger-rmi-trace.jar"         -DgroupId=ghidra -DartifactId=Debugger-rmi-trace        -Dversion=${GV} -Dpackaging=jar
+        echo "✅ Installed 18 Ghidra JARs to Maven local repository"
+
+    - name: Install uv (Python build + test gate)
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        enable-cache: true
+
+    - name: Set up Python (offline test gate)
+      run: uv python install 3.12
+
+    - name: Verify recorded live-regression evidence
+      # The live Ghidra release regression did not run in this workflow: either
+      # it was not requested, or -- on a TAG PUSH -- it could not be, because
+      # the `release-regression` job's own `if` requires workflow_dispatch. So
+      # until now every tagged release published with that gate skipped, and
+      # `needs...result == 'skipped'` above read that as permission.
+      #
+      # It cannot simply be made to run: the tier needs a live Ghidra GUI on
+      # Windows and targets `[self-hosted, Windows]`, and ZERO self-hosted
+      # runners are registered -- deliberately, because on a public repo
+      # labelling a fork PR would run a stranger's code on the maintainer's
+      # machine. So the gate is recorded LOCAL evidence instead, and this step
+      # is what makes it a gate rather than a note.
+      #
+      # It verifies a source FINGERPRINT, not a timestamp: a timestamp says a
+      # regression ran, not that it ran against this code. Any change under the
+      # fingerprinted paths after the tier was run invalidates the evidence.
+      # No `|| true`, no default, no `continue-on-error` -- release.yml already
+      # shipped "Headless Endpoints: 1" twice because a missing input had a
+      # fallback.
+      if: needs.release-regression.result != 'success'
+      run: |
+        python3 -m tools.release_evidence verify --version "${{ steps.version.outputs.VERSION }}"
+
+    - name: Offline test gate (block release on red tests)
+      run: |
+        # A tagged release must not ship if the offline tiers are red. Integration
+        # tests need live Ghidra and stay on the self-hosted release-regression path;
+        # here we run everything that passes without a Ghidra server.
+        echo "Running offline Java tests..."
+        mvn -q test -Pcoverage-gate -Dtest='com.xebyte.offline.*Test,com.xebyte.core.*Test'
+        echo "Running Python unit tests..."
+        uv run --python 3.12 --group test python -m pytest tests/unit/ --no-cov -q
+        echo "✅ Offline test gate passed"
+
+    - name: Build with Maven
+      run: |
+        echo "Building GhidraMCP with Maven..."
+        mvn clean package assembly:single -DskipTests
+        echo "Build complete. Artifacts:"
+        ls -la target/
+
+    - name: Build Python bridge wheel
+      run: |
+        echo "Building bridge wheel with uv..."
+        uv build
+        echo "Built distributions:"
+        ls -la dist/
+
+    - name: Verify build
+      run: |
+        echo "Verifying build artifacts..."
+        ls -la target/GhidraMCP-*.zip 2>/dev/null || ls -la target/*.zip
+        echo "✅ Build verified"
+        # Note: Java tests are integration tests requiring a running Ghidra instance.
+        # Compilation is verified in the build step above.
+
+    - name: Prepare release artifacts
+      run: |
+        echo "Preparing release artifacts..."
+        mkdir -p release
+
+        # List what's in target directory for debugging
+        echo "Contents of target directory:"
+        ls -la target/
+
+        # Copy main plugin ZIP (the version should match the tag)
+        if [ -f "target/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip" ]; then
+          echo "Copying versioned zip: GhidraMCP-${{ steps.version.outputs.VERSION }}.zip"
+          cp target/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip release/
+        elif [ -f "target/GhidraMCP.zip" ]; then
+          echo "Copying non-versioned zip: GhidraMCP.zip -> GhidraMCP-${{ steps.version.outputs.VERSION }}.zip"
+          cp target/GhidraMCP.zip release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip
+        else
+          echo "Looking for any zip file in target..."
+          ZIP_FILE=$(find target/ -name "*.zip" | head -1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found zip file: $ZIP_FILE"
+            cp "$ZIP_FILE" release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip
+          else
+            echo "ERROR: No zip file found in target directory!"
+            exit 1
+          fi
+        fi
+
+        # Copy Python MCP bridge wheel (deps are declared in the wheel metadata)
+        cp dist/ghidra_mcp_bridge-*.whl release/
+        BRIDGE_WHEEL=$(basename $(ls dist/ghidra_mcp_bridge-*.whl | head -1))
+
+        # Copy README and LICENSE
+        cp README.md release/
+        cp LICENSE release/ 2>/dev/null || echo "LICENSE file not found, skipping"
+
+        # Create installation instructions
+        # Use endpoints.json as authoritative tool count (maintained by tests).
+        # No `|| echo "<n>"` fallback here either: the old default was 193, a count
+        # from three major versions ago, and a suppressed read error would have
+        # published it as fact. Failing the job is the correct outcome.
+        MCP_TOOLS=$(python3 -m tools.audit_server_scope --release-counts | cut -d' ' -f1)
+        cat > release/INSTALLATION.md << INSTEOF
+        # GhidraMCP Installation Instructions
+
+        ## Quick Installation
+
+        1. **Install the Ghidra Plugin:**
+           - In Ghidra: **File > Install Extensions > Add** and select \`GhidraMCP-${{ steps.version.outputs.VERSION }}.zip\`
+           - Restart Ghidra and enable the plugin: **File > Configure > Configure All Plugins > GhidraMCP**
+
+        2. **Install the Python bridge (ships its own dependencies):**
+           \`\`\`bash
+           # with uv (recommended)
+           uv tool install ./${BRIDGE_WHEEL}
+           # or with pip
+           pip install ./${BRIDGE_WHEEL}
+           \`\`\`
+
+        3. **Run the MCP Server:**
+           \`\`\`bash
+           bridge-mcp-ghidra            # console script
+           # or: python -m bridge_mcp_ghidra
+           \`\`\`
+
+        ## What's Included
+
+        - \`GhidraMCP-${{ steps.version.outputs.VERSION }}.zip\` - Ghidra extension
+        - \`${BRIDGE_WHEEL}\` - MCP server wheel (${MCP_TOOLS} tools)
+        - \`README.md\` - Complete documentation
+
+        For detailed documentation, see the [README](https://github.com/bethington/ghidra-mcp#readme).
+        INSTEOF
+
+        echo "Release artifacts prepared:"
+        ls -la release/
+
+        # Verify the main zip file is present
+        if [ -f "release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip" ]; then
+          echo "✅ Main plugin zip confirmed: release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip"
+          ls -la "release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip"
+        else
+          echo "❌ ERROR: Main plugin zip not found in release directory!"
+          echo "Contents of release directory:"
+          ls -la release/
+          exit 1
+        fi
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        # All three counts come from tests/endpoints.json, whose `servers` field
+        # records which of the two HTTP servers registers each route. That field
+        # is derived from the servers' own wiring by tools/audit_server_scope.py
+        # and guarded by tests/unit/test_audit_server_scope.py, so it cannot
+        # drift silently.
+        #
+        # The previous version derived the GUI/headless counts by grepping
+        # src/main/java/com/xebyte/core/EndpointRegistry.java -- a file deleted
+        # on 2026-07-25. The `|| echo "0"` made the missing file look like a
+        # legitimate zero, so v6.0.0's notes published "GUI Endpoints: 35"
+        # (a createContext line count, two of which were comments) and
+        # "Headless Endpoints: 1" (the safeContext helper's single call site).
+        # No default is used here on purpose: if the catalog cannot be read or
+        # lacks the field, the release notes must fail rather than invent a number.
+        COUNTS=$(python3 -m tools.audit_server_scope --release-counts)
+        read -r MCP_TOOLS GUI_EPS HEADLESS_EPS <<< "$COUNTS"
+        echo "MCP tools: ${MCP_TOOLS}, GUI: ${GUI_EPS}, headless: ${HEADLESS_EPS}"
+
+        cat > release_notes.md << GENEOF
+        # GhidraMCP Release ${VERSION}
+
+        Production-ready Model Context Protocol server for Ghidra reverse engineering platform.
+
+        ## By the Numbers
+
+        | Metric | Value |
+        |--------|-------|
+        | **MCP Tools** | ${MCP_TOOLS} |
+        | **GUI Endpoints** | ${GUI_EPS} |
+        | **Headless Endpoints** | ${HEADLESS_EPS} |
+        | **Java** | 21 LTS |
+        | **Ghidra** | ${{ env.GHIDRA_VERSION }} |
+
+        ## Installation
+
+        1. Download **GhidraMCP-${VERSION}.zip** below
+        2. In Ghidra: **File > Install Extensions > Add** and select the ZIP
+        3. Restart Ghidra, enable plugin: **File > Configure > Configure All Plugins > GhidraMCP**
+        4. Start server: **Tools > GhidraMCP > Start MCP Server**
+        5. Install Python bridge: \`uv tool install ./ghidra_mcp_bridge-${VERSION}-py3-none-any.whl\` (or \`pip install\` the same wheel)
+        6. Run: \`bridge-mcp-ghidra\` (or \`python -m bridge_mcp_ghidra\`)
+
+        ## What's Included
+
+        - **GhidraMCP-${VERSION}.zip** — Ghidra extension (GUI plugin)
+        - **ghidra_mcp_bridge-${VERSION}-py3-none-any.whl** — MCP protocol bridge wheel (${MCP_TOOLS} tools)
+
+        See [CHANGELOG.md](https://github.com/bethington/ghidra-mcp/blob/main/CHANGELOG.md) for detailed release notes.
+        See [README.md](https://github.com/bethington/ghidra-mcp#readme) for full documentation.
+        GENEOF
+
+    - name: Debug release files
+      run: |
+        echo "=== DEBUG: Files that will be uploaded to release ==="
+        echo "Main plugin zip:"
+        ls -la release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip || echo "❌ ZIP NOT FOUND"
+
+        echo "All release files:"
+        find release/ -type f -exec ls -la {} \;
+
+        echo "File checksums:"
+        find release/ -type f -exec sha256sum {} \;
+
+    - name: Check if release already exists
+      id: check_release
+      run: |
+        if gh release view "${{ steps.version.outputs.TAG }}" --json body --jq '.body' 2>/dev/null | grep -q "By the Numbers"; then
+          echo "EXISTS=true" >> $GITHUB_OUTPUT
+          echo "Release exists with custom notes — will upload artifacts only"
+        else
+          echo "EXISTS=false" >> $GITHUB_OUTPUT
+          echo "No existing release or has default notes — will create with generated notes"
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+      with:
+        tag_name: ${{ steps.version.outputs.TAG }}
+        name: "GhidraMCP ${{ steps.version.outputs.VERSION }}"
+        body_path: ${{ steps.check_release.outputs.EXISTS == 'false' && 'release_notes.md' || '' }}
+        files: |
+          release/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip
+          release/ghidra_mcp_bridge-${{ steps.version.outputs.VERSION }}-py3-none-any.whl
+          release/README.md
+          release/INSTALLATION.md
+        draft: false
+        prerelease: false
+        generate_release_notes: false
+        fail_on_unmatched_files: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Verify release assets
+      run: |
+        TAG="${{ steps.version.outputs.TAG }}"
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        echo "Verifying release assets for ${TAG}..."
+        ASSETS=$(gh release view "${TAG}" --json assets --jq '.assets[].name')
+        echo "Assets found:"
+        echo "$ASSETS"
+        if echo "$ASSETS" | grep -q "GhidraMCP-${VERSION}.zip"; then
+          echo "Ghidra extension ZIP confirmed in release assets"
+        else
+          echo "ERROR: GhidraMCP-${VERSION}.zip is NOT in the release assets!"
+          exit 1
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: ghidra-mcp-${{ steps.version.outputs.VERSION }}
+        path: |
+          release/*
+          target/*.jar
+        retention-days: 30
+
+    - name: Release Summary
+      run: |
+        echo "## 🎉 Release ${{ steps.version.outputs.VERSION }} Created Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "- **Plugin:** GhidraMCP-${{ steps.version.outputs.VERSION }}.zip" >> $GITHUB_STEP_SUMMARY
+        MCP_TOOLS=$(python3 -m tools.audit_server_scope --release-counts | cut -d' ' -f1)
+        echo "- **MCP Server:** ghidra_mcp_bridge-${{ steps.version.outputs.VERSION }}-py3-none-any.whl (${MCP_TOOLS} tools)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Documentation:** README.md, INSTALLATION.md" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
+        echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.TAG }})" >> $GITHUB_STEP_SUMMARY
+        echo "- [Download ZIP](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/GhidraMCP-${{ steps.version.outputs.VERSION }}.zip)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Build Info" >> $GITHUB_STEP_SUMMARY
+        echo "- **Java Version:** 21" >> $GITHUB_STEP_SUMMARY
+        echo "- **Ghidra Version:** ${{ env.GHIDRA_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+        echo "✅ Release workflow completed successfully!"

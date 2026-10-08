@@ -1,0 +1,91 @@
+# OpenSSF Scorecard runs ~18 automated security checks against the
+# repository (signed releases, dependency pinning, branch protection,
+# CI hardening, etc.) and publishes the results to both the Security
+# tab (via SARIF upload) and the public scorecards.dev database that
+# backs the README badge.
+#
+# Workflow template source:
+#   https://github.com/ossf/scorecard-action
+#
+# Why the schedule: scorecards.dev rate-limits per repo; weekly is the
+# recommended cadence. Push triggers run too so a security-relevant
+# config change (CODEOWNERS, branch protection, workflow hardening)
+# reflects in the badge within minutes instead of waiting a week.
+#
+# The push branch MUST be this repo's DEFAULT branch, currently `main`.
+# scorecard-action validates this itself and hard-fails with
+# "validating options: only the default branch main is supported" on
+# anything else -- it is not a warning and not skippable.
+#
+# This line has now been wrong in both directions. The default moved
+# `main` -> `dev` between 2026-08-03 and 2026-08-10 while this trigger
+# still said `main`: 3 consecutive failures on pushes to main. It was
+# changed to `dev`, the default later moved back to `main`, and every
+# push to `dev` then started a run that could only fail -- 13 seconds
+# each, and every one of the 8 most recent scorecard runs was one.
+# Meanwhile the scheduled runs, which follow the default branch
+# automatically, passed throughout, so the badge stayed green and the
+# failures looked like noise.
+#
+# `tests/unit/test_ci_workflow_triggers.py` now pins this against
+# DEFAULT_BRANCH, and cross-checks that constant against git's own
+# `origin/HEAD` wherever that is resolvable. If the default branch moves
+# again, that test is what says so.
+name: Scorecard supply-chain security
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '17 8 * * 1'   # Mondays 08:17 UTC
+  push:
+    branches: [main]
+  # Manual trigger so the score can be refreshed without forcing a
+  # dummy commit (useful after enabling repo Settings toggles like
+  # Dependabot security alerts or branch protection rulesets, which
+  # don't themselves push anything).
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload SARIF results to the Security tab.
+      security-events: write
+      # Required for publishing to scorecards.dev (the public dataset
+      # the README badge reads from).
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc  # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results=true is what feeds scorecards.dev so the
+          # README badge has data to read. Without this the badge
+          # will keep returning 404 even after the workflow runs.
+          publish_results: true
+
+      # Upload the artifact so we can inspect raw findings from the
+      # Actions run page (the SARIF upload to the Security tab below
+      # doesn't preserve the full payload).
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Upload to GitHub's code-scanning so findings show up in the
+      # repository's Security tab alongside Dependabot / CodeQL.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        with:
+          sarif_file: results.sarif

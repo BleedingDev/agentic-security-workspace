@@ -1,0 +1,462 @@
+"""
+Phase 1: Essential Analysis Endpoints Tests
+
+Tests for the 9 Phase 1 endpoints (call graph via get_functions fields=):
+- get_function_variables
+- set_function_prototype
+- set_variable_type
+- create_struct
+- apply_data_type
+- rename_variables (was batch_rename_variables before 5.0)
+- set_comment
+"""
+
+import pytest
+import uuid
+
+
+class TestFunctionCallGraph:
+    """Test function callee/caller via get_functions fields=."""
+
+    @pytest.mark.requires_program
+    def test_get_functions_callees(self, http_client, sample_function):
+        """Test getting functions called by a function."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_get_functions_callees_truncation(self, http_client, sample_function):
+        """Bundle callees are capped; response still succeeds."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_get_functions_callees_invalid_function(self, http_client):
+        """Test callees with non-existent function."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "callees",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            assert (
+                "error" in response.text.lower() or "not found" in response.text.lower()
+            )
+
+    @pytest.mark.requires_program
+    def test_get_functions_callers(self, http_client, sample_function):
+        """Test getting functions that call a function."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_get_functions_callers_truncation(self, http_client, sample_function):
+        """Bundle callers are capped; response still succeeds."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_get_functions_callers_invalid_function(self, http_client):
+        """Test callers with non-existent function."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "callers",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            assert (
+                "error" in response.text.lower() or "not found" in response.text.lower()
+            )
+
+
+class TestFunctionVariables:
+    """Test function variable reads via get_functions fields=."""
+
+    @pytest.mark.requires_program
+    def test_get_functions_variables(self, http_client, sample_function):
+        """Test getting function variables."""
+        response = http_client.get(
+            "/get_functions",
+            params={"function_name": sample_function, "fields": "parameters,locals"},
+        )
+        assert response.status_code == 200
+        text = response.text
+        assert "parameters" in text or "error" in text.lower()
+
+    @pytest.mark.requires_program
+    def test_get_functions_variables_invalid_function(self, http_client):
+        """Test variables with non-existent function."""
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "function_name": "NonExistentFunction_" + uuid.uuid4().hex[:8],
+                "fields": "parameters,locals",
+            },
+        )
+        assert response.status_code in [200, 404, 500]
+        if response.status_code == 200:
+            assert "error" in response.text.lower()
+
+
+class TestFunctionPrototype:
+    """Test function prototype modification."""
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_set_function_prototype(self, http_client, sample_address):
+        """Test setting function prototype."""
+        response = http_client.post(
+            "/set_function_prototype",
+            data={
+                # The declared selector is `function_address`; the `address`
+                # this also sent was undeclared and therefore ignored.
+                "function_address": sample_address,
+                "prototype": "int testFunc(int param1)",
+            },
+        )
+        assert response.status_code == 200
+        # The old assertion accepted any of success/error/failed/required/
+        # invalid, which every possible body satisfies. A prototype this
+        # simple, on a real function, must be applied.
+        assert response.json().get("status") == "success", response.text
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_set_function_prototype_with_calling_convention(
+        self, http_client, sample_address
+    ):
+        """Test setting prototype with calling convention."""
+        response = http_client.post(
+            "/set_function_prototype",
+            data={
+                # `address` is not a parameter of this endpoint.
+                "function_address": sample_address,
+                "prototype": "void testFunc2()",
+                "calling_convention": "__cdecl",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body.get("status") == "success", response.text
+        # The convention has to come back, or nothing proves it was applied
+        # rather than dropped the way `address` was.
+        assert body.get("calling_convention") == "__cdecl", response.text
+
+    @pytest.mark.requires_program
+    def test_set_function_prototype_invalid_address(self, http_client):
+        """Test prototype with invalid address."""
+        response = http_client.post(
+            "/set_function_prototype",
+            data={"function_address": "invalid", "prototype": "void test()"},
+        )
+        # Accept 200 with error, 400 (bad request), or 500 (server error)
+        assert response.status_code in [200, 400, 500]
+        if response.status_code == 200:
+            # Response may say "error", "failed", or "required" — all indicate failure
+            assert any(
+                w in response.text.lower()
+                for w in ("error", "failed", "required", "invalid")
+            )
+
+
+class TestVariableType:
+    """Test variable type modification."""
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_set_variable_type(self, http_client, sample_address):
+        """Test setting local variable type."""
+        # This may fail if variable doesn't exist, which is valid
+        response = http_client.post(
+            "/set_variable_type",
+            data={
+                "function_address": sample_address,
+                "variable_name": "local_8",
+                "new_type": "int",
+            },
+        )
+        assert response.status_code == 200
+        # Success or error - both valid depending on function structure
+        assert "success" in response.text.lower() or "error" in response.text.lower()
+
+    @pytest.mark.requires_program
+    def test_set_variable_type_invalid_address(self, http_client):
+        """Test variable type with invalid address."""
+        response = http_client.post(
+            "/set_variable_type",
+            data={
+                "function_address": "invalid",
+                "variable_name": "test",
+                "new_type": "int",
+            },
+        )
+        # Accept 200 with error, 400 (bad request), or 500 (server error)
+        assert response.status_code in [200, 400, 500]
+        if response.status_code == 200:
+            assert "error" in response.text.lower()
+
+
+class TestDataTypes:
+    """Test data type creation and application."""
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_create_struct(self, http_client):
+        """Test creating a structure."""
+        unique_name = f"TestStruct_{uuid.uuid4().hex[:8]}"
+        response = http_client.post(
+            "/create_struct",
+            json_data={
+                "name": unique_name,
+                "fields": [
+                    {"name": "field1", "type": "int"},
+                    {"name": "field2", "type": "short"},
+                ],
+            },
+        )
+        assert response.status_code == 200
+        assert "success" in response.text.lower() or "created" in response.text.lower()
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_create_struct_duplicate(self, http_client):
+        """Test creating duplicate structure."""
+        unique_name = f"TestStruct_{uuid.uuid4().hex[:8]}"
+        # Create first time
+        http_client.post(
+            "/create_struct",
+            json_data={"name": unique_name, "fields": [{"name": "f1", "type": "int"}]},
+        )
+        # Try to create again
+        response = http_client.post(
+            "/create_struct",
+            json_data={"name": unique_name, "fields": [{"name": "f1", "type": "int"}]},
+        )
+        assert response.status_code == 200
+        # May succeed (replace) or error (duplicate)
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_apply_data_type(self, http_client, sample_address):
+        """Test applying a data type at an address."""
+        response = http_client.post(
+            "/apply_data_type", data={"address": sample_address, "type_name": "int"}
+        )
+        assert response.status_code == 200
+        # May succeed, fail because code exists at address, or reject the request
+        # with a validation message depending on server build.
+        assert any(
+            word in response.text.lower()
+            for word in ("success", "error", "failed", "required", "invalid")
+        )
+
+    @pytest.mark.requires_program
+    def test_apply_data_type_invalid_type(self, http_client, sample_address):
+        """Test applying non-existent data type."""
+        response = http_client.post(
+            "/apply_data_type",
+            data={
+                "address": sample_address,
+                "type_name": "NonExistentType_" + uuid.uuid4().hex[:8],
+            },
+        )
+        assert response.status_code == 200
+        assert any(
+            word in response.text.lower()
+            for word in ("error", "not found", "failed", "required", "invalid")
+        )
+
+
+class TestBatchRename:
+    """Test batch variable renaming."""
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_rename_variables(self, http_client, sample_address):
+        """Test variable renaming via canonical endpoint."""
+        response = http_client.post(
+            "/rename_variables",
+            json_data={
+                "function_address": sample_address,
+                "variable_renames": {"local_8": "testVar1"},
+            },
+        )
+        assert response.status_code == 200
+        # Should return JSON with success/failure counts
+        text = response.text
+        assert (
+            "renamed" in text.lower()
+            or "failed" in text.lower()
+            or "error" in text.lower()
+        )
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_rename_variables_empty(self, http_client, sample_address):
+        """Test variable rename with empty renames."""
+        response = http_client.post(
+            "/rename_variables",
+            json_data={"function_address": sample_address, "variable_renames": {}},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_rename_variables_invalid_address(self, http_client):
+        """Test variable rename with invalid address."""
+        response = http_client.post(
+            "/rename_variables",
+            json_data={
+                "function_address": "invalid",
+                "variable_renames": {"test": "test2"},
+            },
+        )
+        assert response.status_code == 200
+        assert "error" in response.text.lower()
+
+    # test_batch_rename_variables_legacy_alias was DELETED on 2026-08-31.
+    #
+    # It POSTed /batch_rename_variables, asserting `status_code in [200, 404]`.
+    # That route was renamed to /rename_variables before 5.0 and no
+    # back-compat alias was ever added, so the call 404-ed on every build the
+    # test has ever run against and the assertion accepted the 404. It could
+    # not fail, and it could not have detected the alias disappearing either.
+    #
+    # The capability its author expected -- the pre-rename spelling still
+    # answering -- does not exist on this server. Reinstating it is a server
+    # change (an @McpTool alias, or a route registered in GhidraMCPPlugin),
+    # not something a test can assert into being. /rename_variables is
+    # covered by TestVariableRenaming above.
+
+
+class TestPlateComment:
+    """Test plate comment setting."""
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_set_comment_plate(self, http_client, sample_address):
+        """Test setting plate comment."""
+        response = http_client.post(
+            "/set_comment",
+            data={
+                "address": sample_address,
+                "type": "plate",
+                "comment": "Test plate comment from automated tests",
+            },
+        )
+        assert response.status_code == 200
+        assert "success" in response.text.lower() or "error" in response.text.lower()
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_set_comment_plate_empty(self, http_client, sample_address):
+        """Test setting empty plate comment (to clear)."""
+        response = http_client.post(
+            "/set_comment",
+            data={"address": sample_address, "type": "plate", "comment": ""},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    def test_set_comment_plate_invalid_address(self, http_client):
+        """Test plate comment with invalid address."""
+        response = http_client.post(
+            "/set_comment",
+            data={"address": "invalid", "type": "plate", "comment": "Test"},
+        )
+        # Accept 200 with error, 400 (bad request), or 500 (server error)
+        assert response.status_code in [200, 400, 500]
+        if response.status_code == 200:
+            assert "error" in response.text.lower()
+
+
+class TestPhase1Integration:
+    """Integration tests using multiple Phase 1 endpoints together."""
+
+    @pytest.mark.requires_program
+    def test_function_analysis_workflow(self, http_client, sample_function):
+        """Test typical function analysis workflow."""
+        # Get callees
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callees",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+        # Get callers
+        response = http_client.get(
+            "/get_functions",
+            params={
+                "name": sample_function,
+                "fields": "callers",
+                "include_call_context": "false",
+            },
+        )
+        assert response.status_code == 200
+
+        # Get variables
+        response = http_client.get(
+            "/get_functions",
+            params={"function_name": sample_function, "fields": "parameters,locals"},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.requires_program
+    @pytest.mark.write
+    def test_struct_creation_workflow(self, http_client):
+        """Test creating and using a struct."""
+        unique_name = f"WorkflowStruct_{uuid.uuid4().hex[:8]}"
+
+        # Create struct
+        response = http_client.post(
+            "/create_struct",
+            json_data={
+                "name": unique_name,
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "flags", "type": "short"},
+                    {"name": "data", "type": "byte"},
+                ],
+            },
+        )
+        assert response.status_code == 200
+        assert "success" in response.text.lower() or "created" in response.text.lower()

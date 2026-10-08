@@ -1,0 +1,87 @@
+# GhidraMCP Headless Server - Multi-Instance Deployment with Load Balancer
+# Usage: docker-compose -f docker-compose.multi.yml up -d --scale ghidra-mcp=3
+#
+# There is deliberately NO MCP bridge service here. docker-compose.yml has one;
+# this file does not, and that is a decision rather than an omission:
+#
+#   * The bridge must share a Ghidra container's network namespace, because
+#     validate_server_url() refuses any non-loopback Ghidra URL. But
+#     `network_mode: "service:X"` names ONE container and cannot target a
+#     scaled service, so there is no "the" container to join here.
+#   * Pointing a bridge at nginx instead would technically satisfy the loopback
+#     rule, and would still be wrong: nginx.conf balances with `least_conn` and
+#     no session affinity, so consecutive MCP tool calls would land on
+#     different Ghidra instances holding different projects. A `decompile` and
+#     the `rename` that follows it would not be talking about the same program.
+#
+# Serving MCP from a scaled deployment needs a topology decision (a bridge
+# pinned per instance, or affinity in nginx), not a service block copied over
+# from the single-instance file. `tests/unit/test_docker_compose_bridge.py`
+# pins this absence so it cannot be undone by accident.
+
+version: '3.8'
+
+services:
+  # Nginx Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: ghidra-mcp-lb
+    ports:
+      - "8089:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - ghidra-mcp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # GhidraMCP Server (scalable)
+  ghidra-mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ghidra-mcp-headless:latest
+    # Note: container_name not set to allow scaling
+    expose:
+      - "8089"
+    volumes:
+      - ghidra-data:/data
+      - ghidra-projects:/projects
+    environment:
+      - GHIDRA_MCP_PORT=8089
+      - JAVA_OPTS=-Xmx4g -XX:+UseG1GC
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8089/check_connection"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    deploy:
+      mode: replicated
+      replicas: 3
+      resources:
+        limits:
+          memory: 6g
+        reservations:
+          memory: 2g
+      update_config:
+        parallelism: 1
+        delay: 10s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+
+volumes:
+  ghidra-data:
+    driver: local
+  ghidra-projects:
+    driver: local
+
+networks:
+  default:
+    name: ghidra-mcp-network
