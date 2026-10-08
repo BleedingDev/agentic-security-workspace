@@ -1,0 +1,132 @@
+mod common;
+
+use common::{assert_eq_normalized, render_rule};
+use wakaru_core::rules::UnReturn;
+
+fn apply(input: &str) -> String {
+    render_rule(input, UnReturn::new)
+}
+
+#[test]
+fn transforms_return_void_expr_to_expression_statement() {
+    // Reused from packages/unminify/src/transformations/__tests__/un-return.spec.ts
+    let input = r#"
+function foo() {
+  return void a()
+}
+"#;
+    let expected = r#"
+function foo() {
+  a();
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn removes_redundant_tail_return() {
+    // Reused from packages/unminify/src/transformations/__tests__/un-return.spec.ts
+    let input = r#"
+function foo() {
+  const a = 1
+  return undefined
+}
+
+const bar = () => {
+  const a = 1
+  if (a) return void 0
+  return void 0
+}
+"#;
+    let expected = r#"
+function foo() {
+  const a = 1;
+}
+
+const bar = ()=>{
+  const a = 1;
+  if (a) return void 0;
+};
+"#;
+
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_tail_return_of_shadowed_undefined() {
+    let input = r#"
+function fromParam(undefined) {
+  return undefined;
+}
+function fromLocal(value) {
+  const undefined = value;
+  return undefined;
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn preserves_value_bearing_returns_in_async_generators() {
+    let input = r#"
+async function* bare() {
+  return;
+}
+async function* explicitUndefined() {
+  return undefined;
+}
+async function* explicitVoid() {
+  return void 0;
+}
+async function* explicitEffect() {
+  return void sideEffect();
+}
+"#;
+    let expected = r#"
+async function* bare() {}
+async function* explicitUndefined() {
+  return undefined;
+}
+async function* explicitVoid() {
+  return void 0;
+}
+async function* explicitEffect() {
+  return void sideEffect();
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn does_not_transform_non_tail_returns() {
+    // Reused from packages/unminify/src/transformations/__tests__/un-return.spec.ts
+    let input = r#"
+function foo() {
+  const count = 5;
+  while (count--) {
+    return void 0;
+  }
+
+  for (let i = 0; i < 10; i++) {
+    return void foo();
+  }
+}
+"#;
+    let expected = r#"
+function foo() {
+  const count = 5;
+  while (count--) {
+    return void 0;
+  }
+
+  for(let i = 0; i < 10; i++){
+    return void foo();
+  }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}

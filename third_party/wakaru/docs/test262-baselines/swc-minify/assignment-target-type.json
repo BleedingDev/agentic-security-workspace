@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "assignment-target-type"
+    ],
+    "paths": [
+      "test/language/expressions/assignmenttargettype"
+    ]
+  },
+  "totals": {
+    "discovered": 324,
+    "runnable": 324,
+    "skipped": 0,
+    "unsupported": 9,
+    "rejected": 1,
+    "passed": 314,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression-as-for-in-lhs.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression-as-for-of-lhs.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression-in-compound-assignment.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression-in-postfix-update.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression-in-prefix-update.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/direct-callexpression.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/parenthesized-callexpression-in-compound-assignment.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/parenthesized-callexpression.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-parse-baseline",
+      "fingerprint": "a16a7e24dfcb1bf654b6f5c54003f552e100c0592db2fc8f2cd8ba5ca87d1cbe",
+      "summary": "Error: strict: expected parse SyntaxError, got success no error: success"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/simple-basic-identifierreference-await.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "3091baeb6d3172426ddd9fe55d2d95012f038034bc7375d51681dbfb86ff5873",
+      "summary": "Error:   x top level await is only allowed in module\n    ,-[11:1]\n  8 | var await = 0;"
+    },
+    {
+      "path": "test/language/expressions/assignmenttargettype/simple-basic-identifierreference-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-ident",
+      "fingerprint": "e67a5f3f14bb4107780560d2040a8ad15de2385d1dd81fe130155d9f76207cf8",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (1..6, TS1109) }"
+    }
+  ]
+}

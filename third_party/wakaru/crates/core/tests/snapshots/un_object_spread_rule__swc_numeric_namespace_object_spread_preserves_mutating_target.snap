@@ -1,0 +1,7 @@
+---
+source: crates/core/tests/un_object_spread_rule.rs
+assertion_line: 328
+expression: output
+---
+const ns = require(1234);
+const out = ns.pi(target, app_info);

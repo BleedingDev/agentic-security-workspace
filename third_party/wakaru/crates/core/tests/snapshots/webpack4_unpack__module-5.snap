@@ -1,0 +1,26 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+export default function(e, t, n, r, o, i, a, u) {
+    if (!e) {
+        let l;
+        if (t === undefined) {
+            l = new Error("Minified exception occurred; use the non-minified dev environment for the full error message and additional helpful warnings.");
+        } else {
+            const c = [
+                n,
+                r,
+                o,
+                i,
+                a,
+                u
+            ];
+            let s = 0;
+            l = new Error(t.replace(/%s/g, ()=>c[s++]));
+            l.name = "Invariant Violation";
+        }
+        l.framesToPop = 1;
+        throw l;
+    }
+};

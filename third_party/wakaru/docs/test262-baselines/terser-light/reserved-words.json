@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "reserved-words"
+    ],
+    "paths": [
+      "test/language/reserved-words"
+    ]
+  },
+  "totals": {
+    "discovered": 27,
+    "runnable": 27,
+    "skipped": 0,
+    "unsupported": 1,
+    "rejected": 1,
+    "passed": 25,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/reserved-words/await-script.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/reserved-words/unreserved-words.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "script-global-var-lexical-redeclaration",
+      "fingerprint": "7d1cc44e170c600e07f5c9852a63a64ac141bb15379dccce78b887f2b1b68386",
+      "summary": "Error: sloppy: expected success, got runtime SyntaxError: Identifier 'assert' has already been declared"
+    }
+  ]
+}

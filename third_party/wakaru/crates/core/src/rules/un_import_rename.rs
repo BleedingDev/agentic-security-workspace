@@ -1,0 +1,151 @@
+use crate::collections::HashSet;
+
+use swc_core::atoms::Atom;
+use swc_core::common::Mark;
+use swc_core::ecma::ast::{ImportSpecifier, Module, ModuleDecl, ModuleExportName, ModuleItem};
+use swc_core::ecma::visit::VisitMut;
+
+use crate::js_names::is_reserved_binding_name;
+
+use super::rename_utils::{
+    collect_jsx_tag_bindings, collect_module_names, collect_unresolved_reference_names,
+    rename_bindings_in_module, starts_with_lowercase, BindingId, BindingRename, RenameShadowIndex,
+};
+
+pub struct UnImportRename {
+    unresolved_mark: Mark,
+}
+
+impl UnImportRename {
+    pub fn new(unresolved_mark: Mark) -> Self {
+        Self { unresolved_mark }
+    }
+}
+
+impl VisitMut for UnImportRename {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        let mut all_names = collect_module_names(module);
+        all_names.extend(collect_unresolved_reference_names(
+            module,
+            self.unresolved_mark,
+        ));
+
+        let jsx_tags = collect_jsx_tag_bindings(module);
+        let mut candidates: Vec<(BindingId, Atom)> = Vec::new();
+        let mut candidate_bindings = HashSet::default();
+        for item in &module.body {
+            let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+                continue;
+            };
+            for spec in &import.specifiers {
+                let ImportSpecifier::Named(named) = spec else {
+                    continue;
+                };
+                let local = named.local.sym.clone();
+                let imported: Atom = match &named.imported {
+                    Some(ModuleExportName::Ident(i)) => i.sym.clone(),
+                    _ => continue, // skip Str exports and shorthand
+                };
+                if imported == local {
+                    continue;
+                }
+                if is_reserved_binding_name(imported.as_ref()) {
+                    continue;
+                }
+
+                let local_id = (local, named.local.ctxt);
+                // Restoring a lowercase external name onto a binding used as a
+                // JSX element would change the tag into an intrinsic-element
+                // string reference; keep the capitalized alias (UnJsx creates
+                // these deliberately).
+                if starts_with_lowercase(imported.as_ref()) && jsx_tags.contains(&local_id) {
+                    continue;
+                }
+                candidate_bindings.insert(local_id.clone());
+                candidates.push((local_id, imported));
+            }
+        }
+
+        let shadow_index = RenameShadowIndex::for_bindings(module, &candidate_bindings);
+
+        // Build rename list: (local_alias_binding → target based on imported name)
+        let mut renames: Vec<BindingRename> = Vec::new();
+
+        for (local_id, imported) in candidates {
+            // `all_names` covers module-level collisions; `shadow_index`
+            // catches inner-scope locals (e.g. a nested `let a` that would capture
+            // references to the renamed import).
+            let mut target = generate_unique_name(imported.clone(), &all_names);
+            while shadow_index.rename_causes_shadowing(&local_id, &target) {
+                all_names.insert(target.clone());
+                target = generate_unique_name(target, &all_names);
+            }
+            if target == local_id.0 {
+                continue;
+            }
+            if suffix_rank(&target, &imported) >= suffix_rank(&local_id.0, &imported) {
+                continue;
+            }
+            all_names.insert(target.clone());
+            renames.push(BindingRename {
+                old: local_id,
+                new: target,
+            });
+        }
+
+        if !renames.is_empty() {
+            rename_bindings_in_module(module, &renames);
+        }
+
+        // Clean up import { foo as foo } → import { foo }
+        for item in &mut module.body {
+            let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+                continue;
+            };
+            for spec in &mut import.specifiers {
+                let ImportSpecifier::Named(named) = spec else {
+                    continue;
+                };
+                let is_same = match &named.imported {
+                    Some(ModuleExportName::Ident(i)) => i.sym == named.local.sym,
+                    Some(ModuleExportName::Str(_)) => false, // keep Str exports as-is
+                    None => true,
+                };
+                if is_same {
+                    named.imported = None;
+                }
+            }
+        }
+    }
+}
+
+/// Returns the numeric suffix rank of `name` relative to `base`.
+/// `base` itself has rank 0, `base_1` has rank 1, etc. A name that
+/// doesn't match the `base_N` pattern gets `u32::MAX` (worst).
+fn suffix_rank(name: &Atom, base: &Atom) -> u32 {
+    if name == base {
+        return 0;
+    }
+    let name_str = name.as_ref();
+    let base_str = base.as_ref();
+    if let Some(rest) = name_str.strip_prefix(base_str) {
+        if let Some(digits) = rest.strip_prefix('_') {
+            return digits.parse::<u32>().unwrap_or(u32::MAX);
+        }
+    }
+    u32::MAX
+}
+
+fn generate_unique_name(base: Atom, existing: &HashSet<Atom>) -> Atom {
+    if !existing.contains(&base) {
+        return base;
+    }
+    let mut i = 1u32;
+    loop {
+        let candidate: Atom = format!("{}_{}", base, i).into();
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        i += 1;
+    }
+}

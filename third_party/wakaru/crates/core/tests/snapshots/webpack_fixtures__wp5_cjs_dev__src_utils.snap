@@ -1,0 +1,10 @@
+---
+source: crates/core/tests/webpack_fixtures.rs
+expression: code
+---
+export const add = function(a, b) {
+    return a + b;
+};
+export const multiply = function(a, b) {
+    return a * b;
+};

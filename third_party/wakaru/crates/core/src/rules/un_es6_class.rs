@@ -1,0 +1,5954 @@
+use crate::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+use crate::analysis::binding_uses::BindingUseIndex;
+
+use swc_core::atoms::Atom;
+use swc_core::common::util::take::Take;
+use swc_core::common::{Mark, Span, SyntaxContext, DUMMY_SP};
+use swc_core::ecma::ast::{
+    ArrowExpr, ArrowFunctionBody, AssignExpr, AssignOp, AssignTarget, AwaitExpr, BinaryOp,
+    BindingIdent, CallExpr, Callee, Class, ClassDecl, ClassMember, ClassMethod, ClassProp,
+    ComputedPropName, Constructor, Decl, ExportDecl, ExportSpecifier, Expr, ExprOrSpread, ExprStmt,
+    FnDecl, FnExpr, Function, FunctionBody, Ident, IdentName, ImportSpecifier, Lit, MemberExpr,
+    MemberProp, MetaPropExpr, MethodKind, Module, ModuleDecl, ModuleExportName, ModuleItem, Param,
+    ParamOrTsParamProp, Pat, PropName, ReturnStmt, SeqExpr, SimpleAssignTarget, Stmt, Super,
+    SuperProp, SuperPropExpr, ThisExpr, UpdateOp, VarDecl, VarDeclKind, VarDeclOrExpr,
+    VarDeclarator, YieldExpr,
+};
+use swc_core::ecma::utils::find_pat_ids;
+use swc_core::ecma::visit::{Visit, VisitMut, VisitMutWith, VisitWith};
+
+use super::callability::{
+    direct_ident_alias_sources, module_guarded_call_effects, ordinary_call_target,
+    pinned_binding_keys_with_alias_sources, required_bindings_from_effects, CallabilityIndex,
+    GuardedCallEffect,
+};
+use super::decl_utils::{
+    class_accessor_descriptor_attributes, class_method_has_invalid_signature,
+    ensure_setter_has_value_param, ClassAccessorDescriptorAttributes,
+};
+use super::eval_utils::has_dynamic_scope_construct;
+use super::expr_utils::is_unresolved_ident;
+use super::helper_matcher::{
+    binding_key, remove_import_specifiers_by_binding, remove_unused_helper_declarations, BindingKey,
+};
+use super::transpiler_helper_utils::{
+    detect_helper_from_path, is_call_super_fn, is_inherits_fn, is_set_prototype_of_fn,
+    is_tslib_path, is_tslib_require_expr_with_mark, tslib_member_ts_helper_kind,
+    tslib_require_ts_helper_kind_with_mark, LocalHelperContext, TranspilerHelperKind, TsHelperKind,
+};
+use super::un_class_call_check::{
+    class_call_check_target, constructor_omittable_after_guard_removal,
+};
+use super::RewriteLevel;
+use crate::utils::paren::strip_parens;
+
+pub struct UnEs6Class {
+    unresolved_mark: Mark,
+    rewrite_level: RewriteLevel,
+    module_helper_context: Option<Es6ClassHelperContext>,
+    /// Exported names that still need `[[Call]]` from another module.
+    pin_exports: HashSet<Atom>,
+}
+
+impl UnEs6Class {
+    pub fn new(unresolved_mark: Mark) -> Self {
+        Self::new_with_level(unresolved_mark, RewriteLevel::Standard)
+    }
+
+    pub fn new_with_level(unresolved_mark: Mark, rewrite_level: RewriteLevel) -> Self {
+        Self {
+            unresolved_mark,
+            rewrite_level,
+            module_helper_context: None,
+            pin_exports: HashSet::default(),
+        }
+    }
+
+    pub(crate) fn run_with_helpers(
+        module: &mut swc_core::ecma::ast::Module,
+        unresolved_mark: Mark,
+        rewrite_level: RewriteLevel,
+        local_helpers: &LocalHelperContext,
+        pin_exports: HashSet<Atom>,
+    ) {
+        let mut rule = Self::new_with_level(unresolved_mark, rewrite_level);
+        rule.module_helper_context = Some(Es6ClassHelperContext::from_local_helpers(
+            &module.body,
+            unresolved_mark,
+            local_helpers,
+        ));
+        rule.pin_exports = pin_exports;
+        module.visit_mut_with(&mut rule);
+    }
+}
+
+impl VisitMut for UnEs6Class {
+    fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
+        // Class recovery removes the IIFE, its helper bindings, and the
+        // constructor function, then re-declares the class name; a `with`
+        // statement or a direct eval anywhere can still reach the old names,
+        // so the module is left as is (docs/rewrite-assumptions.md,
+        // dynamic-scope skip).
+        if has_dynamic_scope_construct(items.as_slice()) {
+            self.module_helper_context = None;
+            return;
+        }
+        // Pipeline path: use pre-built context from LocalHelperContext.
+        // Standalone path (unit tests): full body-shape scan.
+        let helper_context = self.module_helper_context.take().unwrap_or_else(|| {
+            Es6ClassHelperContext::from_module_items(items, self.unresolved_mark)
+        });
+        let used_imports = used_ts_extends_imports(items, &helper_context.ts_extends_helpers);
+        let mut inner =
+            UnEs6ClassInner::new(helper_context, self.unresolved_mark, self.rewrite_level);
+        inner.pin_exports = self.pin_exports.clone();
+        if inner.can_index_ts_inheritance() {
+            inner.inheritance_uses = Some(Rc::new(BindingUseIndex::collect_module_items(items)));
+        }
+        items.visit_mut_with(&mut inner);
+        let removable = remove_unused_helper_declarations(items, &inner.cleanup_candidates);
+        remove_import_specifiers_by_binding(items, &removable);
+        if !used_imports.is_empty() {
+            let remaining = BindingUseIndex::collect_module_items(items).referenced_bindings();
+            for item in items {
+                if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
+                    import.specifiers.retain(|specifier| {
+                        let key = super::helper_matcher::import_specifier_binding_key(specifier);
+                        !used_imports.contains(&key) || remaining.contains(&key)
+                    });
+                }
+            }
+        }
+    }
+
+    fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
+        if has_dynamic_scope_construct(stmts.as_slice()) {
+            return;
+        }
+        // Non-module context: scan local scope for helpers
+        let helper_context = Es6ClassHelperContext::from_stmts(stmts, self.unresolved_mark);
+        let mut inner =
+            UnEs6ClassInner::new(helper_context, self.unresolved_mark, self.rewrite_level);
+        inner.pin_exports = self.pin_exports.clone();
+        if inner.can_index_ts_inheritance() {
+            inner.inheritance_uses = Some(Rc::new(BindingUseIndex::collect_stmts(stmts)));
+        }
+        stmts.visit_mut_with(&mut inner);
+        remove_unused_helper_declarations(stmts, &inner.cleanup_candidates);
+    }
+}
+
+// Only drop named tslib helpers that this pass actually made unused. Keep
+// originally-unused source imports and retain module evaluation when the last
+// specifier disappears. Dynamic lookup can still observe an apparent dead use.
+fn used_ts_extends_imports(
+    items: &[ModuleItem],
+    helpers: &HashSet<BindingKey>,
+) -> HashSet<BindingKey> {
+    let mut candidates = HashSet::default();
+    for item in items {
+        if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item {
+            if !import.type_only && is_tslib_path(import.src.value.as_str().unwrap_or("")) {
+                for specifier in &import.specifiers {
+                    if let ImportSpecifier::Named(named) = specifier {
+                        let key = binding_key(&named.local);
+                        if !named.is_type_only && helpers.contains(&key) {
+                            candidates.insert(key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return HashSet::default();
+    }
+    let uses = BindingUseIndex::collect_module_items(items);
+    candidates.retain(|key| uses.use_count(key) > 0);
+    candidates
+}
+
+#[derive(Clone)]
+struct Es6ClassHelperContext {
+    inherits_helpers: HashSet<BindingKey>,
+    ts_extends_helpers: HashSet<BindingKey>,
+    tslib_namespaces: HashSet<BindingKey>,
+    set_prototype_of_helpers: HashSet<BindingKey>,
+    create_class_helpers: HashSet<BindingKey>,
+    call_super_helpers: HashSet<BindingKey>,
+    /// Babel `_classCallCheck` bindings. Used only to drop a guard that names
+    /// the inner constructor once this IIFE is already going to become a class.
+    class_call_check_helpers: HashSet<BindingKey>,
+}
+
+impl Es6ClassHelperContext {
+    fn from_local_helpers(
+        items: &[ModuleItem],
+        unresolved_mark: Mark,
+        local_helpers: &LocalHelperContext,
+    ) -> Self {
+        let ts_extends_helpers = local_helpers.ts_helpers_of_kind(TsHelperKind::Extends);
+        let mut inherits_helpers: HashSet<BindingKey> = local_helpers
+            .helpers_of_kind(TranspilerHelperKind::Inherits)
+            .into_keys()
+            .collect();
+        inherits_helpers.extend(ts_extends_helpers.iter().cloned());
+        inherits_helpers.extend(collect_inherits_helpers_from_items(items));
+        let mut call_super_helpers: HashSet<BindingKey> = local_helpers
+            .helpers_of_kind(TranspilerHelperKind::CallSuper)
+            .into_keys()
+            .collect();
+        call_super_helpers.extend(collect_call_super_helpers_from_items(items));
+        let mut create_class_helpers: HashSet<BindingKey> = local_helpers
+            .helpers_of_kind(TranspilerHelperKind::CreateClass)
+            .into_keys()
+            .collect();
+        create_class_helpers.extend(collect_create_class_helpers_from_items(
+            items,
+            unresolved_mark,
+        ));
+        Self {
+            inherits_helpers,
+            ts_extends_helpers,
+            tslib_namespaces: local_helpers.tslib_namespaces().clone(),
+            set_prototype_of_helpers: collect_set_prototype_of_helpers_from_items(items),
+            create_class_helpers,
+            call_super_helpers,
+            class_call_check_helpers: local_helpers
+                .helpers_of_kind(TranspilerHelperKind::ClassCallCheck)
+                .into_keys()
+                .collect(),
+        }
+    }
+
+    fn from_module_items(items: &[ModuleItem], unresolved_mark: Mark) -> Self {
+        let tslib_namespaces = collect_tslib_namespaces_from_items(items, unresolved_mark);
+        let mut ts_extends_helpers = collect_ts_extends_helpers_from_items(items);
+        ts_extends_helpers.extend(collect_tslib_extends_helpers_from_items(
+            items,
+            &tslib_namespaces,
+            unresolved_mark,
+        ));
+        let mut inherits_helpers = collect_inherits_helpers_from_items(items);
+        inherits_helpers.extend(ts_extends_helpers.iter().cloned());
+
+        Self {
+            inherits_helpers,
+            ts_extends_helpers,
+            tslib_namespaces,
+            set_prototype_of_helpers: collect_set_prototype_of_helpers_from_items(items),
+            create_class_helpers: collect_create_class_helpers_from_items(items, unresolved_mark),
+            call_super_helpers: collect_call_super_helpers_from_items(items),
+            class_call_check_helpers: HashSet::default(),
+        }
+    }
+
+    fn from_stmts(stmts: &[Stmt], unresolved_mark: Mark) -> Self {
+        let ts_extends_helpers = collect_ts_extends_helpers_from_stmts(stmts);
+        let tslib_namespaces = collect_tslib_namespaces_from_stmts(stmts, unresolved_mark);
+        let mut inherits_helpers = collect_inherits_helpers_from_stmts(stmts);
+        inherits_helpers.extend(ts_extends_helpers.iter().cloned());
+        inherits_helpers.extend(collect_tslib_extends_helpers_from_stmts(
+            stmts,
+            &tslib_namespaces,
+            unresolved_mark,
+        ));
+
+        Self {
+            inherits_helpers,
+            ts_extends_helpers,
+            tslib_namespaces,
+            set_prototype_of_helpers: collect_set_prototype_of_helpers_from_stmts(stmts),
+            create_class_helpers: collect_create_class_helpers_from_stmts(stmts, unresolved_mark),
+            call_super_helpers: collect_call_super_helpers_from_stmts(stmts),
+            class_call_check_helpers: HashSet::default(),
+        }
+    }
+
+    fn extend(&mut self, other: &Self) {
+        self.inherits_helpers
+            .extend(other.inherits_helpers.iter().cloned());
+        self.ts_extends_helpers
+            .extend(other.ts_extends_helpers.iter().cloned());
+        self.tslib_namespaces
+            .extend(other.tslib_namespaces.iter().cloned());
+        self.set_prototype_of_helpers
+            .extend(other.set_prototype_of_helpers.iter().cloned());
+        self.create_class_helpers
+            .extend(other.create_class_helpers.iter().cloned());
+        self.call_super_helpers
+            .extend(other.call_super_helpers.iter().cloned());
+        self.class_call_check_helpers
+            .extend(other.class_call_check_helpers.iter().cloned());
+    }
+}
+
+/// Inner visitor that carries helper name sets through all scopes.
+struct UnEs6ClassInner {
+    helpers: Es6ClassHelperContext,
+    reused_var_bindings: HashSet<BindingKey>,
+    inheritance_uses: Option<Rc<BindingUseIndex>>,
+    cleanup_candidates: HashSet<BindingKey>,
+    unresolved_mark: Mark,
+    rewrite_level: RewriteLevel,
+    pin_exports: HashSet<Atom>,
+    /// Binding keys of pinned exports, computed on the enclosing module
+    /// before nested statements run.
+    pin_roots: HashSet<BindingKey>,
+}
+
+impl UnEs6ClassInner {
+    fn can_index_ts_inheritance(&self) -> bool {
+        self.rewrite_level >= RewriteLevel::Standard
+            && (!self.helpers.ts_extends_helpers.is_empty()
+                || !self.helpers.tslib_namespaces.is_empty())
+    }
+
+    fn new(
+        helper_context: Es6ClassHelperContext,
+        unresolved_mark: Mark,
+        rewrite_level: RewriteLevel,
+    ) -> Self {
+        Self {
+            helpers: helper_context,
+            reused_var_bindings: HashSet::default(),
+            inheritance_uses: None,
+            cleanup_candidates: HashSet::default(),
+            unresolved_mark,
+            rewrite_level,
+            pin_exports: HashSet::default(),
+            pin_roots: HashSet::default(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReusedVarBindingCollector {
+    seen: HashSet<BindingKey>,
+    reused: HashSet<BindingKey>,
+}
+
+impl Visit for ReusedVarBindingCollector {
+    fn visit_var_decl(&mut self, var_decl: &VarDecl) {
+        for declarator in &var_decl.decls {
+            let bindings: Vec<BindingKey> = find_pat_ids(&declarator.name);
+            for binding in bindings {
+                if !self.seen.insert(binding.clone()) {
+                    self.reused.insert(binding);
+                }
+            }
+        }
+        var_decl.visit_children_with(self);
+    }
+
+    // `var` is function-scoped, so block/loop declarations must remain in
+    // this scan. Nested functions and classes are separate binding scopes and
+    // are processed by their own `visit_mut_stmts` invocation.
+    fn visit_function(&mut self, _: &Function) {}
+
+    fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+
+    fn visit_class(&mut self, _: &Class) {}
+}
+
+fn reused_var_bindings_in_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
+    let mut collector = ReusedVarBindingCollector::default();
+    stmts.visit_with(&mut collector);
+    collector.reused
+}
+
+fn reused_var_bindings_in_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
+    let mut collector = ReusedVarBindingCollector::default();
+    items.visit_with(&mut collector);
+    collector.reused
+}
+
+impl VisitMut for UnEs6ClassInner {
+    fn visit_mut_stmts(&mut self, stmts: &mut Vec<Stmt>) {
+        let mut scope_helpers = Es6ClassHelperContext::from_stmts(stmts, self.unresolved_mark);
+        scope_helpers.extend(&self.helpers);
+        let mut reused_var_bindings = reused_var_bindings_in_stmts(stmts);
+        reused_var_bindings.extend(self.reused_var_bindings.iter().cloned());
+        let mut scoped_inner =
+            UnEs6ClassInner::new(scope_helpers, self.unresolved_mark, self.rewrite_level);
+        scoped_inner.pin_exports = self.pin_exports.clone();
+        scoped_inner.pin_roots = self.pin_roots.clone();
+        scoped_inner.reused_var_bindings = reused_var_bindings;
+        scoped_inner.inheritance_uses = self.inheritance_uses.clone();
+        stmts.visit_mut_children_with(&mut scoped_inner);
+
+        let callability = CallabilityIndex::collect_stmts_with_roots(stmts, &self.pin_roots);
+        let mut converted_any = fold_flattened_classes(stmts, |var_decl| {
+            try_iife_to_class(
+                var_decl,
+                &scoped_inner.reused_var_bindings,
+                &callability,
+                &scoped_inner.helpers.inherits_helpers,
+                &scoped_inner.helpers.tslib_namespaces,
+                &scoped_inner.helpers.create_class_helpers,
+                &scoped_inner.helpers.call_super_helpers,
+                &scoped_inner.helpers.class_call_check_helpers,
+                &scoped_inner.helpers.set_prototype_of_helpers,
+                &scoped_inner.helpers.ts_extends_helpers,
+                scoped_inner.inheritance_uses.as_deref(),
+                self.unresolved_mark,
+                self.rewrite_level,
+                var_decl.span,
+            )
+        });
+        loop {
+            let callability = CallabilityIndex::collect_stmts_with_roots(stmts, &self.pin_roots);
+            let mut converted_this_pass = false;
+            let old = std::mem::take(stmts);
+            for stmt in old {
+                match stmt {
+                    Stmt::Decl(Decl::Var(ref var_decl)) => {
+                        if let Some(class_decl) = try_iife_to_class(
+                            var_decl,
+                            &scoped_inner.reused_var_bindings,
+                            &callability,
+                            &scoped_inner.helpers.inherits_helpers,
+                            &scoped_inner.helpers.tslib_namespaces,
+                            &scoped_inner.helpers.create_class_helpers,
+                            &scoped_inner.helpers.call_super_helpers,
+                            &scoped_inner.helpers.class_call_check_helpers,
+                            &scoped_inner.helpers.set_prototype_of_helpers,
+                            &scoped_inner.helpers.ts_extends_helpers,
+                            scoped_inner.inheritance_uses.as_deref(),
+                            self.unresolved_mark,
+                            self.rewrite_level,
+                            var_decl.span,
+                        ) {
+                            stmts.push(Stmt::Decl(Decl::Class(class_decl)));
+                            converted_this_pass = true;
+                        } else {
+                            stmts.push(stmt);
+                        }
+                    }
+                    other => stmts.push(other),
+                }
+            }
+            if !converted_this_pass {
+                break;
+            }
+            converted_any = true;
+        }
+        if converted_any {
+            scoped_inner
+                .cleanup_candidates
+                .extend(stmts.iter().filter_map(|stmt| {
+                    helper_cleanup_stmt_key(stmt, &scoped_inner.helpers, self.unresolved_mark)
+                }));
+        }
+        self.cleanup_candidates
+            .extend(scoped_inner.cleanup_candidates);
+    }
+
+    fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
+        self.pin_roots = super::callability::pinned_binding_keys(items, &self.pin_exports);
+        // Nested recovery runs before this module's alias propagation. A pinned
+        // export that evaluates to an inner constructor must already be in the
+        // root set, or that inner IIFE becomes a class while callers remain.
+        self.pin_roots = super::callability::alias_closure_of_roots(items, &self.pin_roots);
+        self.reused_var_bindings
+            .extend(reused_var_bindings_in_items(items));
+        items.visit_mut_children_with(self);
+
+        let callability = CallabilityIndex::collect_module_items_with_roots(items, &self.pin_roots);
+        let mut converted_any = fold_flattened_classes(items, |var_decl| {
+            try_iife_to_class(
+                var_decl,
+                &self.reused_var_bindings,
+                &callability,
+                &self.helpers.inherits_helpers,
+                &self.helpers.tslib_namespaces,
+                &self.helpers.create_class_helpers,
+                &self.helpers.call_super_helpers,
+                &self.helpers.class_call_check_helpers,
+                &self.helpers.set_prototype_of_helpers,
+                &self.helpers.ts_extends_helpers,
+                self.inheritance_uses.as_deref(),
+                self.unresolved_mark,
+                self.rewrite_level,
+                var_decl.span,
+            )
+        });
+        loop {
+            let roots = super::callability::pinned_binding_keys(items, &self.pin_exports);
+            let callability = CallabilityIndex::collect_module_items_with_roots(items, &roots);
+            let mut converted_this_pass = false;
+            let old = std::mem::take(items);
+            for item in old {
+                match item {
+                    ModuleItem::Stmt(Stmt::Decl(Decl::Var(ref var_decl))) => {
+                        if let Some(class_decl) = try_iife_to_class(
+                            var_decl,
+                            &self.reused_var_bindings,
+                            &callability,
+                            &self.helpers.inherits_helpers,
+                            &self.helpers.tslib_namespaces,
+                            &self.helpers.create_class_helpers,
+                            &self.helpers.call_super_helpers,
+                            &self.helpers.class_call_check_helpers,
+                            &self.helpers.set_prototype_of_helpers,
+                            &self.helpers.ts_extends_helpers,
+                            self.inheritance_uses.as_deref(),
+                            self.unresolved_mark,
+                            self.rewrite_level,
+                            var_decl.span,
+                        ) {
+                            items.push(ModuleItem::Stmt(Stmt::Decl(Decl::Class(class_decl))));
+                            converted_this_pass = true;
+                        } else {
+                            items.push(item);
+                        }
+                    }
+                    ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ExportDecl {
+                        span: export_span,
+                        decl: Decl::Var(ref var_decl),
+                    })) => {
+                        if let Some(class_decl) = try_iife_to_class(
+                            var_decl,
+                            &self.reused_var_bindings,
+                            &callability,
+                            &self.helpers.inherits_helpers,
+                            &self.helpers.tslib_namespaces,
+                            &self.helpers.create_class_helpers,
+                            &self.helpers.call_super_helpers,
+                            &self.helpers.class_call_check_helpers,
+                            &self.helpers.set_prototype_of_helpers,
+                            &self.helpers.ts_extends_helpers,
+                            self.inheritance_uses.as_deref(),
+                            self.unresolved_mark,
+                            self.rewrite_level,
+                            var_decl.span,
+                        ) {
+                            items.push(ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(
+                                ExportDecl {
+                                    span: export_span,
+                                    decl: Decl::Class(class_decl),
+                                },
+                            )));
+                            converted_this_pass = true;
+                        } else {
+                            items.push(item);
+                        }
+                    }
+                    other => items.push(other),
+                }
+            }
+            if !converted_this_pass {
+                break;
+            }
+            converted_any = true;
+        }
+        if converted_any {
+            self.cleanup_candidates
+                .extend(items.iter().filter_map(|item| match item {
+                    ModuleItem::Stmt(stmt) => {
+                        helper_cleanup_stmt_key(stmt, &self.helpers, self.unresolved_mark)
+                    }
+                    _ => {
+                        let key = detect_create_class_item_key(item, self.unresolved_mark)?;
+                        (self.helpers.create_class_helpers.contains(&key)
+                            || self.helpers.inherits_helpers.contains(&key)
+                            || self.helpers.set_prototype_of_helpers.contains(&key)
+                            || self.helpers.call_super_helpers.contains(&key))
+                        .then_some(key)
+                    }
+                }));
+        }
+    }
+}
+
+// ============================================================
+// Flattened class wrappers
+// ============================================================
+
+/// A statement-list slot that may hold a statement.
+trait StmtSlot: Sized + VisitWith<BindingRefCounter> {
+    fn stmt(&self) -> Option<&Stmt>;
+    fn stmt_mut(&mut self) -> Option<&mut Stmt>;
+    fn from_stmt(stmt: Stmt) -> Self;
+}
+
+impl StmtSlot for Stmt {
+    fn stmt(&self) -> Option<&Stmt> {
+        Some(self)
+    }
+    fn stmt_mut(&mut self) -> Option<&mut Stmt> {
+        Some(self)
+    }
+    fn from_stmt(stmt: Stmt) -> Self {
+        stmt
+    }
+}
+
+impl StmtSlot for ModuleItem {
+    fn stmt(&self) -> Option<&Stmt> {
+        match self {
+            ModuleItem::Stmt(stmt) => Some(stmt),
+            ModuleItem::ModuleDecl(_) => None,
+        }
+    }
+    fn stmt_mut(&mut self) -> Option<&mut Stmt> {
+        match self {
+            ModuleItem::Stmt(stmt) => Some(stmt),
+            ModuleItem::ModuleDecl(_) => None,
+        }
+    }
+    fn from_stmt(stmt: Stmt) -> Self {
+        ModuleItem::Stmt(stmt)
+    }
+}
+
+/// Counts every occurrence of one binding, declarations included.
+struct BindingRefCounter {
+    key: BindingKey,
+    count: usize,
+}
+
+impl Visit for BindingRefCounter {
+    fn visit_ident(&mut self, id: &Ident) {
+        if id.sym == self.key.0 && id.ctxt == self.key.1 {
+            self.count += 1;
+        }
+    }
+}
+
+fn count_binding_refs<N: VisitWith<BindingRefCounter> + ?Sized>(
+    node: &N,
+    key: &BindingKey,
+) -> usize {
+    let mut counter = BindingRefCounter {
+        key: key.clone(),
+        count: 0,
+    };
+    node.visit_with(&mut counter);
+    counter.count
+}
+
+/// A class whose minifier removed the wrapper IIFE and spliced its body into
+/// the enclosing statement list. SWC turns
+/// `var n = function() { function e() {…} … return e; }()` into
+/// `var e, t, n = (e = function e() {…}, t = […], loop(e.prototype, t), e)`,
+/// which earlier rules split into statements:
+///
+/// ```js
+/// var e;
+/// var t;
+/// e = function e(n) { … };
+/// t = [{ key: "m", value: function() {} }];
+/// (function(e, t) { for … })(e.prototype, t);
+/// var n = e;
+/// ```
+struct FlattenedClassRun {
+    /// Index of `e = function …`.
+    ctor: usize,
+    /// Index of `var n = e`, the declaration that names the class.
+    alias: usize,
+    /// The constructor binding and the temporaries whose uninitialized `var`
+    /// declarations move into the rebuilt wrapper.
+    moved: Vec<Ident>,
+}
+
+/// Rebuild each flattened class run as the wrapper IIFE it came from and
+/// convert it with `convert`. A run that does not convert is left as is.
+///
+/// Folding statements into a function is only equivalent when nothing
+/// outside the run observes the bindings that move inside: the constructor
+/// and each methods temporary may be referenced only by their uninitialized
+/// `var` declarations and by the run. The run must also not use `this`,
+/// `arguments`, `super`, `new.target`, `await`, or `yield` outside a nested
+/// function, since the wrapper rebinds or forbids them.
+fn fold_flattened_classes<T: StmtSlot>(
+    items: &mut Vec<T>,
+    mut convert: impl FnMut(&VarDecl) -> Option<ClassDecl>,
+) -> bool {
+    let mut converted_any = false;
+    let mut start = 0;
+    while let Some(run) = find_flattened_class_run(items, start) {
+        start = run.alias + 1;
+        let Some(wrapper) = rebuild_flattened_class_wrapper(items, &run) else {
+            continue;
+        };
+        let Some(class_decl) = convert(&wrapper) else {
+            continue;
+        };
+        let moved: Vec<BindingKey> = run.moved.iter().map(binding_key).collect();
+        let old = std::mem::take(items);
+        for (index, mut item) in old.into_iter().enumerate() {
+            if (run.ctor..run.alias).contains(&index) {
+                continue;
+            }
+            if index == run.alias {
+                items.push(T::from_stmt(Stmt::Decl(Decl::Class(class_decl.clone()))));
+                continue;
+            }
+            if let Some(Stmt::Decl(Decl::Var(var))) = item.stmt_mut() {
+                var.decls.retain(|decl| {
+                    decl.init.is_some()
+                        || !matches!(&decl.name, Pat::Ident(id) if moved.contains(&binding_key(&id.id)))
+                });
+                if var.decls.is_empty() {
+                    continue;
+                }
+            }
+            items.push(item);
+        }
+        start = 0;
+        converted_any = true;
+    }
+    converted_any
+}
+
+fn find_flattened_class_run<T: StmtSlot>(items: &[T], start: usize) -> Option<FlattenedClassRun> {
+    (start..items.len()).find_map(|ctor| flattened_class_run_at(items, ctor))
+}
+
+fn flattened_class_run_at<T: StmtSlot>(items: &[T], ctor: usize) -> Option<FlattenedClassRun> {
+    let (ctor_ident, _) = flattened_ctor_assignment(items[ctor].stmt()?)?;
+    let ctor_key = binding_key(ctor_ident);
+    let alias = (ctor + 1..items.len()).find(|&index| {
+        items[index]
+            .stmt()
+            .is_some_and(|stmt| flattened_alias_decl(stmt, &ctor_key).is_some())
+    })?;
+    let run: Vec<&Stmt> = items[ctor..=alias].iter().filter_map(T::stmt).collect();
+    let body = &run[1..run.len() - 1];
+    if !body.iter().all(|stmt| matches!(stmt, Stmt::Expr(_))) || !run_keeps_function_context(&run) {
+        return None;
+    }
+
+    let mut moved = vec![ctor_ident.clone()];
+    for stmt in body {
+        let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+            continue;
+        };
+        if let Some((temp, _)) = methods_temp_assignment_parts(expr) {
+            if binding_key(temp) != ctor_key
+                && !moved.iter().any(|id| binding_key(id) == binding_key(temp))
+            {
+                moved.push(temp.clone());
+            }
+        }
+    }
+    // Every moved binding is referenced only by its uninitialized top-level
+    // `var` declarations and inside the run.
+    let movable = moved.iter().all(|ident| {
+        let key = binding_key(ident);
+        let decls = items
+            .iter()
+            .filter_map(T::stmt)
+            .map(|stmt| uninitialized_var_declarators(stmt, &key))
+            .sum::<usize>();
+        let in_run: usize = run.iter().map(|stmt| count_binding_refs(*stmt, &key)).sum();
+        decls > 0
+            && items
+                .iter()
+                .map(|item| count_binding_refs(item, &key))
+                .sum::<usize>()
+                == decls + in_run
+    });
+    movable.then_some(FlattenedClassRun { ctor, alias, moved })
+}
+
+/// `e = function [e](…) {…}`
+fn flattened_ctor_assignment(stmt: &Stmt) -> Option<(&Ident, &FnExpr)> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = strip_parens(expr) else {
+        return None;
+    };
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign.left else {
+        return None;
+    };
+    let Expr::Fn(fn_expr) = strip_parens(&assign.right) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || fn_expr.function.is_async || fn_expr.function.is_generator {
+        return None;
+    }
+    Some((&target.id, fn_expr))
+}
+
+/// `var n = e`
+fn flattened_alias_decl<'a>(stmt: &'a Stmt, ctor: &BindingKey) -> Option<&'a VarDecl> {
+    let Stmt::Decl(Decl::Var(var)) = stmt else {
+        return None;
+    };
+    let [VarDeclarator {
+        name: Pat::Ident(_),
+        init: Some(init),
+        ..
+    }] = var.decls.as_slice()
+    else {
+        return None;
+    };
+    matches!(strip_parens(init), Expr::Ident(id) if binding_key(id) == *ctor).then_some(var)
+}
+
+fn uninitialized_var_declarators(stmt: &Stmt, key: &BindingKey) -> usize {
+    let Stmt::Decl(Decl::Var(var)) = stmt else {
+        return 0;
+    };
+    if var.kind != VarDeclKind::Var {
+        return 0;
+    }
+    var.decls
+        .iter()
+        .filter(|decl| {
+            decl.init.is_none()
+                && matches!(&decl.name, Pat::Ident(id) if binding_key(&id.id) == *key)
+        })
+        .count()
+}
+
+/// Whether the run evaluates the same inside a zero-argument wrapper
+/// function: no `this`, `arguments`, `super`, `new.target`, `await`, or
+/// `yield` outside a nested non-arrow function.
+fn run_keeps_function_context(run: &[&Stmt]) -> bool {
+    struct ContextFinder {
+        found: bool,
+    }
+    impl Visit for ContextFinder {
+        fn visit_this_expr(&mut self, _: &ThisExpr) {
+            self.found = true;
+        }
+        fn visit_super(&mut self, _: &Super) {
+            self.found = true;
+        }
+        fn visit_meta_prop_expr(&mut self, _: &MetaPropExpr) {
+            self.found = true;
+        }
+        fn visit_await_expr(&mut self, _: &AwaitExpr) {
+            self.found = true;
+        }
+        fn visit_yield_expr(&mut self, _: &YieldExpr) {
+            self.found = true;
+        }
+        fn visit_ident(&mut self, id: &Ident) {
+            if id.sym.as_ref() == "arguments" {
+                self.found = true;
+            }
+        }
+        fn visit_function(&mut self, _: &Function) {}
+    }
+    let mut finder = ContextFinder { found: false };
+    for stmt in run {
+        stmt.visit_with(&mut finder);
+    }
+    !finder.found
+}
+
+/// `var n = function() { function e(…) {…} var t; <run body>; return e; }()`
+///
+/// A named constructor expression carries its own immutable inner binding,
+/// which is what a class name is inside its class body. The outer `e` is
+/// written once and read only here, so the run's references to it are
+/// unified onto the inner binding; a member that still reads the class under
+/// that name then fails the existing inner-name check instead of pointing at
+/// the removed outer declaration.
+fn rebuild_flattened_class_wrapper<T: StmtSlot>(
+    items: &[T],
+    run: &FlattenedClassRun,
+) -> Option<VarDecl> {
+    let (outer, fn_expr) = flattened_ctor_assignment(items[run.ctor].stmt()?)?;
+    let ctor = fn_expr.ident.clone().unwrap_or_else(|| outer.clone());
+    let mut body_stmts: Vec<Stmt> = items[run.ctor + 1..run.alias]
+        .iter()
+        .filter_map(T::stmt)
+        .cloned()
+        .collect();
+    if binding_key(&ctor) != binding_key(outer) {
+        struct Unify<'a> {
+            from: BindingKey,
+            to: &'a Ident,
+        }
+        impl VisitMut for Unify<'_> {
+            fn visit_mut_ident(&mut self, id: &mut Ident) {
+                if id.sym == self.from.0 && id.ctxt == self.from.1 {
+                    id.ctxt = self.to.ctxt;
+                }
+            }
+        }
+        body_stmts.visit_mut_with(&mut Unify {
+            from: binding_key(outer),
+            to: &ctor,
+        });
+    }
+
+    let mut stmts = vec![Stmt::Decl(Decl::Fn(FnDecl {
+        ident: ctor.clone(),
+        declare: false,
+        function: fn_expr.function.clone(),
+    }))];
+    let temps: Vec<VarDeclarator> = run.moved[1..]
+        .iter()
+        .map(|temp| VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent::from(temp.clone())),
+            init: None,
+            definite: false,
+        })
+        .collect();
+    if !temps.is_empty() {
+        stmts.push(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            kind: VarDeclKind::Var,
+            declare: false,
+            decls: temps,
+        }))));
+    }
+    stmts.extend(body_stmts);
+    stmts.push(Stmt::Return(ReturnStmt {
+        span: DUMMY_SP,
+        arg: Some(Box::new(Expr::Ident(ctor))),
+    }));
+
+    let wrapper = Expr::Call(CallExpr {
+        span: DUMMY_SP,
+        ctxt: Default::default(),
+        callee: Callee::Expr(Box::new(Expr::Fn(FnExpr {
+            ident: None,
+            function: Box::new(Function {
+                params: vec![],
+                decorators: vec![],
+                span: DUMMY_SP,
+                ctxt: Default::default(),
+                this_param: None,
+                body: Some(FunctionBody {
+                    span: DUMMY_SP,
+                    stmts,
+                }),
+                is_generator: false,
+                is_async: false,
+                type_params: None,
+                return_type: None,
+            }),
+        }))),
+        args: vec![],
+        type_args: None,
+    });
+    let alias = flattened_alias_decl(items[run.alias].stmt()?, &binding_key(outer))?;
+    let mut var = alias.clone();
+    var.decls[0].init = Some(Box::new(wrapper));
+    Some(var)
+}
+
+fn collect_ts_extends_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
+            continue;
+        };
+        for decl in &var_decl.decls {
+            let Pat::Ident(binding) = &decl.name else {
+                continue;
+            };
+            let Some(init) = &decl.init else {
+                continue;
+            };
+            if is_ts_extends_helper_init(init) {
+                helpers.insert(binding_key(&binding.id));
+            }
+        }
+    }
+    helpers
+}
+
+fn collect_ts_extends_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        let ModuleItem::Stmt(stmt) = item else {
+            continue;
+        };
+        helpers.extend(collect_ts_extends_helpers_from_stmts(std::slice::from_ref(
+            stmt,
+        )));
+    }
+    helpers
+}
+
+fn collect_tslib_namespaces_from_stmts(
+    stmts: &[Stmt],
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut namespaces = HashSet::default();
+    for stmt in stmts {
+        let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
+            continue;
+        };
+        for decl in &var_decl.decls {
+            let Pat::Ident(binding) = &decl.name else {
+                continue;
+            };
+            let Some(init) = decl.init.as_deref() else {
+                continue;
+            };
+            if is_tslib_require_expr_with_mark(init, unresolved_mark) {
+                namespaces.insert(binding_key(&binding.id));
+            }
+        }
+    }
+    namespaces
+}
+
+fn collect_tslib_namespaces_from_items(
+    items: &[ModuleItem],
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut namespaces = HashSet::default();
+    for item in items {
+        match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import))
+                if !import.type_only && is_tslib_path(import.src.value.as_str().unwrap_or("")) =>
+            {
+                for specifier in &import.specifiers {
+                    match specifier {
+                        ImportSpecifier::Default(default) => {
+                            namespaces.insert(binding_key(&default.local));
+                        }
+                        ImportSpecifier::Namespace(namespace) => {
+                            namespaces.insert(binding_key(&namespace.local));
+                        }
+                        ImportSpecifier::Named(_) => {}
+                    }
+                }
+            }
+            ModuleItem::Stmt(stmt) => {
+                namespaces.extend(collect_tslib_namespaces_from_stmts(
+                    std::slice::from_ref(stmt),
+                    unresolved_mark,
+                ));
+            }
+            _ => {}
+        }
+    }
+    namespaces
+}
+
+fn collect_tslib_extends_helpers_from_stmts(
+    stmts: &[Stmt],
+    namespaces: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        let Stmt::Decl(Decl::Var(var_decl)) = stmt else {
+            continue;
+        };
+        for decl in &var_decl.decls {
+            let Pat::Ident(binding) = &decl.name else {
+                continue;
+            };
+            let Some(init) = decl.init.as_deref() else {
+                continue;
+            };
+            if is_tslib_extends_member(init, namespaces, unresolved_mark) {
+                helpers.insert(binding_key(&binding.id));
+            }
+        }
+    }
+    helpers
+}
+
+fn collect_tslib_extends_helpers_from_items(
+    items: &[ModuleItem],
+    namespaces: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import))
+                if !import.type_only && is_tslib_path(import.src.value.as_str().unwrap_or("")) =>
+            {
+                for specifier in &import.specifiers {
+                    let ImportSpecifier::Named(named) = specifier else {
+                        continue;
+                    };
+                    let imported = named
+                        .imported
+                        .as_ref()
+                        .map(module_export_name_as_str)
+                        .unwrap_or(named.local.sym.as_ref());
+                    if imported == "__extends" {
+                        helpers.insert(binding_key(&named.local));
+                    }
+                }
+            }
+            ModuleItem::Stmt(stmt) => {
+                helpers.extend(collect_tslib_extends_helpers_from_stmts(
+                    std::slice::from_ref(stmt),
+                    namespaces,
+                    unresolved_mark,
+                ));
+            }
+            _ => {}
+        }
+    }
+    helpers
+}
+
+fn module_export_name_as_str(name: &ModuleExportName) -> &str {
+    match name {
+        ModuleExportName::Ident(ident) => ident.sym.as_ref(),
+        ModuleExportName::Str(str_) => str_.value.as_str().unwrap_or(""),
+    }
+}
+
+fn is_tslib_extends_member(
+    expr: &Expr,
+    namespaces: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> bool {
+    tslib_require_ts_helper_kind_with_mark(expr, unresolved_mark) == Some(TsHelperKind::Extends)
+        || tslib_member_ts_helper_kind(expr, namespaces) == Some(TsHelperKind::Extends)
+}
+
+fn is_ts_extends_helper_init(expr: &Expr) -> bool {
+    super::transpiler_helper_utils::ts_expr_matches_helper_kind(expr, TsHelperKind::Extends)
+}
+
+fn is_this_helper_member(expr: &Expr, helper_name: &str) -> bool {
+    let Expr::Bin(and_expr) = strip_parens(expr) else {
+        return false;
+    };
+    if and_expr.op != swc_core::ecma::ast::BinaryOp::LogicalAnd {
+        return false;
+    }
+    if !matches!(strip_parens(&and_expr.left), Expr::This(_)) {
+        return false;
+    }
+    let Expr::Member(member) = strip_parens(&and_expr.right) else {
+        return false;
+    };
+    matches!(member.obj.as_ref(), Expr::This(_))
+        && matches!(&member.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == helper_name)
+}
+
+fn collect_set_prototype_of_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
+            if is_set_prototype_of_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+fn collect_set_prototype_of_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
+            if is_set_prototype_of_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+/// Collect names of functions that match the `_inherits` body shape from statements.
+fn collect_inherits_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
+            if is_inherits_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+/// Collect names of functions that match the `_inherits` body shape from module items.
+fn collect_inherits_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
+            if is_inherits_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+/// Collect names of functions that match the `_callSuper` body shape from statements.
+fn collect_call_super_helpers_from_stmts(stmts: &[Stmt]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
+            if is_call_super_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+/// Collect names of functions that match the `_callSuper` body shape from module items.
+fn collect_call_super_helpers_from_items(items: &[ModuleItem]) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        if let ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) = item {
+            if is_call_super_fn(&fn_decl.function) {
+                helpers.insert(binding_key(&fn_decl.ident));
+            }
+        }
+    }
+    helpers
+}
+
+// ============================================================
+// _createClass helper detection (body-shape matching)
+// ============================================================
+
+/// Collect names of variables whose init is a _createClass IIFE from statements.
+fn collect_create_class_helpers_from_stmts(
+    stmts: &[Stmt],
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Decl(Decl::Fn(fn_decl)) => {
+                if let Some(name) = detect_create_class_fn(&fn_decl.ident, &fn_decl.function) {
+                    helpers.insert(name);
+                }
+            }
+            Stmt::Decl(Decl::Var(var_decl)) => {
+                if let Some(name) = detect_create_class_var(var_decl, unresolved_mark) {
+                    helpers.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    helpers
+}
+
+/// `_createClass` bindings from runtime-path imports and same-module helper
+/// bodies, the same sources `UnEs6Class` recovers classes from.
+pub(crate) fn collect_create_class_helper_bindings(
+    module: &swc_core::ecma::ast::Module,
+    unresolved_mark: Mark,
+    local_helpers: &LocalHelperContext,
+) -> HashSet<BindingKey> {
+    let mut helpers: HashSet<BindingKey> = local_helpers
+        .helpers_of_kind(TranspilerHelperKind::CreateClass)
+        .into_keys()
+        .collect();
+    helpers.extend(collect_create_class_helpers_from_items(
+        &module.body,
+        unresolved_mark,
+    ));
+    helpers
+}
+
+/// Collect names of _createClass helpers from module items.
+fn collect_create_class_helpers_from_items(
+    items: &[ModuleItem],
+    unresolved_mark: Mark,
+) -> HashSet<BindingKey> {
+    let mut helpers = HashSet::default();
+    for item in items {
+        match item {
+            ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {
+                if let Some(name) = detect_create_class_fn(&fn_decl.ident, &fn_decl.function) {
+                    helpers.insert(name);
+                }
+            }
+            ModuleItem::Stmt(Stmt::Decl(Decl::Var(var_decl))) => {
+                if let Some(name) = detect_create_class_var(var_decl, unresolved_mark) {
+                    helpers.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    helpers
+}
+
+fn detect_create_class_fn(ident: &Ident, function: &Function) -> Option<BindingKey> {
+    if is_create_class_function(function) {
+        Some(binding_key(ident))
+    } else {
+        None
+    }
+}
+
+fn is_create_class_function(function: &Function) -> bool {
+    use swc_core::ecma::visit::{Visit, VisitWith};
+
+    let Some(first_param) = function.params.first() else {
+        return false;
+    };
+    let Pat::Ident(constructor) = &first_param.pat else {
+        return false;
+    };
+    let Some(body) = &function.body else {
+        return false;
+    };
+    if !returns_ident(&body.stmts, &constructor.id) {
+        return false;
+    }
+
+    struct PrototypeDefineCallFinder {
+        constructor: Ident,
+        found: bool,
+    }
+
+    impl Visit for PrototypeDefineCallFinder {
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if self.found {
+                return;
+            }
+            let Some(first_arg) = call.args.first() else {
+                call.visit_children_with(self);
+                return;
+            };
+            if let Expr::Member(member) = strip_parens(&first_arg.expr) {
+                if let Expr::Ident(obj) = member.obj.as_ref() {
+                    if obj.sym == self.constructor.sym
+                        && obj.ctxt == self.constructor.ctxt
+                        && matches!(&member.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == "prototype")
+                    {
+                        self.found = true;
+                        return;
+                    }
+                }
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut finder = PrototypeDefineCallFinder {
+        constructor: constructor.id.clone(),
+        found: false,
+    };
+    body.visit_with(&mut finder);
+    finder.found
+}
+
+/// Whether a top-level `return` hands back `target`, directly or as the last
+/// element of a minified sequence (`return n && e(t.prototype, n), t`).
+fn returns_ident(stmts: &[Stmt], target: &Ident) -> bool {
+    stmts.iter().any(|stmt| {
+        let Stmt::Return(ret) = stmt else {
+            return false;
+        };
+        let Some(arg) = ret.arg.as_deref() else {
+            return false;
+        };
+        let last = match strip_parens(arg) {
+            Expr::Seq(seq) => seq.exprs.last().map(|expr| strip_parens(expr)),
+            other => Some(other),
+        };
+        matches!(last, Some(Expr::Ident(id)) if id.sym == target.sym && id.ctxt == target.ctxt)
+    })
+}
+
+/// The function a `_createClass` factory body returns: `return function(...)`
+/// or `return name` for a function declared in the same body.
+fn returned_function(stmts: &[Stmt]) -> Option<&Function> {
+    stmts.iter().find_map(|stmt| {
+        let Stmt::Return(ret) = stmt else {
+            return None;
+        };
+        match strip_parens(ret.arg.as_deref()?) {
+            Expr::Fn(fn_expr) => Some(fn_expr.function.as_ref()),
+            Expr::Ident(id) => stmts.iter().find_map(|stmt| match stmt {
+                Stmt::Decl(Decl::Fn(fn_decl))
+                    if fn_decl.ident.sym == id.sym && fn_decl.ident.ctxt == id.ctxt =>
+                {
+                    Some(fn_decl.function.as_ref())
+                }
+                _ => None,
+            }),
+            _ => None,
+        }
+    })
+}
+
+/// If a VarDecl is `var r = (function() { ... createClass body ... })()`, return the name `r`.
+fn detect_create_class_var(var_decl: &VarDecl, unresolved_mark: Mark) -> Option<BindingKey> {
+    if var_decl.decls.len() != 1 {
+        return None;
+    }
+    let decl = &var_decl.decls[0];
+    let Pat::Ident(bi) = &decl.name else {
+        return None;
+    };
+    let init = decl.init.as_ref()?;
+    let call = extract_iife_call(init)?;
+    if !call.args.is_empty() {
+        return None;
+    }
+
+    // Get the IIFE body
+    let Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let body_stmts = get_fn_or_arrow_body(strip_parens(callee))?;
+
+    if is_create_class_body(body_stmts, unresolved_mark) {
+        Some(binding_key(&bi.id))
+    } else {
+        None
+    }
+}
+
+/// Check if statements form the `_createClass` body:
+/// - Contains a function with `Object.defineProperty(e, r.key, r)` in a for loop
+/// - Returns a function that references `.prototype`
+fn is_create_class_body(stmts: &[Stmt], unresolved_mark: Mark) -> bool {
+    use swc_core::ecma::visit::{Visit, VisitWith};
+
+    // Must have a function declaration and a return statement
+    let has_fn_decl = stmts.iter().any(|s| matches!(s, Stmt::Decl(Decl::Fn(_))));
+    let has_return = stmts.iter().any(|s| matches!(s, Stmt::Return(_)));
+    if !has_fn_decl || !has_return {
+        return false;
+    }
+
+    // The inner function must contain `Object.defineProperty(_, _.key, _)`
+    struct CreateClassDetector {
+        has_define_property_key: bool,
+        unresolved_mark: Mark,
+    }
+    impl Visit for CreateClassDetector {
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if let Callee::Expr(callee) = &call.callee {
+                // Check for Object.defineProperty
+                if let Expr::Member(m) = callee.as_ref() {
+                    if let Expr::Ident(obj) = m.obj.as_ref() {
+                        if is_unresolved_ident(obj, "Object", self.unresolved_mark) {
+                            if let MemberProp::Ident(prop) = &m.prop {
+                                if prop.sym.as_ref() == "defineProperty" && call.args.len() >= 3 {
+                                    // Check if second arg accesses `.key`
+                                    let arg1 = strip_parens(&call.args[1].expr);
+                                    if let Expr::Member(m) = arg1 {
+                                        if let MemberProp::Ident(p) = &m.prop {
+                                            if p.sym.as_ref() == "key" {
+                                                self.has_define_property_key = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut detector = CreateClassDetector {
+        has_define_property_key: false,
+        unresolved_mark,
+    };
+    stmts.visit_with(&mut detector);
+    if !detector.has_define_property_key {
+        return false;
+    }
+
+    // The factory must hand back the helper itself: constructor in,
+    // `Constructor.prototype` defined, constructor out. A class IIFE whose
+    // minifier inlined the `_createClass` loop also has a function
+    // declaration, a return, and `Object.defineProperty(_, _.key, _)`, but it
+    // returns its constructor, which never returns its own first parameter.
+    // Treating that class as the helper deletes it once nothing outside the
+    // other "helpers" references it.
+    returned_function(stmts).is_some_and(is_create_class_function)
+}
+
+/// Get the body statements from a function or arrow expression.
+fn get_fn_or_arrow_body(expr: &Expr) -> Option<&[Stmt]> {
+    match expr {
+        Expr::Fn(fn_expr) => fn_expr.function.body.as_ref().map(|b| b.stmts.as_slice()),
+        Expr::Arrow(arrow) => match &*arrow.body {
+            ArrowFunctionBody::FunctionBody(block) => Some(&block.stmts),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+// ============================================================
+// Orphaned helper removal
+// ============================================================
+
+/// Preserve each helper family's declaration proof when selecting cleanup
+/// candidates. Deletion is deferred until all statement lists are rewritten.
+fn helper_cleanup_stmt_key(
+    stmt: &Stmt,
+    helpers: &Es6ClassHelperContext,
+    unresolved_mark: Mark,
+) -> Option<BindingKey> {
+    if let Some(key) = detect_create_class_stmt_key(stmt, unresolved_mark) {
+        if helpers.create_class_helpers.contains(&key) {
+            return Some(key);
+        }
+    }
+    match stmt {
+        Stmt::Decl(Decl::Var(var)) => {
+            ts_extends_helper_decl_key(var).filter(|key| helpers.ts_extends_helpers.contains(key))
+        }
+        Stmt::Decl(Decl::Fn(decl)) => {
+            let key = binding_key(&decl.ident);
+            (helpers.inherits_helpers.contains(&key)
+                || helpers.set_prototype_of_helpers.contains(&key)
+                || helpers.call_super_helpers.contains(&key))
+            .then_some(key)
+        }
+        _ => None,
+    }
+}
+
+fn detect_create_class_stmt_key(stmt: &Stmt, unresolved_mark: Mark) -> Option<BindingKey> {
+    match stmt {
+        Stmt::Decl(Decl::Fn(fn_decl)) => detect_create_class_fn(&fn_decl.ident, &fn_decl.function),
+        Stmt::Decl(Decl::Var(var_decl)) => detect_create_class_var(var_decl, unresolved_mark),
+        _ => None,
+    }
+}
+
+fn detect_create_class_item_key(item: &ModuleItem, unresolved_mark: Mark) -> Option<BindingKey> {
+    match item {
+        ModuleItem::Stmt(stmt) => detect_create_class_stmt_key(stmt, unresolved_mark),
+        ModuleItem::ModuleDecl(ModuleDecl::Import(import))
+            if import.specifiers.len() == 1
+                && import
+                    .src
+                    .value
+                    .as_str()
+                    .is_some_and(|p| detect_helper_from_path(p).is_some()) =>
+        {
+            match &import.specifiers[0] {
+                ImportSpecifier::Default(spec) => Some(binding_key(&spec.local)),
+                ImportSpecifier::Named(spec) => Some(binding_key(&spec.local)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn ts_extends_helper_decl_key(var_decl: &VarDecl) -> Option<BindingKey> {
+    if var_decl.decls.len() != 1 {
+        return None;
+    }
+    let decl = &var_decl.decls[0];
+    let Pat::Ident(binding) = &decl.name else {
+        return None;
+    };
+    // Selection is still gated by the proven helper set. Include the lifted
+    // factory sequence here only for cleanup, never for name-only detection.
+    let Expr::Bin(or_expr) = strip_parens(decl.init.as_deref()?) else {
+        return None;
+    };
+    if or_expr.op != BinaryOp::LogicalOr || !is_this_helper_member(&or_expr.left, "__extends") {
+        return None;
+    }
+    Some(binding_key(&binding.id))
+}
+
+// ============================================================
+// Core transformation
+// ============================================================
+
+/// Attempt to convert a `var Foo = (function(...) { ... }(...))` pattern into a ClassDecl.
+/// Returns None if the pattern doesn't match.
+#[allow(clippy::too_many_arguments)]
+fn try_iife_to_class(
+    var: &VarDecl,
+    reused_var_bindings: &HashSet<BindingKey>,
+    callability: &CallabilityIndex,
+    inherits_helpers: &HashSet<BindingKey>,
+    tslib_namespaces: &HashSet<BindingKey>,
+    create_class_helpers: &HashSet<BindingKey>,
+    call_super_helpers: &HashSet<BindingKey>,
+    class_call_check_helpers: &HashSet<BindingKey>,
+    set_prototype_of_helpers: &HashSet<BindingKey>,
+    ts_extends_helpers: &HashSet<BindingKey>,
+    inheritance_uses: Option<&BindingUseIndex>,
+    unresolved_mark: Mark,
+    rewrite_level: RewriteLevel,
+    original_span: Span,
+) -> Option<ClassDecl> {
+    // Must be a single declarator
+    if var.decls.len() != 1 {
+        return None;
+    }
+    let declarator = &var.decls[0];
+
+    // Name must be a plain identifier
+    let Pat::Ident(BindingIdent { id: class_name, .. }) = &declarator.name else {
+        return None;
+    };
+    // Multiple `var` declarations intentionally reinitialize one hoisted
+    // binding. Replacing any one of them with a lexical class declaration
+    // changes that ordering and can make earlier reads enter a TDZ.
+    if reused_var_bindings.contains(&binding_key(class_name)) {
+        return None;
+    }
+
+    // Must have an initializer
+    let init = declarator.init.as_ref()?;
+
+    // The init must be an IIFE call expression (possibly paren-wrapped)
+    let call = extract_iife_call(init)?;
+
+    // Same-module leftover `C.call` / `C.apply` (including IIFE parameter and
+    // returned-constructor aliases) still needs [[Call]]. Skip class recovery
+    // until another proven conversion consumes that call.
+    if callability.requires_call(&binding_key(class_name)) {
+        return None;
+    }
+
+    // Callee must be a function or arrow expression (possibly paren-wrapped)
+    let Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let callee_inner = strip_parens(callee_expr);
+
+    // Extract params and body from either FnExpr or ArrowExpr
+    let (param_pats, body_stmts): (Vec<&Pat>, &[Stmt]) = match callee_inner {
+        Expr::Fn(fn_expr) => {
+            let body = fn_expr.function.body.as_ref()?;
+            let pats: Vec<&Pat> = fn_expr.function.params.iter().map(|p| &p.pat).collect();
+            (pats, &body.stmts)
+        }
+        Expr::Arrow(arrow) => {
+            let ArrowFunctionBody::FunctionBody(block) = &*arrow.body else {
+                return None;
+            };
+            let pats: Vec<&Pat> = arrow.params.iter().collect();
+            (pats, &block.stmts)
+        }
+        _ => return None,
+    };
+
+    // The IIFE takes 0 args (no extends) or 1 arg (extends from _super)
+    let (mut super_class, inner_param): (Option<Box<Expr>>, Option<Ident>) = match call.args.len() {
+        0 => {
+            // 0-arg IIFE — may still have inheritance via inline _inherits IIFE.
+            // Allow unused params (older Babel output keeps the _super param but
+            // passes the super class directly to the inline _inherits call).
+            (None, None)
+        }
+        1 => {
+            if param_pats.len() != 1 {
+                return None;
+            }
+            let Pat::Ident(BindingIdent { id: param_id, .. }) = param_pats[0] else {
+                return None;
+            };
+            let super_expr = call.args[0].expr.clone();
+            (Some(super_expr), Some(param_id.clone()))
+        }
+        _ => return None,
+    };
+
+    // 0-arg IIFE with 0 params: no super class (standard case)
+    // 0-arg IIFE with 1+ params: unused super param, check for inline inherits
+    if call.args.is_empty() && !param_pats.is_empty() {
+        // Scan body for inline _inherits IIFE to discover the super class.
+        // If found, super_class is extracted from the inline call's second argument.
+        super_class = Some(find_inline_inherits_super(body_stmts, unresolved_mark)?);
+    }
+
+    let inner_ctor_ident = find_inner_constructor_ident(body_stmts)?;
+    let inner_ctor_name = inner_ctor_ident.sym.as_ref();
+    let mut class_body = parse_class_body(
+        body_stmts,
+        &class_name.sym,
+        inner_param.as_ref(),
+        inherits_helpers,
+        tslib_namespaces,
+        create_class_helpers,
+        call_super_helpers,
+        set_prototype_of_helpers,
+        super_class.is_some(),
+        rewrite_level >= RewriteLevel::Standard,
+        unresolved_mark,
+    )?;
+    // The inner constructor name is often not the outer binding (`t` vs `Foo`).
+    // A remaining `_classCallCheck(this, t)` is a reference to `t`, and that
+    // reference would reject recovery. Drop only that committed guard.
+    if strip_inner_ctor_class_call_checks(
+        &mut class_body,
+        class_call_check_helpers,
+        &binding_key(inner_ctor_ident),
+    ) {
+        let derived = super_class.is_some();
+        class_body.retain(|member| match member {
+            ClassMember::Constructor(ctor) => {
+                !constructor_omittable_after_guard_removal(ctor, derived)
+            }
+            _ => true,
+        });
+    }
+    // native_class_inheritance: only the proven TypeScript default-constructor
+    // frame can consume its null guard and recover native super dispatch.
+    if rewrite_level >= RewriteLevel::Standard
+        && call.args.len() == 1
+        && call.args[0].spread.is_none()
+        && matches!(callee_inner, Expr::Fn(function) if function.ident.is_none()
+            && !function.function.is_async && !function.function.is_generator)
+    {
+        if let (Some(Pat::Ident(base)), Some(uses)) =
+            (param_pats.first().copied(), inheritance_uses)
+        {
+            recover_ts_default_inheritance(
+                &mut class_body,
+                body_stmts,
+                &base.id,
+                inner_ctor_ident,
+                class_name,
+                ts_extends_helpers,
+                tslib_namespaces,
+                uses,
+            );
+        }
+    }
+    // Removing the IIFE also removes its parameter bindings. Constructor
+    // rewriting can consume some superclass uses while leaving guards or
+    // method closures that still capture the parameter. Preserve that scope
+    // until every remaining use has a valid representation in the class.
+    for param in &param_pats {
+        let bindings: Vec<BindingKey> = find_pat_ids(*param);
+        if bindings
+            .iter()
+            .any(|(name, ctxt)| class_members_reference_binding(&class_body, name, *ctxt))
+        {
+            return None;
+        }
+    }
+    if class_members_reference_binding(&class_body, &inner_ctor_ident.sym, inner_ctor_ident.ctxt) {
+        if class_name.sym.as_ref() != inner_ctor_name {
+            return None;
+        }
+        // Minifiers give the inner constructor the outer variable's name, so
+        // the two bindings print alike but differ in context. The inner one
+        // disappears with the IIFE; move its references onto the class
+        // binding, or a later identity-keyed rename of the class leaves
+        // `new e(...)` behind.
+        retarget_class_member_references(&mut class_body, &inner_ctor_ident.to_id(), class_name);
+    }
+
+    // Use the original statement's span for the class so that source maps
+    // can map the synthesized class back to the input IIFE/var declaration.
+    let class_span = if original_span.lo.0 != 0 {
+        original_span
+    } else {
+        DUMMY_SP
+    };
+
+    Some(ClassDecl {
+        ident: class_name.clone(),
+        declare: false,
+        class: Box::new(Class {
+            span: class_span,
+            ctxt: Default::default(),
+            decorators: vec![],
+            body: class_body,
+            super_class,
+            is_abstract: false,
+            type_params: None,
+            super_type_params: None,
+            implements: vec![],
+        }),
+    })
+}
+
+fn class_members_reference_binding(
+    members: &[ClassMember],
+    name: &Atom,
+    ctxt: SyntaxContext,
+) -> bool {
+    use swc_core::ecma::visit::{Visit, VisitWith};
+
+    struct Finder<'a> {
+        name: &'a Atom,
+        ctxt: SyntaxContext,
+        found: bool,
+    }
+
+    impl Visit for Finder<'_> {
+        fn visit_ident(&mut self, id: &Ident) {
+            if &id.sym == self.name && id.ctxt == self.ctxt {
+                self.found = true;
+            }
+        }
+    }
+
+    let mut finder = Finder {
+        name,
+        ctxt,
+        found: false,
+    };
+    members.visit_with(&mut finder);
+    finder.found
+}
+
+/// Give every reference to `from` inside the class members the identity of
+/// `to`, which prints the same name.
+fn retarget_class_member_references(members: &mut Vec<ClassMember>, from: &BindingKey, to: &Ident) {
+    struct Retarget<'a> {
+        from: &'a BindingKey,
+        to: &'a Ident,
+    }
+
+    impl VisitMut for Retarget<'_> {
+        fn visit_mut_ident(&mut self, id: &mut Ident) {
+            if id.sym == self.from.0 && id.ctxt == self.from.1 {
+                id.ctxt = self.to.ctxt;
+            }
+        }
+    }
+
+    members.visit_mut_with(&mut Retarget { from, to });
+}
+
+/// Scan an IIFE body for an inline `_inherits` IIFE call and extract the super class expression.
+///
+/// Pattern: `((e, t) => { ... Object.create ... })(t, SuperClass)`
+/// where the first arg is the constructor name and the second arg is the super class.
+fn find_inline_inherits_super(stmts: &[Stmt], unresolved_mark: Mark) -> Option<Box<Expr>> {
+    let inner_ctor_name = find_inner_constructor_name(stmts)?;
+    for stmt in stmts {
+        let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+            continue;
+        };
+        let Expr::Call(call) = expr.as_ref() else {
+            continue;
+        };
+        let Callee::Expr(callee) = &call.callee else {
+            continue;
+        };
+
+        if call.args.len() != 2 {
+            continue;
+        }
+
+        // First arg must be the constructor
+        let arg0 = strip_parens(&call.args[0].expr);
+        if !matches!(arg0, Expr::Ident(id) if id.sym.as_ref() == inner_ctor_name) {
+            continue;
+        }
+
+        // Callee must be an inline fn/arrow with Object.create in its body
+        let inner = strip_parens(callee);
+        let body_stmts = match inner {
+            Expr::Arrow(arrow) if arrow.params.len() == 2 => match &*arrow.body {
+                ArrowFunctionBody::FunctionBody(block) => &block.stmts[..],
+                _ => continue,
+            },
+            Expr::Fn(fn_expr) if fn_expr.function.params.len() == 2 => {
+                match &fn_expr.function.body {
+                    Some(block) => &block.stmts[..],
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        if body_stmts
+            .iter()
+            .any(|s| stmt_has_object_create(s, unresolved_mark))
+        {
+            // This is an inline _inherits IIFE — second arg is the super class
+            return Some(call.args[1].expr.clone());
+        }
+    }
+    None
+}
+
+// ============================================================
+// IIFE structure helpers
+// ============================================================
+
+/// Strip parentheses and try to extract the inner CallExpr that represents the IIFE invocation.
+///
+/// Handles both function and arrow IIFEs:
+///   `(function() { ... }())` / `(function() { ... })()`
+///   `((e) => { ... })(arg)`
+fn extract_iife_call(expr: &Expr) -> Option<&CallExpr> {
+    let stripped = strip_parens(expr);
+    match stripped {
+        Expr::Call(call) => {
+            let Callee::Expr(callee) = &call.callee else {
+                return None;
+            };
+            let inner = strip_parens(callee);
+            if matches!(inner, Expr::Fn(_) | Expr::Arrow(_)) {
+                Some(call)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// ============================================================
+// Class body parsing
+// ============================================================
+
+/// Match Babel loose inheritance after Terser expands `_inheritsLoose` through
+/// two temporary aliases:
+///
+/// ```js
+/// baseAlias = Base;
+/// constructorAlias = Child;
+/// constructorAlias.prototype = Object.create(baseAlias.prototype);
+/// constructorAlias.prototype.constructor = constructorAlias;
+/// setPrototypeOf(constructorAlias, baseAlias);
+/// ```
+///
+/// The aliases must be otherwise unused, and the final call must target a
+/// body-shape-proven Babel `_setPrototypeOf` helper. Returning every consumed
+/// statement index lets the class parser remove the setup as one atomic unit.
+fn babel_loose_inheritance_setup_indices(
+    stmts: &[Stmt],
+    inner_ctor: &Ident,
+    super_param: &Ident,
+    set_prototype_of_helpers: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> Option<HashSet<usize>> {
+    const SETUP_LEN: usize = 5;
+    if stmts.len() < SETUP_LEN {
+        return None;
+    }
+
+    let inner_ctor = binding_key(inner_ctor);
+    let super_param = binding_key(super_param);
+    let all_uses = BindingUseIndex::collect_stmts(stmts);
+
+    for start in 0..=stmts.len() - SETUP_LEN {
+        let Some(base_alias) = direct_alias_assignment(&stmts[start], &super_param) else {
+            continue;
+        };
+        let Some(constructor_alias) = direct_alias_assignment(&stmts[start + 1], &inner_ctor)
+        else {
+            continue;
+        };
+        if base_alias == constructor_alias
+            || base_alias == inner_ctor
+            || base_alias == super_param
+            || constructor_alias == inner_ctor
+            || constructor_alias == super_param
+        {
+            continue;
+        }
+        if !is_alias_prototype_create(
+            &stmts[start + 2],
+            &constructor_alias,
+            &base_alias,
+            unresolved_mark,
+        ) || !is_alias_constructor_restore(&stmts[start + 3], &constructor_alias)
+            || !is_alias_set_prototype_of_call(
+                &stmts[start + 4],
+                &constructor_alias,
+                &base_alias,
+                set_prototype_of_helpers,
+            )
+        {
+            continue;
+        }
+
+        let aliases: HashSet<BindingKey> = [constructor_alias.clone(), base_alias.clone()]
+            .into_iter()
+            .collect();
+        let mut declarations = HashSet::default();
+        let mut consumed: HashSet<usize> = (start..start + SETUP_LEN).collect();
+        for (index, stmt) in stmts.iter().enumerate().take(start) {
+            let Stmt::Decl(Decl::Var(var)) = stmt else {
+                continue;
+            };
+            if var.kind != VarDeclKind::Var || var.decls.is_empty() {
+                continue;
+            }
+            let declared: Option<Vec<_>> = var
+                .decls
+                .iter()
+                .map(|decl| {
+                    if decl.init.is_some() {
+                        return None;
+                    }
+                    let Pat::Ident(binding) = &decl.name else {
+                        return None;
+                    };
+                    let key = binding_key(&binding.id);
+                    aliases.contains(&key).then_some(key)
+                })
+                .collect();
+            let Some(declared) = declared else {
+                continue;
+            };
+            declarations.extend(declared);
+            consumed.insert(index);
+        }
+        if declarations != aliases
+            || aliases
+                .iter()
+                .any(|alias| !all_uses.has_single_declaration(alias))
+        {
+            continue;
+        }
+
+        let consumed_stmts: Vec<_> = stmts
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| consumed.contains(index))
+            .map(|(_, stmt)| stmt.clone())
+            .collect();
+        let consumed_uses = BindingUseIndex::collect_stmts(&consumed_stmts);
+        if aliases
+            .iter()
+            .any(|alias| all_uses.use_count(alias) != consumed_uses.use_count(alias))
+        {
+            continue;
+        }
+
+        return Some(consumed);
+    }
+    None
+}
+
+fn direct_alias_assignment(stmt: &Stmt, source: &BindingKey) -> Option<BindingKey> {
+    let Stmt::Expr(statement) = stmt else {
+        return None;
+    };
+    let Expr::Assign(assign) = strip_parens(&statement.expr) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign.left else {
+        return None;
+    };
+    let Expr::Ident(value) = strip_parens(&assign.right) else {
+        return None;
+    };
+    (binding_key(value) == *source).then(|| binding_key(&target.id))
+}
+
+fn is_binding_prototype(expr: &Expr, binding: &BindingKey) -> bool {
+    let Expr::Member(member) = strip_parens(expr) else {
+        return false;
+    };
+    matches!(strip_parens(&member.obj), Expr::Ident(id) if binding_key(id) == *binding)
+        && matches!(&member.prop, MemberProp::Ident(name) if name.sym == "prototype")
+}
+
+fn is_alias_prototype_create(
+    stmt: &Stmt,
+    constructor_alias: &BindingKey,
+    base_alias: &BindingKey,
+    unresolved_mark: Mark,
+) -> bool {
+    let Stmt::Expr(statement) = stmt else {
+        return false;
+    };
+    let Expr::Assign(assign) = strip_parens(&statement.expr) else {
+        return false;
+    };
+    if assign.op != AssignOp::Assign {
+        return false;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Member(target)) = &assign.left else {
+        return false;
+    };
+    if !is_binding_prototype(&Expr::Member(target.clone()), constructor_alias) {
+        return false;
+    }
+    let Expr::Call(call) = strip_parens(&assign.right) else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    call.args.len() == 1
+        && call.args[0].spread.is_none()
+        && is_object_create_callee(callee, unresolved_mark)
+        && is_binding_prototype(&call.args[0].expr, base_alias)
+}
+
+fn is_alias_constructor_restore(stmt: &Stmt, constructor_alias: &BindingKey) -> bool {
+    let Stmt::Expr(statement) = stmt else {
+        return false;
+    };
+    let Expr::Assign(assign) = strip_parens(&statement.expr) else {
+        return false;
+    };
+    if assign.op != AssignOp::Assign {
+        return false;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Member(target)) = &assign.left else {
+        return false;
+    };
+    if !matches!(&target.prop, MemberProp::Ident(name) if name.sym == "constructor")
+        || !is_binding_prototype(&target.obj, constructor_alias)
+    {
+        return false;
+    }
+    matches!(strip_parens(&assign.right), Expr::Ident(id) if binding_key(id) == *constructor_alias)
+}
+
+fn is_alias_set_prototype_of_call(
+    stmt: &Stmt,
+    constructor_alias: &BindingKey,
+    base_alias: &BindingKey,
+    helpers: &HashSet<BindingKey>,
+) -> bool {
+    let Stmt::Expr(statement) = stmt else {
+        return false;
+    };
+    let Expr::Call(call) = strip_parens(&statement.expr) else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let Expr::Ident(helper) = strip_parens(callee) else {
+        return false;
+    };
+    call.args.len() == 2
+        && call.args.iter().all(|arg| arg.spread.is_none())
+        && helpers.contains(&binding_key(helper))
+        && matches!(strip_parens(&call.args[0].expr), Expr::Ident(id) if binding_key(id) == *constructor_alias)
+        && matches!(strip_parens(&call.args[1].expr), Expr::Ident(id) if binding_key(id) == *base_alias)
+}
+
+/// Parse the statements inside the IIFE body and collect class members.
+///
+/// `class_name` — the outer variable name (e.g. `"Foo"`)
+/// `super_param` — the IIFE parameter binding that represents `_super` (if inheriting)
+/// `has_super` — true when a super class was discovered (either from IIFE arg or inline inherits)
+///
+/// Returns None if any statement is unrecognised (conservative — no false positives).
+#[allow(clippy::too_many_arguments)]
+fn parse_class_body(
+    stmts: &[Stmt],
+    class_name: &str,
+    super_param: Option<&Ident>,
+    inherits_helpers: &HashSet<BindingKey>,
+    tslib_namespaces: &HashSet<BindingKey>,
+    create_class_helpers: &HashSet<BindingKey>,
+    call_super_helpers: &HashSet<BindingKey>,
+    set_prototype_of_helpers: &HashSet<BindingKey>,
+    has_super: bool,
+    allow_standard_assumptions: bool,
+    unresolved_mark: Mark,
+) -> Option<Vec<ClassMember>> {
+    // The first real statement should define the constructor function.
+    // We need to identify the inner constructor function name (often mangled, e.g. `t`).
+    let inner_ctor = find_inner_constructor_ident(stmts)?;
+    let inner_ctor_name = inner_ctor.sym.as_ref();
+    let alias_inheritance = super_param.and_then(|super_param| {
+        babel_loose_inheritance_setup_indices(
+            stmts,
+            inner_ctor,
+            super_param,
+            set_prototype_of_helpers,
+            unresolved_mark,
+        )
+    });
+    let super_param = super_param.map(|ident| ident.sym.as_ref());
+
+    let mut members: Vec<ClassMember> = Vec::new();
+    // Tracks whether we've seen and handled the `__extends` / `_inherits` call
+    let mut extends_handled = alias_inheritance.is_some();
+    // Tracks an alias for `t.prototype` introduced in Babel loose mode:
+    //   `var proto = t.prototype;`
+    let mut proto_alias: Option<Atom> = None;
+
+    // Determine if the constructor should have super() rewriting.
+    // When super_param is set, use it. When has_super is true but super_param is None
+    // (inline _inherits pattern), we still need to rewrite super calls.
+    let needs_super_rewrite = super_param.is_some() || has_super;
+
+    // Minified `_createClass(t, e)` with `_defineProperties` inlined:
+    // `e = [...]; (function(e, t) { for … })(t.prototype, e);`
+    let methods_temps = inline_define_properties_temps(stmts, unresolved_mark);
+    let mut pending_methods: Vec<(BindingKey, &Expr)> = Vec::new();
+
+    let mut in_directive_prologue = true;
+    for (stmt_index, stmt) in stmts.iter().enumerate() {
+        if in_directive_prologue && is_use_strict_directive(stmt) {
+            // The recovered class constructor and methods are intrinsically
+            // strict, so this wrapper directive is consumed by the class
+            // reconstruction instead of blocking it.
+            continue;
+        }
+        in_directive_prologue = false;
+
+        if alias_inheritance
+            .as_ref()
+            .is_some_and(|indices| indices.contains(&stmt_index))
+        {
+            continue;
+        }
+
+        // `return t;` or `return _createClass(t, ...)` or
+        // `return t.method1 = fn, t.method2 = fn, ..., t;` — end of IIFE body
+        if let Stmt::Return(ret_stmt) = stmt {
+            if let Some(ret_expr) = &ret_stmt.arg {
+                let stripped = strip_parens(ret_expr);
+                match stripped {
+                    // Plain `return t;`
+                    Expr::Ident(id) if id.sym.as_ref() == inner_ctor_name => {
+                        // Nothing to do
+                    }
+                    // `return _createClass(t, [{ key: "method", value: fn }], [{ ... }])`
+                    Expr::Call(call) => {
+                        if !try_parse_create_class(
+                            call,
+                            inner_ctor_name,
+                            &mut members,
+                            create_class_helpers,
+                            unresolved_mark,
+                        ) {
+                            return None;
+                        }
+                    }
+                    // `return t.method = fn, t.method2 = fn, ..., t;`
+                    // Minified Babel loose: method assignments in comma/sequence expression
+                    Expr::Seq(seq) => {
+                        if !try_parse_seq_return(seq, inner_ctor_name, &proto_alias, &mut members) {
+                            return None;
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            continue;
+        }
+
+        // `__extends(t, _super)` or `_inherits(t, _super)` or `customInherits(t, _super)`,
+        // or inline IIFE: `((e, t) => { Object.create... })(t, _super)`
+        if let Some(sp) = super_param {
+            if try_parse_extends_call(
+                stmt,
+                inner_ctor_name,
+                sp,
+                inherits_helpers,
+                tslib_namespaces,
+                unresolved_mark,
+            )
+            .is_some()
+                || is_inline_inherits_iife(stmt, inner_ctor_name, sp, unresolved_mark)
+            {
+                extends_handled = true;
+                continue;
+            }
+        }
+
+        // Inline _inherits IIFE with super class baked in (0-arg IIFE pattern):
+        // `((e, t) => { ... Object.create ... })(t, SuperClass)`
+        // When super_param is None but has_super is true, we already extracted the super class
+        // in find_inline_inherits_super — just skip this statement.
+        if super_param.is_none()
+            && has_super
+            && is_inline_inherits_iife_any_super(stmt, inner_ctor_name, unresolved_mark)
+        {
+            extends_handled = true;
+            continue;
+        }
+
+        // `function t(...) { ... }` — the constructor
+        if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
+            if fn_decl.ident.sym.as_ref() == inner_ctor_name {
+                // For super rewriting, we need a param name to match against.
+                // When we have super_param, use it directly.
+                // When super was discovered via inline inherits, use a synthetic marker
+                // that triggers the PCR unwrap + super rewriting heuristics.
+                let ctor_super_param = if needs_super_rewrite {
+                    super_param.or(Some("__super__"))
+                } else {
+                    None
+                };
+                let ctor = build_constructor(
+                    &fn_decl.function,
+                    inner_ctor_name,
+                    ctor_super_param,
+                    call_super_helpers,
+                    unresolved_mark,
+                )?;
+                // Omit the constructor if it's empty or is the default derived
+                // constructor: `constructor() { super(...arguments); }`
+                if !is_default_constructor(&ctor) {
+                    members.push(ClassMember::Constructor(ctor));
+                }
+                continue;
+            }
+            return None;
+        }
+
+        // Expression statements
+        if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
+            // `t.prototype.method = function() { ... }`
+            // `t.staticMethod = function() { ... }`
+            // `t.prototype = Object.create(_super.prototype)` (inheritance setup — skip)
+            // `Object.defineProperty(t.prototype, "prop", { get: fn, set: fn })`
+            if try_parse_method_assignment(expr, inner_ctor_name, &proto_alias, &mut members) {
+                continue;
+            }
+
+            // `t.staticField = value`
+            //
+            // In derived classes this is observably different from a static
+            // field if the superclass has a setter for that property.
+            if allow_standard_assumptions
+                && !has_super
+                && try_parse_static_field_assignment(expr, inner_ctor_name, &mut members)
+            {
+                continue;
+            }
+
+            // Babel loose mode: `Object.defineProperty(t.prototype, ...)`
+            if try_parse_object_define_property(
+                expr,
+                inner_ctor_name,
+                &proto_alias,
+                &mut members,
+                allow_standard_assumptions,
+                unresolved_mark,
+            ) {
+                continue;
+            }
+
+            // Skip `t.prototype = Object.create(...)` (prototype chain setup for inheritance)
+            if is_prototype_object_create(expr, inner_ctor_name, unresolved_mark) {
+                if has_super || super_param.is_some() {
+                    extends_handled = true;
+                }
+                continue;
+            }
+
+            // Skip `t.prototype.constructor = t` (redundant constructor assignment)
+            if is_prototype_constructor_assign(expr, inner_ctor_name) {
+                continue;
+            }
+
+            // Skip inlined `_super && (Object.setPrototypeOf ? ...)` (static prototype chain)
+            if let Some(sp) = super_param {
+                if is_set_prototype_of_chain_expr(expr, sp, unresolved_mark) {
+                    extends_handled = true;
+                    continue;
+                }
+            }
+
+            // `_createClass(t, [...], [...])` or `r(t, [...])` as a statement (Babel non-loose)
+            if let Expr::Call(call) = expr.as_ref() {
+                if try_parse_create_class(
+                    call,
+                    inner_ctor_name,
+                    &mut members,
+                    create_class_helpers,
+                    unresolved_mark,
+                ) {
+                    continue;
+                }
+                if try_parse_inline_define_properties(
+                    call,
+                    inner_ctor_name,
+                    &mut pending_methods,
+                    &mut members,
+                    unresolved_mark,
+                ) {
+                    continue;
+                }
+            }
+
+            // `e = [{ key: "method", value: fn }]` feeding a later inlined loop
+            if let Some((key, methods)) = methods_temp_assignment(expr, &methods_temps) {
+                pending_methods.push((key, methods));
+                continue;
+            }
+
+            // `Object.defineProperty(t, "prototype", { writable: false })`
+            if is_prototype_seal(expr, inner_ctor_name, unresolved_mark) {
+                continue;
+            }
+
+            return None;
+        }
+
+        // Babel loose mode: `var proto = t.prototype;`
+        if let Stmt::Decl(Decl::Var(var_decl)) = stmt {
+            if let Some(alias) = try_parse_proto_alias(var_decl, inner_ctor_name) {
+                proto_alias = Some(alias);
+                continue;
+            }
+            if declares_only_methods_temps(var_decl, &methods_temps) {
+                continue;
+            }
+            return None;
+        }
+
+        // Skip `if (typeof _super !== "function" && _super !== null) { throw ... }`
+        if let Some(sp) = super_param {
+            if is_super_typecheck_if_stmt(stmt, sp) {
+                continue;
+            }
+        }
+
+        return None;
+    }
+
+    // A methods array the loop never consumed is not a class member.
+    if !pending_methods.is_empty() {
+        return None;
+    }
+
+    // If there's a super class but we never saw __extends, reject
+    if (super_param.is_some() || has_super) && !extends_handled {
+        return None;
+    }
+
+    // Class bodies are strict mode and accessor syntax has stricter signatures
+    // than descriptor callback functions. Keep the original IIFE rather than
+    // emit an early error or silently discard observable parameters.
+    if members.iter().any(class_member_has_invalid_signature) {
+        return None;
+    }
+
+    let _ = class_name; // used only for documentation purposes
+    Some(members)
+}
+
+/// This is a source-recovery policy, not a proof that `.apply` and native
+/// construction have identical behavior for null or native-class parents.
+#[allow(clippy::too_many_arguments)]
+fn recover_ts_default_inheritance(
+    members: &mut Vec<ClassMember>,
+    original: &[Stmt],
+    base: &Ident,
+    constructor: &Ident,
+    class_name: &Ident,
+    helpers: &HashSet<BindingKey>,
+    namespaces: &HashSet<BindingKey>,
+    uses: &BindingUseIndex,
+) {
+    if base.sym == "arguments"
+        || !uses.has_single_declaration(&base.to_id())
+        || uses.has_direct_write(&base.to_id())
+        || !uses.has_single_declaration(&constructor.to_id())
+        || uses.has_direct_write(&constructor.to_id())
+        || !ts_static_factories_can_rebind(members, constructor, class_name)
+    {
+        return;
+    }
+    let constructors: Vec<_> = original
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Decl(Decl::Fn(function)) => Some(function),
+            _ => None,
+        })
+        .collect();
+    let [function] = constructors.as_slice() else {
+        return;
+    };
+    if function.ident.to_id() != constructor.to_id()
+        || !is_ts_default_derived_constructor(&function.function, base)
+    {
+        return;
+    }
+    let extends_calls = original.iter().filter(|stmt| {
+        let Stmt::Expr(statement) = stmt else { return false; };
+        let Expr::Call(call) = strip_parens(&statement.expr) else { return false; };
+        if call.args.len() != 2 || call.args.iter().any(|arg| arg.spread.is_some())
+            || !matches!(strip_parens(&call.args[0].expr), Expr::Ident(id) if id.to_id() == constructor.to_id())
+            || !matches!(strip_parens(&call.args[1].expr), Expr::Ident(id) if id.to_id() == base.to_id())
+        { return false; }
+        let Callee::Expr(callee) = &call.callee else { return false; };
+        match strip_parens(callee) {
+            Expr::Ident(id) => helpers.contains(&id.to_id())
+                && uses.has_single_declaration(&id.to_id()) && !uses.has_direct_write(&id.to_id()),
+            Expr::Member(member) if matches!(&member.prop, MemberProp::Ident(name) if name.sym == "__extends") =>
+                matches!(strip_parens(&member.obj), Expr::Ident(id) if namespaces.contains(&id.to_id())
+                    && uses.has_single_declaration(&id.to_id()) && uses.has_only_static_member_reads_any(&id.to_id())),
+            _ => false,
+        }
+    }).count();
+    if extends_calls != 1 {
+        return;
+    }
+    let positions: Vec<_> = members
+        .iter()
+        .enumerate()
+        .filter_map(|(index, member)| {
+            matches!(member, ClassMember::Constructor(_)).then_some(index)
+        })
+        .collect();
+    let [position] = positions.as_slice() else {
+        return;
+    };
+    members.remove(*position);
+    for member in members {
+        if let ClassMember::Method(method) = member {
+            if super::helper_matcher::count_binding_refs(&method.function, &constructor.to_id()) > 0
+            {
+                // The proof below allows exactly one reference: this static
+                // factory's direct `new C(...)` callee. Rename by resolver
+                // identity, then attach it to the recovered class binding.
+                let body = method.function.body.as_mut().unwrap();
+                let Stmt::Return(statement) = &mut body.stmts[0] else {
+                    unreachable!()
+                };
+                super::rename_utils::rename_bindings(
+                    statement,
+                    &[super::rename_utils::BindingRename {
+                        old: constructor.to_id(),
+                        new: class_name.sym.clone(),
+                    }],
+                );
+                let Expr::New(expr) =
+                    crate::utils::paren::strip_parens_mut(statement.arg.as_mut().unwrap())
+                else {
+                    unreachable!()
+                };
+                let Expr::Ident(id) = crate::utils::paren::strip_parens_mut(&mut expr.callee)
+                else {
+                    unreachable!()
+                };
+                id.ctxt = class_name.ctxt;
+            }
+            if let Some(body) = &mut method.function.body {
+                body.visit_mut_with(&mut TsSuperMethodCalls {
+                    base,
+                    is_static: method.is_static,
+                });
+            }
+        }
+    }
+    // The caller's capture check rejects any superclass use not consumed here.
+}
+
+fn ts_static_factories_can_rebind(
+    members: &[ClassMember],
+    constructor: &Ident,
+    class_name: &Ident,
+) -> bool {
+    // The generated class's self name would capture reads that originally
+    // targeted the enclosing variable, including after its reassignment.
+    if class_members_reference_binding(members, &class_name.sym, class_name.ctxt) {
+        return false;
+    }
+    for member in members {
+        let refs = super::helper_matcher::count_binding_refs(member, &constructor.to_id());
+        if refs == 0 {
+            continue;
+        }
+        let ClassMember::Method(method) = member else {
+            return false;
+        };
+        if refs != 1
+            || !method.is_static
+            || method.kind != MethodKind::Method
+            || method.function.is_async
+            || method.function.is_generator
+        {
+            return false;
+        }
+        if method.function.params.iter().any(|param| {
+            let bindings: Vec<BindingKey> = find_pat_ids(&param.pat);
+            bindings.iter().any(|(name, _)| *name == class_name.sym)
+        }) {
+            return false;
+        }
+        let Some(body) = &method.function.body else {
+            return false;
+        };
+        let [Stmt::Return(statement)] = body.stmts.as_slice() else {
+            return false;
+        };
+        let Some(Expr::New(expr)) = statement.arg.as_deref().map(strip_parens) else {
+            return false;
+        };
+        if !matches!(strip_parens(&expr.callee), Expr::Ident(id) if id.to_id() == constructor.to_id())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_ts_default_derived_constructor(function: &Function, base: &Ident) -> bool {
+    if !function.params.is_empty() || function.is_async || function.is_generator {
+        return false;
+    }
+    let Some(body) = &function.body else {
+        return false;
+    };
+    let [Stmt::Return(statement)] = body.stmts.as_slice() else {
+        return false;
+    };
+    let Some(Expr::Bin(fallback)) = statement.arg.as_deref().map(strip_parens) else {
+        return false;
+    };
+    if fallback.op != BinaryOp::LogicalOr || !matches!(strip_parens(&fallback.right), Expr::This(_))
+    {
+        return false;
+    }
+    let Expr::Bin(guarded) = strip_parens(&fallback.left) else {
+        return false;
+    };
+    if guarded.op != BinaryOp::LogicalAnd {
+        return false;
+    }
+    let Expr::Bin(guard) = strip_parens(&guarded.left) else {
+        return false;
+    };
+    if guard.op != BinaryOp::NotEqEq {
+        return false;
+    }
+    let is_base =
+        |expr: &Expr| matches!(strip_parens(expr), Expr::Ident(id) if id.to_id() == base.to_id());
+    let is_null = |expr: &Expr| matches!(strip_parens(expr), Expr::Lit(Lit::Null(_)));
+    if !((is_base(&guard.left) && is_null(&guard.right))
+        || (is_null(&guard.left) && is_base(&guard.right)))
+    {
+        return false;
+    }
+    let Expr::Call(call) = strip_parens(&guarded.right) else {
+        return false;
+    };
+    if call.args.len() != 2
+        || call.args.iter().any(|arg| arg.spread.is_some())
+        || !matches!(strip_parens(&call.args[0].expr), Expr::This(_))
+        || !matches!(strip_parens(&call.args[1].expr), Expr::Ident(id) if id.sym == "arguments")
+    {
+        return false;
+    }
+    matches!(&call.callee, Callee::Expr(callee) if matches!(strip_parens(callee), Expr::Member(member)
+        if is_base(&member.obj) && matches!(&member.prop, MemberProp::Ident(name) if name.sym == "apply")))
+}
+
+struct TsSuperMethodCalls<'a> {
+    base: &'a Ident,
+    is_static: bool,
+}
+
+impl VisitMut for TsSuperMethodCalls<'_> {
+    fn visit_mut_call_expr(&mut self, call: &mut CallExpr) {
+        call.visit_mut_children_with(self);
+        let Some(receiver) = call.args.first() else {
+            return;
+        };
+        if receiver.spread.is_some() || !matches!(strip_parens(&receiver.expr), Expr::This(_)) {
+            return;
+        }
+        let Callee::Expr(callee) = &call.callee else {
+            return;
+        };
+        let Expr::Member(invocation) = strip_parens(callee) else {
+            return;
+        };
+        if !matches!(&invocation.prop, MemberProp::Ident(name) if name.sym == "call") {
+            return;
+        }
+        let Expr::Member(target) = strip_parens(&invocation.obj) else {
+            return;
+        };
+        let base_object = if self.is_static {
+            strip_parens(&target.obj)
+        } else {
+            let Expr::Member(prototype) = strip_parens(&target.obj) else {
+                return;
+            };
+            if !matches!(&prototype.prop, MemberProp::Ident(name) if name.sym == "prototype") {
+                return;
+            }
+            strip_parens(&prototype.obj)
+        };
+        if !matches!(base_object, Expr::Ident(id) if id.to_id() == self.base.to_id()) {
+            return;
+        }
+        let prop = match &target.prop {
+            MemberProp::Ident(name) => SuperProp::Ident(name.clone()),
+            MemberProp::Computed(computed)
+                if matches!(strip_parens(&computed.expr), Expr::Lit(Lit::Str(_))) =>
+            {
+                SuperProp::Computed(computed.clone())
+            }
+            _ => return,
+        };
+        call.callee = Callee::Expr(Box::new(Expr::SuperProp(SuperPropExpr {
+            span: call.span,
+            obj: Super { span: DUMMY_SP },
+            prop,
+        })));
+        call.args.remove(0);
+    }
+
+    // Arrows inherit the method's this and super. Ordinary functions, object
+    // methods and nested classes do not share that lexical method context.
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+    fn visit_mut_class(&mut self, _: &mut Class) {}
+}
+
+fn class_member_has_invalid_signature(member: &ClassMember) -> bool {
+    match member {
+        ClassMember::Constructor(ctor) => {
+            let mut seen = HashSet::default();
+            ctor.params.iter().any(|param| {
+                matches!(
+                    param,
+                    ParamOrTsParamProp::Param(Param { pat: Pat::Ident(binding), .. })
+                        if !seen.insert(binding.id.sym.clone())
+                )
+            })
+        }
+        ClassMember::Method(method) => {
+            class_method_has_invalid_signature(&method.function, method.kind)
+        }
+        _ => false,
+    }
+}
+
+/// Like `is_inline_inherits_iife` but doesn't check the second argument against a specific param name.
+/// Used when the super class was passed inline (not via IIFE param).
+fn is_inline_inherits_iife_any_super(stmt: &Stmt, ctor_name: &str, unresolved_mark: Mark) -> bool {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return false;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+
+    if call.args.len() != 2 {
+        return false;
+    }
+    let arg0 = strip_parens(&call.args[0].expr);
+    if !matches!(arg0, Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return false;
+    }
+
+    let inner = strip_parens(callee);
+    let body_stmts = match inner {
+        Expr::Arrow(arrow) if arrow.params.len() == 2 => match &*arrow.body {
+            ArrowFunctionBody::FunctionBody(block) => &block.stmts[..],
+            _ => return false,
+        },
+        Expr::Fn(fn_expr) if fn_expr.function.params.len() == 2 => match &fn_expr.function.body {
+            Some(block) => &block.stmts[..],
+            None => return false,
+        },
+        _ => return false,
+    };
+
+    body_stmts
+        .iter()
+        .any(|s| stmt_has_object_create(s, unresolved_mark))
+}
+
+// ============================================================
+// Statement parsers
+// ============================================================
+
+/// Detect `__extends(t, _super)`, `_inherits(t, _super)`, or a call to a detected inherits helper.
+fn try_parse_extends_call(
+    stmt: &Stmt,
+    ctor_name: &str,
+    super_param: &str,
+    inherits_helpers: &HashSet<BindingKey>,
+    tslib_namespaces: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> Option<()> {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return None;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return None;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let callee = strip_parens(callee);
+    let is_helper = match callee {
+        Expr::Ident(fn_name) => {
+            // Accept collected helper bindings, or unresolved built-in helper names.
+            // A local IIFE param named `_inherits` / `__extends` must not be treated as
+            // a helper purely by symbol.
+            let is_unresolved_builtin = matches!(fn_name.sym.as_ref(), "__extends" | "_inherits")
+                && fn_name.ctxt.outer() == unresolved_mark;
+            is_unresolved_builtin || inherits_helpers.contains(&binding_key(fn_name))
+        }
+        Expr::Member(_) => is_tslib_extends_member(callee, tslib_namespaces, unresolved_mark),
+        _ => false,
+    };
+    if !is_helper {
+        return None;
+    }
+    if call.args.len() != 2 {
+        return None;
+    }
+    // First arg must be the inner constructor name
+    let arg0 = strip_parens(&call.args[0].expr);
+    if !matches!(arg0, Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return None;
+    }
+    // Second arg must be the super param
+    let arg1 = strip_parens(&call.args[1].expr);
+    if !matches!(arg1, Expr::Ident(id) if id.sym.as_ref() == super_param) {
+        return None;
+    }
+    Some(())
+}
+
+/// Detect `var proto = t.prototype` (Babel loose mode proto alias).
+fn try_parse_proto_alias(var_decl: &VarDecl, ctor_name: &str) -> Option<Atom> {
+    if var_decl.decls.len() != 1 {
+        return None;
+    }
+    let d = &var_decl.decls[0];
+    let Pat::Ident(BindingIdent { id: alias_id, .. }) = &d.name else {
+        return None;
+    };
+    let init = d.init.as_ref()?;
+    // Must be `t.prototype`
+    if !is_prototype_member_expr(init, ctor_name) {
+        return None;
+    }
+    Some(alias_id.sym.clone())
+}
+
+/// Try to parse `t.prototype.method = function...` or `t.staticProp = function...`
+/// or `proto.method = function...` (when `proto_alias` is set).
+///
+/// Returns true if the expression was recognised and a class member was added.
+fn try_parse_method_assignment(
+    expr: &Expr,
+    ctor_name: &str,
+    proto_alias: &Option<Atom>,
+    members: &mut Vec<ClassMember>,
+) -> bool {
+    let Expr::Assign(assign) = expr else {
+        return false;
+    };
+    if assign.op != swc_core::ecma::ast::AssignOp::Assign {
+        return false;
+    }
+
+    let swc_core::ecma::ast::AssignTarget::Simple(swc_core::ecma::ast::SimpleAssignTarget::Member(
+        lhs_member,
+    )) = &assign.left
+    else {
+        return false;
+    };
+
+    // Determine if this is a static or prototype method assignment
+    //
+    // Static:    `t.methodName = function() {}`
+    // Prototype: `t.prototype.methodName = function() {}`
+    // Loose:     `proto.methodName = function() {}` (proto_alias set)
+
+    let (is_static, method_name) = if let Some(name) =
+        extract_static_method_name(&lhs_member.obj, &lhs_member.prop, ctor_name)
+    {
+        (true, name)
+    } else if let Some(name) =
+        extract_proto_method_name(&lhs_member.obj, &lhs_member.prop, ctor_name, proto_alias)
+    {
+        (false, name)
+    } else {
+        return false;
+    };
+
+    // The RHS must be a function expression (named or anonymous)
+    let rhs = strip_parens(&assign.right);
+    let fn_expr = match rhs {
+        Expr::Fn(f) => f,
+        _ => return false,
+    };
+
+    let method = build_class_method(method_name, fn_expr, is_static, MethodKind::Method);
+    members.push(ClassMember::Method(method));
+    true
+}
+
+fn try_parse_static_field_assignment(
+    expr: &Expr,
+    ctor_name: &str,
+    members: &mut Vec<ClassMember>,
+) -> bool {
+    let Expr::Assign(assign) = expr else {
+        return false;
+    };
+    if assign.op != AssignOp::Assign {
+        return false;
+    }
+
+    let AssignTarget::Simple(SimpleAssignTarget::Member(lhs_member)) = &assign.left else {
+        return false;
+    };
+
+    let Some(key) = extract_static_method_name(&lhs_member.obj, &lhs_member.prop, ctor_name) else {
+        return false;
+    };
+    let rhs = strip_parens(&assign.right);
+    if matches!(rhs, Expr::Fn(_)) {
+        return false;
+    }
+
+    members.push(ClassMember::ClassProp(ClassProp {
+        span: DUMMY_SP,
+        key,
+        value: Some(assign.right.clone()),
+        type_ann: None,
+        is_static: true,
+        decorators: Vec::new(),
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+        readonly: false,
+        declare: false,
+        definite: false,
+    }));
+    true
+}
+
+/// Try to parse `Object.defineProperty(t.prototype, "name", { get: fn, set: fn })`
+/// or `Object.defineProperty(t.prototype, "name", { value: fn, writable: true, ... })`.
+fn try_parse_object_define_property(
+    expr: &Expr,
+    ctor_name: &str,
+    proto_alias: &Option<Atom>,
+    members: &mut Vec<ClassMember>,
+    allow_legacy_typescript_attributes: bool,
+    unresolved_mark: Mark,
+) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+
+    // Callee must be `Object.defineProperty`
+    if !is_object_define_property_callee(&call.callee, unresolved_mark) {
+        return false;
+    }
+
+    if call.args.len() != 3 {
+        return false;
+    }
+
+    // First arg: `t.prototype` or alias
+    let target = strip_parens(&call.args[0].expr);
+    let is_proto_target =
+        is_prototype_member_expr(target, ctor_name) || is_proto_alias_expr(target, proto_alias);
+    if !is_proto_target {
+        return false;
+    }
+
+    // Second arg: property name (string literal)
+    let prop_name_expr = strip_parens(&call.args[1].expr);
+    let Expr::Lit(swc_core::ecma::ast::Lit::Str(s)) = prop_name_expr else {
+        return false;
+    };
+    let sym: Atom = s.value.as_str().unwrap_or("").into();
+
+    // Third arg: descriptor object `{ get: fn, set: fn, value: fn, ... }`
+    let descriptor = strip_parens(&call.args[2].expr);
+    let Expr::Object(obj) = descriptor else {
+        return false;
+    };
+
+    let original_len = members.len();
+    let value_fn = descriptor_value_method_fn(obj);
+    let accessor_descriptor_is_compatible = match class_accessor_descriptor_attributes(obj) {
+        Some(ClassAccessorDescriptorAttributes::ClassCompatible) => true,
+        // Assumption: `transpiled_class_accessor_attributes`. TypeScript
+        // 3.5–3.8 emits `enumerable: true` while lowering source-level class
+        // accessors. Only UnEs6Class has the surrounding class-IIFE proof.
+        Some(ClassAccessorDescriptorAttributes::Enumerable) => allow_legacy_typescript_attributes,
+        None => false,
+    };
+
+    for prop in &obj.props {
+        let swc_core::ecma::ast::PropOrSpread::Prop(prop) = prop else {
+            continue;
+        };
+        let (key, function) = match prop.as_ref() {
+            swc_core::ecma::ast::Prop::KeyValue(kv) => {
+                let Expr::Fn(fn_expr) = strip_parens(&kv.value) else {
+                    continue;
+                };
+                (&kv.key, fn_expr.function.as_ref())
+            }
+            // Native descriptor method syntax and ObjMethodShorthand both
+            // store the callback as a MethodProp under swc_core 77.
+            swc_core::ecma::ast::Prop::Method(method) => (&method.key, method.function.as_ref()),
+            _ => continue,
+        };
+        let key_name = match key {
+            PropName::Ident(iden) => iden.sym.clone(),
+            PropName::Str(s) => s.value.as_str().unwrap_or("").into(),
+            _ => continue,
+        };
+        let kind = match key_name.as_ref() {
+            "get" => MethodKind::Getter,
+            "set" => MethodKind::Setter,
+            _ => continue,
+        };
+        if !accessor_descriptor_is_compatible {
+            return false;
+        }
+        let method_key = PropName::Ident(IdentName::new(sym.clone(), DUMMY_SP));
+        let method = build_class_method_from_function(method_key, function, false, kind);
+        members.push(ClassMember::Method(method));
+    }
+
+    if let Some(fn_expr) = value_fn {
+        let method_key = PropName::Ident(IdentName::new(sym, DUMMY_SP));
+        let method = build_class_method(method_key, fn_expr, false, MethodKind::Method);
+        members.push(ClassMember::Method(method));
+    }
+
+    members.len() > original_len
+}
+
+fn descriptor_value_method_fn(obj: &swc_core::ecma::ast::ObjectLit) -> Option<&FnExpr> {
+    let mut value_fn = None;
+    let mut writable = false;
+    let mut configurable = false;
+
+    for prop in &obj.props {
+        let swc_core::ecma::ast::PropOrSpread::Prop(prop) = prop else {
+            return None;
+        };
+        let swc_core::ecma::ast::Prop::KeyValue(kv) = prop.as_ref() else {
+            return None;
+        };
+        let key_name = prop_name_atom(&kv.key)?;
+        match key_name.as_ref() {
+            "value" => match strip_parens(&kv.value) {
+                Expr::Fn(fn_expr) => value_fn = Some(fn_expr),
+                _ => return None,
+            },
+            "writable" => {
+                if !is_bool_literal(&kv.value, true) {
+                    return None;
+                }
+                writable = true;
+            }
+            "configurable" => {
+                if !is_bool_literal(&kv.value, true) {
+                    return None;
+                }
+                configurable = true;
+            }
+            "enumerable" => {
+                if !is_bool_literal(&kv.value, false) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    if writable && configurable {
+        value_fn
+    } else {
+        None
+    }
+}
+
+fn prop_name_atom(prop: &PropName) -> Option<Atom> {
+    match prop {
+        PropName::Ident(ident) => Some(ident.sym.clone()),
+        PropName::Str(str_lit) => Some(str_lit.value.as_str()?.into()),
+        _ => None,
+    }
+}
+
+fn is_bool_literal(expr: &Expr, value: bool) -> bool {
+    matches!(strip_parens(expr), Expr::Lit(Lit::Bool(bool_lit)) if bool_lit.value == value)
+}
+
+/// Parse a sequence expression in a return statement:
+/// `return proto.method1 = fn, proto.method2 = fn, ..., ClassName;`
+///
+/// The last expression must be the constructor ident. Each preceding expression
+/// must be a method/property assignment.
+fn try_parse_seq_return(
+    seq: &SeqExpr,
+    ctor_name: &str,
+    proto_alias: &Option<Atom>,
+    members: &mut Vec<ClassMember>,
+) -> bool {
+    if seq.exprs.is_empty() {
+        return false;
+    }
+
+    // Last expression must be the constructor ident
+    let last = strip_parens(seq.exprs.last().unwrap());
+    if !matches!(last, Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return false;
+    }
+
+    // All preceding expressions must be method assignments
+    for expr in &seq.exprs[..seq.exprs.len() - 1] {
+        if !try_parse_method_assignment(strip_parens(expr), ctor_name, proto_alias, members) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Parse `_createClass(t, instanceMethods, staticMethods)` where each methods array
+/// contains `{ key: "name", value: function() {} }` objects.
+/// Matches unresolved `_createClass` and bindings detected via body-shape matching.
+fn try_parse_create_class(
+    call: &CallExpr,
+    ctor_name: &str,
+    members: &mut Vec<ClassMember>,
+    create_class_helpers: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> bool {
+    // Callee must be unresolved `_createClass` or a detected helper binding.
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let is_create_class = match strip_parens(callee) {
+        Expr::Ident(id) => {
+            let is_unresolved_builtin =
+                id.sym.as_ref() == "_createClass" && id.ctxt.outer() == unresolved_mark;
+            is_unresolved_builtin || create_class_helpers.contains(&binding_key(id))
+        }
+        _ => false,
+    };
+    if !is_create_class {
+        return false;
+    }
+
+    // Args: (ClassName) or (ClassName, [instance methods], [static methods]?)
+    if call.args.is_empty() || call.args.len() > 3 {
+        return false;
+    }
+
+    // First arg must be the constructor ident
+    let arg0 = strip_parens(&call.args[0].expr);
+    if !matches!(arg0, Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return false;
+    }
+
+    // 1-arg form: _createClass(Foo) — just seals prototype, no methods
+    if call.args.len() == 1 {
+        return true;
+    }
+
+    // Instance methods
+    if !parse_create_class_array(&call.args[1].expr, false, members) {
+        return false;
+    }
+
+    // Static methods (optional 3rd arg)
+    if call.args.len() == 3 && !parse_create_class_array(&call.args[2].expr, true, members) {
+        return false;
+    }
+
+    true
+}
+
+/// Parse the lowered `_defineProperties` loop that a minifier inlined into
+/// the class wrapper as an IIFE:
+///
+/// ```js
+/// (function(e, t) {
+///     for (var n = 0; n < t.length; n++) {
+///         var r = t[n];
+///         r.enumerable = r.enumerable || false;
+///         r.configurable = true;
+///         if ("value" in r) r.writable = true;
+///         Object.defineProperty(e, r.key, r);
+///     }
+/// })(t.prototype, [{ key: "method", value: fn }]);
+/// ```
+///
+/// The first argument is `t.prototype` for instance members or `t` for
+/// static members. The second is the methods array, inline or a temporary
+/// assigned earlier in the wrapper (consumed from `pending_methods`).
+fn try_parse_inline_define_properties(
+    call: &CallExpr,
+    ctor_name: &str,
+    pending_methods: &mut Vec<(BindingKey, &Expr)>,
+    members: &mut Vec<ClassMember>,
+    unresolved_mark: Mark,
+) -> bool {
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    if !is_define_properties_loop_fn(strip_parens(callee), unresolved_mark) {
+        return false;
+    }
+    let [target, methods] = call.args.as_slice() else {
+        return false;
+    };
+    if target.spread.is_some() || methods.spread.is_some() {
+        return false;
+    }
+    let is_static = match strip_parens(&target.expr) {
+        Expr::Ident(id) if id.sym.as_ref() == ctor_name => true,
+        expr if is_prototype_member_expr(expr, ctor_name) => false,
+        _ => return false,
+    };
+    let methods = match strip_parens(&methods.expr) {
+        Expr::Ident(id) => {
+            let key = binding_key(id);
+            let Some(index) = pending_methods.iter().position(|(temp, _)| *temp == key) else {
+                return false;
+            };
+            pending_methods.remove(index).1
+        }
+        expr => expr,
+    };
+    parse_create_class_array(methods, is_static, members)
+}
+
+/// Whether `expr` is a two-parameter function whose whole body is the Babel
+/// `_defineProperties` loop, including every descriptor default. The defaults
+/// are what make the defined properties match class members (non-enumerable,
+/// configurable, writable), so a loop missing one is not accepted.
+fn is_define_properties_loop_fn(expr: &Expr, unresolved_mark: Mark) -> bool {
+    let (params, body): (Vec<&Pat>, &[Stmt]) = match expr {
+        Expr::Fn(fn_expr) => {
+            let function = &fn_expr.function;
+            if function.is_async || function.is_generator {
+                return false;
+            }
+            let Some(body) = &function.body else {
+                return false;
+            };
+            (
+                function.params.iter().map(|p| &p.pat).collect(),
+                &body.stmts,
+            )
+        }
+        Expr::Arrow(arrow) => {
+            if arrow.is_async || arrow.is_generator {
+                return false;
+            }
+            let ArrowFunctionBody::FunctionBody(body) = &*arrow.body else {
+                return false;
+            };
+            (arrow.params.iter().collect(), &body.stmts)
+        }
+        _ => return false,
+    };
+    let [Pat::Ident(target), Pat::Ident(props)] = params.as_slice() else {
+        return false;
+    };
+    let [Stmt::For(for_stmt)] = body else {
+        return false;
+    };
+
+    // `for (var n = 0; n < props.length; n++)`
+    let Some(VarDeclOrExpr::VarDecl(init)) = &for_stmt.init else {
+        return false;
+    };
+    let [VarDeclarator {
+        name: Pat::Ident(index),
+        init: Some(index_init),
+        ..
+    }] = init.decls.as_slice()
+    else {
+        return false;
+    };
+    if !matches!(strip_parens(index_init), Expr::Lit(Lit::Num(n)) if n.value == 0.0) {
+        return false;
+    }
+    let Some(Expr::Bin(test)) = for_stmt.test.as_deref() else {
+        return false;
+    };
+    if test.op != BinaryOp::Lt
+        || !is_same_ident(&test.left, &index.id)
+        || !is_member_named(&test.right, &props.id, "length")
+    {
+        return false;
+    }
+    let Some(Expr::Update(update)) = for_stmt.update.as_deref() else {
+        return false;
+    };
+    if update.op != UpdateOp::PlusPlus || !is_same_ident(&update.arg, &index.id) {
+        return false;
+    }
+
+    // `{ var r = props[n]; <defaults>; Object.defineProperty(target, r.key, r); }`
+    let Stmt::Block(loop_body) = for_stmt.body.as_ref() else {
+        return false;
+    };
+    let [Stmt::Decl(Decl::Var(descriptor_decl)), defaults @ .., Stmt::Expr(define)] =
+        loop_body.stmts.as_slice()
+    else {
+        return false;
+    };
+    let [VarDeclarator {
+        name: Pat::Ident(descriptor),
+        init: Some(descriptor_init),
+        ..
+    }] = descriptor_decl.decls.as_slice()
+    else {
+        return false;
+    };
+    let descriptor = &descriptor.id;
+    match strip_parens(descriptor_init) {
+        Expr::Member(MemberExpr {
+            obj,
+            prop: MemberProp::Computed(ComputedPropName { expr: key, .. }),
+            ..
+        }) if is_same_ident(obj, &props.id) && is_same_ident(key, &index.id) => {}
+        _ => return false,
+    }
+
+    let (mut enumerable, mut configurable, mut writable) = (false, false, false);
+    for stmt in defaults {
+        let flag = match stmt {
+            Stmt::Expr(ExprStmt { expr, .. }) => match strip_parens(expr) {
+                // `"value" in r && (r.writable = true)`
+                Expr::Bin(bin) if bin.op == BinaryOp::LogicalAnd => {
+                    if !is_value_in_descriptor(&bin.left, descriptor)
+                        || !is_descriptor_true_assign(&bin.right, descriptor, "writable")
+                    {
+                        return false;
+                    }
+                    &mut writable
+                }
+                expr if is_descriptor_true_assign(expr, descriptor, "configurable") => {
+                    &mut configurable
+                }
+                // `r.enumerable = r.enumerable || false`
+                Expr::Assign(assign)
+                    if assign.op == AssignOp::Assign
+                        && is_descriptor_member_target(&assign.left, descriptor, "enumerable") =>
+                {
+                    let Expr::Bin(value) = strip_parens(&assign.right) else {
+                        return false;
+                    };
+                    if value.op != BinaryOp::LogicalOr
+                        || !is_member_named(&value.left, descriptor, "enumerable")
+                        || !is_bool_literal(&value.right, false)
+                    {
+                        return false;
+                    }
+                    &mut enumerable
+                }
+                _ => return false,
+            },
+            // `if ("value" in r) r.writable = true;`
+            Stmt::If(if_stmt) if if_stmt.alt.is_none() => {
+                let assign = match if_stmt.cons.as_ref() {
+                    Stmt::Block(block) => match block.stmts.as_slice() {
+                        [Stmt::Expr(ExprStmt { expr, .. })] => expr,
+                        _ => return false,
+                    },
+                    Stmt::Expr(ExprStmt { expr, .. }) => expr,
+                    _ => return false,
+                };
+                if !is_value_in_descriptor(&if_stmt.test, descriptor)
+                    || !is_descriptor_true_assign(assign, descriptor, "writable")
+                {
+                    return false;
+                }
+                &mut writable
+            }
+            _ => return false,
+        };
+        if std::mem::replace(flag, true) {
+            return false;
+        }
+    }
+    if !(enumerable && configurable && writable) {
+        return false;
+    }
+
+    let Expr::Call(define) = strip_parens(&define.expr) else {
+        return false;
+    };
+    is_object_define_property_callee(&define.callee, unresolved_mark)
+        && matches!(
+            define.args.as_slice(),
+            [a, b, c] if a.spread.is_none()
+                && b.spread.is_none()
+                && c.spread.is_none()
+                && is_same_ident(&a.expr, &target.id)
+                && is_member_named(&b.expr, descriptor, "key")
+                && is_same_ident(&c.expr, descriptor)
+        )
+}
+
+fn is_same_ident(expr: &Expr, target: &Ident) -> bool {
+    matches!(strip_parens(expr), Expr::Ident(id) if id.sym == target.sym && id.ctxt == target.ctxt)
+}
+
+/// `obj.name` where `obj` is `target`.
+fn is_member_named(expr: &Expr, target: &Ident, name: &str) -> bool {
+    matches!(
+        strip_parens(expr),
+        Expr::Member(MemberExpr { obj, prop: MemberProp::Ident(prop), .. })
+            if prop.sym.as_ref() == name && is_same_ident(obj, target)
+    )
+}
+
+fn is_descriptor_member_target(target: &AssignTarget, descriptor: &Ident, name: &str) -> bool {
+    matches!(
+        target,
+        AssignTarget::Simple(SimpleAssignTarget::Member(MemberExpr { obj, prop: MemberProp::Ident(prop), .. }))
+            if prop.sym.as_ref() == name && is_same_ident(obj, descriptor)
+    )
+}
+
+/// `r.<name> = true`
+fn is_descriptor_true_assign(expr: &Expr, descriptor: &Ident, name: &str) -> bool {
+    matches!(
+        strip_parens(expr),
+        Expr::Assign(assign)
+            if assign.op == AssignOp::Assign
+                && is_descriptor_member_target(&assign.left, descriptor, name)
+                && is_bool_literal(&assign.right, true)
+    )
+}
+
+/// `"value" in r`
+fn is_value_in_descriptor(expr: &Expr, descriptor: &Ident) -> bool {
+    matches!(
+        strip_parens(expr),
+        Expr::Bin(bin)
+            if bin.op == BinaryOp::In
+                && matches!(strip_parens(&bin.left), Expr::Lit(Lit::Str(s)) if s.value.as_str() == Some("value"))
+                && is_same_ident(&bin.right, descriptor)
+    )
+}
+
+/// Wrapper-local bindings that only carry a methods array into an inlined
+/// `_defineProperties` loop: declared without an initializer by a wrapper
+/// `var`, assigned once, passed once as the loop's second argument, and
+/// referenced nowhere else in the wrapper.
+fn inline_define_properties_temps(stmts: &[Stmt], unresolved_mark: Mark) -> HashSet<BindingKey> {
+    struct UseCounter<'a> {
+        key: &'a BindingKey,
+        count: usize,
+    }
+    impl Visit for UseCounter<'_> {
+        fn visit_ident(&mut self, id: &Ident) {
+            if id.sym == self.key.0 && id.ctxt == self.key.1 {
+                self.count += 1;
+            }
+        }
+    }
+
+    let mut temps = HashSet::default();
+    for stmt in stmts {
+        let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+            continue;
+        };
+        let Expr::Call(call) = strip_parens(expr) else {
+            continue;
+        };
+        let Callee::Expr(callee) = &call.callee else {
+            continue;
+        };
+        let Some(Expr::Ident(temp)) = call.args.get(1).map(|arg| strip_parens(&arg.expr)) else {
+            continue;
+        };
+        if !is_define_properties_loop_fn(strip_parens(callee), unresolved_mark) {
+            continue;
+        }
+        let key = binding_key(temp);
+        let declared = stmts.iter().any(|stmt| {
+            matches!(stmt, Stmt::Decl(Decl::Var(var)) if var.decls.iter().any(|decl| {
+                decl.init.is_none()
+                    && matches!(&decl.name, Pat::Ident(id) if id.sym == key.0 && id.ctxt == key.1)
+            }))
+        });
+        let assigned = stmts
+            .iter()
+            .filter(|stmt| {
+                matches!(stmt, Stmt::Expr(ExprStmt { expr, .. })
+                    if methods_temp_assignment_parts(expr).is_some_and(|(id, _)| binding_key(id) == key))
+            })
+            .count();
+        let mut counter = UseCounter {
+            key: &key,
+            count: 0,
+        };
+        stmts.visit_with(&mut counter);
+        // Declaration, assignment, and loop argument.
+        if declared && assigned == 1 && counter.count == 3 {
+            temps.insert(key);
+        }
+    }
+    temps
+}
+
+/// `e = [ ... ]`
+fn methods_temp_assignment_parts(expr: &Expr) -> Option<(&Ident, &Expr)> {
+    let Expr::Assign(assign) = strip_parens(expr) else {
+        return None;
+    };
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(temp)) = &assign.left else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign || !matches!(strip_parens(&assign.right), Expr::Array(_)) {
+        return None;
+    }
+    Some((&temp.id, &assign.right))
+}
+
+fn methods_temp_assignment<'a>(
+    expr: &'a Expr,
+    temps: &HashSet<BindingKey>,
+) -> Option<(BindingKey, &'a Expr)> {
+    let (temp, methods) = methods_temp_assignment_parts(expr)?;
+    let key = binding_key(temp);
+    temps.contains(&key).then_some((key, methods))
+}
+
+fn declares_only_methods_temps(var_decl: &VarDecl, temps: &HashSet<BindingKey>) -> bool {
+    var_decl.decls.iter().all(|decl| {
+        decl.init.is_none()
+            && matches!(&decl.name, Pat::Ident(id) if temps.contains(&binding_key(&id.id)))
+    })
+}
+
+/// `Object.defineProperty(t, "prototype", { writable: false })`, which Babel
+/// 7.16+ `_createClass` emits. A class's own `prototype` property is already
+/// non-writable.
+fn is_prototype_seal(expr: &Expr, ctor_name: &str, unresolved_mark: Mark) -> bool {
+    let Expr::Call(call) = strip_parens(expr) else {
+        return false;
+    };
+    if !is_object_define_property_callee(&call.callee, unresolved_mark) {
+        return false;
+    }
+    let [target, key, descriptor] = call.args.as_slice() else {
+        return false;
+    };
+    if target.spread.is_some() || key.spread.is_some() || descriptor.spread.is_some() {
+        return false;
+    }
+    if !matches!(strip_parens(&target.expr), Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return false;
+    }
+    if !matches!(strip_parens(&key.expr), Expr::Lit(Lit::Str(s)) if s.value.as_str() == Some("prototype"))
+    {
+        return false;
+    }
+    let Expr::Object(obj) = strip_parens(&descriptor.expr) else {
+        return false;
+    };
+    matches!(obj.props.as_slice(), [swc_core::ecma::ast::PropOrSpread::Prop(prop)]
+        if matches!(prop.as_ref(), swc_core::ecma::ast::Prop::KeyValue(kv)
+            if prop_name_atom(&kv.key).is_some_and(|name| name.as_ref() == "writable")
+                && is_bool_literal(&kv.value, false)))
+}
+
+fn parse_create_class_array(arg: &Expr, is_static: bool, members: &mut Vec<ClassMember>) -> bool {
+    let arr_expr = strip_parens(arg);
+    // Allow `null` for the static array (Babel sometimes passes null)
+    if matches!(arr_expr, Expr::Lit(swc_core::ecma::ast::Lit::Null(_))) {
+        return true;
+    }
+    let Expr::Array(arr) = arr_expr else {
+        return false;
+    };
+
+    for elem in &arr.elems {
+        let Some(elem) = elem else {
+            continue;
+        };
+        let Expr::Object(obj) = strip_parens(&elem.expr) else {
+            return false;
+        };
+
+        let mut key_name: Option<Atom> = None;
+        let mut value_fn: Option<&FnExpr> = None;
+        let mut method_kind = MethodKind::Method;
+
+        for prop in &obj.props {
+            let swc_core::ecma::ast::PropOrSpread::Prop(p) = prop else {
+                continue;
+            };
+            let swc_core::ecma::ast::Prop::KeyValue(kv) = p.as_ref() else {
+                return false;
+            };
+            let k = match &kv.key {
+                PropName::Ident(i) => i.sym.clone(),
+                PropName::Str(s) => s.value.as_str().unwrap_or("").into(),
+                _ => return false,
+            };
+            match k.as_ref() {
+                "key" => {
+                    let Expr::Lit(swc_core::ecma::ast::Lit::Str(s)) = strip_parens(&kv.value)
+                    else {
+                        return false;
+                    };
+                    key_name = Some(s.value.as_str().unwrap_or("").into());
+                }
+                "value" => {
+                    let Expr::Fn(f) = strip_parens(&kv.value) else {
+                        return false;
+                    };
+                    value_fn = Some(f);
+                }
+                "get" => {
+                    let Expr::Fn(f) = strip_parens(&kv.value) else {
+                        return false;
+                    };
+                    method_kind = MethodKind::Getter;
+                    value_fn = Some(f);
+                }
+                "set" => {
+                    let Expr::Fn(f) = strip_parens(&kv.value) else {
+                        return false;
+                    };
+                    method_kind = MethodKind::Setter;
+                    value_fn = Some(f);
+                }
+                // `writable`, `enumerable`, `configurable` — skip
+                _ => {}
+            }
+        }
+
+        let (Some(name_sym), Some(fn_expr)) = (key_name, value_fn) else {
+            return false;
+        };
+        let method_key = PropName::Ident(IdentName::new(name_sym, DUMMY_SP));
+        let method = build_class_method(method_key, fn_expr, is_static, method_kind);
+        members.push(ClassMember::Method(method));
+    }
+
+    true
+}
+
+// ============================================================
+// Detection helpers
+// ============================================================
+
+/// Find the name of the inner constructor function (`t` in the IIFE body).
+/// The first `function <name>(...) { ... }` declaration in the body is the constructor.
+fn find_inner_constructor_name(stmts: &[Stmt]) -> Option<&str> {
+    find_inner_constructor_ident(stmts).map(|id| id.sym.as_ref())
+}
+
+fn find_inner_constructor_ident(stmts: &[Stmt]) -> Option<&Ident> {
+    for stmt in stmts {
+        if let Stmt::Decl(Decl::Fn(fn_decl)) = stmt {
+            return Some(&fn_decl.ident);
+        }
+    }
+    None
+}
+
+/// Super parameter of an IIFE that `UnEs6Class` treats as `extends`.
+///
+/// The paired owner is the binding the IIFE is assigned to. Phase 2 rewrites
+/// that parameter's `.call` / `.apply` to `super` when the owner itself stays
+/// unpinned, so the call must not pin the superclass.
+pub(crate) struct ConsumedSuperParam {
+    pub param: BindingKey,
+    /// Exported names which, if pinned, keep this `.call` from becoming `super`.
+    /// Empty means class recovery always consumes the call.
+    pub blocked_by: Vec<Atom>,
+}
+
+/// Runs only at `Standard` and above; `Minimal` pins every cross-file call.
+pub(crate) fn super_params_consumed_by_class_recovery(
+    items: &[ModuleItem],
+    unresolved_mark: Mark,
+    level: RewriteLevel,
+) -> Vec<ConsumedSuperParam> {
+    let module = Module {
+        span: DUMMY_SP,
+        body: items.to_vec(),
+        shebang: None,
+    };
+    let local_helpers = super::transpiler_helper_utils::LocalHelperContext::collect_with_mark(
+        &module,
+        unresolved_mark,
+    );
+    let helpers = Es6ClassHelperContext::from_local_helpers(items, unresolved_mark, &local_helpers);
+    // `UnEs6Class` leaves the whole module unchanged when `with` or direct
+    // `eval` is present, so none of these calls become `super()`.
+    if has_dynamic_scope_construct(items) {
+        return Vec::new();
+    }
+    let reused = reused_var_bindings_in_items(items);
+    // Same gate as `UnEs6ClassInner::can_index_ts_inheritance`.
+    let inheritance = (level >= RewriteLevel::Standard
+        && (!helpers.ts_extends_helpers.is_empty() || !helpers.tslib_namespaces.is_empty()))
+    .then(|| Rc::new(BindingUseIndex::collect_module_items(items)));
+    let unseeded = converting_owners(
+        items,
+        &helpers,
+        &reused,
+        inheritance.as_deref(),
+        unresolved_mark,
+        level,
+        &HashSet::default(),
+    );
+    if unseeded.is_empty() {
+        return Vec::new();
+    }
+
+    // One walk records which facts class recovery deletes. Each export then
+    // reuses that graph instead of cloning the module.
+    let blankable = unseeded
+        .iter()
+        .map(|(owner, _)| owner.clone())
+        .collect::<HashSet<_>>();
+    let effects = module_guarded_call_effects(items, &blankable);
+    let alias_sources = direct_ident_alias_sources(items);
+    let export_names = module_export_names(items);
+    let mut names_by_roots: HashMap<Vec<BindingKey>, Vec<Atom>> = HashMap::default();
+    for name in &export_names {
+        let mut seeds = HashSet::default();
+        seeds.insert(name.clone());
+        let roots = pinned_binding_keys_with_alias_sources(items, &seeds, &alias_sources);
+        if roots.is_empty() {
+            continue;
+        }
+        let mut root_key: Vec<BindingKey> = roots.into_iter().collect();
+        root_key.sort();
+        names_by_roots
+            .entry(root_key)
+            .or_default()
+            .push(name.clone());
+    }
+
+    let mut blocked_by_owner: HashMap<BindingKey, Vec<Atom>> = HashMap::default();
+    for (root_key, names) in &names_by_roots {
+        let roots = root_key.iter().cloned().collect::<HashSet<_>>();
+        let converted = owners_still_converting(&unseeded, &effects, &roots);
+        for (owner, _) in &unseeded {
+            if converted.contains(owner) {
+                continue;
+            }
+            blocked_by_owner
+                .entry(owner.clone())
+                .or_default()
+                .extend(names.iter().cloned());
+        }
+    }
+
+    let found = unseeded
+        .iter()
+        .map(|(owner, param)| {
+            let mut blocked_by = blocked_by_owner.get(owner).cloned().unwrap_or_default();
+            blocked_by.sort();
+            blocked_by.dedup();
+            ConsumedSuperParam {
+                param: param.clone(),
+                blocked_by,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Small modules compare against the fixpoint that clones the AST. Large
+    // modules skip that check; release unpacks do not compile it in.
+    #[cfg(debug_assertions)]
+    if unseeded.len().saturating_mul(export_names.len()) <= 48 {
+        let brute = blocked_by_via_fixpoint(
+            items,
+            &helpers,
+            &reused,
+            inheritance.as_deref(),
+            unresolved_mark,
+            level,
+            &unseeded,
+            &export_names,
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|item| (item.param.clone(), item.blocked_by.clone()))
+                .collect::<Vec<_>>(),
+            brute,
+            "guarded call-effect probe diverged from the class-recovery fixpoint"
+        );
+    }
+
+    found
+}
+
+/// Owners from `candidates` that still become classes when `extra_roots` are required.
+fn owners_still_converting(
+    candidates: &[(BindingKey, BindingKey)],
+    effects: &[GuardedCallEffect],
+    extra_roots: &HashSet<BindingKey>,
+) -> HashSet<BindingKey> {
+    let mut converted = HashSet::default();
+    loop {
+        let required = required_bindings_from_effects(effects, &converted, extra_roots);
+        let mut grew = false;
+        for (owner, _) in candidates {
+            if converted.contains(owner) || required.contains(owner) {
+                continue;
+            }
+            converted.insert(owner.clone());
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    converted
+}
+
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_arguments)]
+fn blocked_by_via_fixpoint(
+    items: &[ModuleItem],
+    helpers: &Es6ClassHelperContext,
+    reused: &HashSet<BindingKey>,
+    inheritance: Option<&BindingUseIndex>,
+    unresolved_mark: Mark,
+    level: RewriteLevel,
+    unseeded: &[(BindingKey, BindingKey)],
+    export_names: &[Atom],
+) -> Vec<(BindingKey, Vec<Atom>)> {
+    unseeded
+        .iter()
+        .map(|(owner, param)| {
+            let blocked_by = export_names
+                .iter()
+                .filter(|name| {
+                    let mut seeds = HashSet::default();
+                    seeds.insert((*name).clone());
+                    let roots = super::callability::pinned_binding_keys(items, &seeds);
+                    !converting_owners(
+                        items,
+                        helpers,
+                        reused,
+                        inheritance,
+                        unresolved_mark,
+                        level,
+                        &roots,
+                    )
+                    .iter()
+                    .any(|(converted, _)| converted == owner)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            (param.clone(), blocked_by)
+        })
+        .collect()
+}
+
+fn converting_owners(
+    items: &[ModuleItem],
+    helpers: &Es6ClassHelperContext,
+    reused: &HashSet<BindingKey>,
+    inheritance: Option<&BindingUseIndex>,
+    unresolved_mark: Mark,
+    level: RewriteLevel,
+    extra_roots: &HashSet<BindingKey>,
+) -> Vec<(BindingKey, BindingKey)> {
+    let mut converted = HashSet::default();
+    let mut pairs = Vec::new();
+    loop {
+        let visible = substitute_converted_classes(
+            items,
+            &converted,
+            helpers,
+            reused,
+            inheritance,
+            unresolved_mark,
+            level,
+        );
+        let callability = CallabilityIndex::collect_module_items_with_roots(&visible, extra_roots);
+        let mut finder = ConsumedSuperFinder {
+            helpers: helpers.clone(),
+            callability: &callability,
+            reused: reused.clone(),
+            inheritance,
+            unresolved_mark,
+            level,
+            pairs: Vec::new(),
+        };
+        items.visit_with(&mut finder);
+        let mut grew = false;
+        for (owner, param) in finder.pairs {
+            if converted.insert(owner.clone()) {
+                pairs.push((owner, param));
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    pairs
+}
+
+/// Replace owners that already became classes, keeping method `.call`s.
+///
+/// Nulling the whole initializer also drops calls Phase 2 copies onto the
+/// class. The next fixpoint pass must still see those.
+fn substitute_converted_classes(
+    items: &[ModuleItem],
+    converted: &HashSet<BindingKey>,
+    helpers: &Es6ClassHelperContext,
+    reused: &HashSet<BindingKey>,
+    inheritance: Option<&BindingUseIndex>,
+    unresolved_mark: Mark,
+    level: RewriteLevel,
+) -> Vec<ModuleItem> {
+    if converted.is_empty() {
+        return items.to_vec();
+    }
+    let empty = CallabilityIndex::collect_module_items_with_roots(&[], &HashSet::default());
+    let mut cloned = items.to_vec();
+    struct Subst<'a> {
+        converted: &'a HashSet<BindingKey>,
+        helpers: &'a Es6ClassHelperContext,
+        reused: &'a HashSet<BindingKey>,
+        inheritance: Option<&'a BindingUseIndex>,
+        unresolved_mark: Mark,
+        level: RewriteLevel,
+        empty: &'a CallabilityIndex,
+    }
+    impl Subst<'_> {
+        fn class_for(&self, var: &VarDecl) -> Option<ClassDecl> {
+            let [declarator] = var.decls.as_slice() else {
+                return None;
+            };
+            let Pat::Ident(binding) = &declarator.name else {
+                return None;
+            };
+            if !self.converted.contains(&binding_key(&binding.id)) {
+                return None;
+            }
+            self.try_class(var).or_else(|| {
+                let mut normalized = var.clone();
+                normalize_super_call_apply(&mut normalized, self.level, self.unresolved_mark);
+                self.try_class(&normalized)
+            })
+        }
+
+        fn try_class(&self, var: &VarDecl) -> Option<ClassDecl> {
+            try_iife_to_class(
+                var,
+                self.reused,
+                self.empty,
+                &self.helpers.inherits_helpers,
+                &self.helpers.tslib_namespaces,
+                &self.helpers.create_class_helpers,
+                &self.helpers.call_super_helpers,
+                &self.helpers.class_call_check_helpers,
+                &self.helpers.set_prototype_of_helpers,
+                &self.helpers.ts_extends_helpers,
+                self.inheritance,
+                self.unresolved_mark,
+                self.level,
+                var.span,
+            )
+        }
+    }
+    impl VisitMut for Subst<'_> {
+        fn visit_mut_module_item(&mut self, item: &mut ModuleItem) {
+            let exported = match &*item {
+                ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => match &export.decl {
+                    Decl::Var(var) => self.class_for(var),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(class) = exported {
+                if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = item {
+                    export.decl = Decl::Class(class);
+                    return;
+                }
+            }
+            let replaced = match &*item {
+                ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) => self.class_for(var),
+                _ => None,
+            };
+            if let Some(class) = replaced {
+                *item = ModuleItem::Stmt(Stmt::Decl(Decl::Class(class)));
+                return;
+            }
+            item.visit_mut_children_with(self);
+        }
+
+        fn visit_mut_stmt(&mut self, stmt: &mut Stmt) {
+            let class = match &*stmt {
+                Stmt::Decl(Decl::Var(var)) => self.class_for(var),
+                _ => None,
+            };
+            if let Some(class) = class {
+                *stmt = Stmt::Decl(Decl::Class(class));
+                return;
+            }
+            stmt.visit_mut_children_with(self);
+        }
+    }
+    cloned.visit_mut_with(&mut Subst {
+        converted,
+        helpers,
+        reused,
+        inheritance,
+        unresolved_mark,
+        level,
+        empty: &empty,
+    });
+    cloned
+}
+
+fn module_export_names(items: &[ModuleItem]) -> Vec<Atom> {
+    let mut names = Vec::new();
+    for item in items {
+        let ModuleItem::ModuleDecl(decl) = item else {
+            continue;
+        };
+        match decl {
+            ModuleDecl::ExportDecl(export) => match &export.decl {
+                Decl::Fn(function) => names.push(function.ident.sym.clone()),
+                Decl::Class(class) => names.push(class.ident.sym.clone()),
+                Decl::Var(var) => {
+                    for declarator in &var.decls {
+                        if let Pat::Ident(binding) = &declarator.name {
+                            names.push(binding.id.sym.clone());
+                        }
+                    }
+                }
+                _ => {}
+            },
+            ModuleDecl::ExportDefaultDecl(_) => names.push(Atom::from("default")),
+            ModuleDecl::ExportDefaultExpr(export) => {
+                names.push(Atom::from("default"));
+                // `export default { Pub: Sub }` is the name a default-import
+                // member call pins, so it can cascade to Sub's superclass.
+                if let Expr::Object(object) = strip_parens(&export.expr) {
+                    for prop in &object.props {
+                        let swc_core::ecma::ast::PropOrSpread::Prop(prop) = prop else {
+                            continue;
+                        };
+                        let name = match prop.as_ref() {
+                            swc_core::ecma::ast::Prop::Shorthand(ident) => Some(ident.sym.clone()),
+                            swc_core::ecma::ast::Prop::KeyValue(pair) => match &pair.key {
+                                swc_core::ecma::ast::PropName::Ident(ident) => {
+                                    Some(ident.sym.clone())
+                                }
+                                swc_core::ecma::ast::PropName::Str(value) => {
+                                    value.value.as_str().map(Atom::from)
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(name) = name {
+                            names.push(name);
+                        }
+                    }
+                }
+            }
+            ModuleDecl::ExportNamed(named) if named.src.is_none() => {
+                for specifier in &named.specifiers {
+                    match specifier {
+                        ExportSpecifier::Named(named_spec) => {
+                            let exported = named_spec
+                                .exported
+                                .as_ref()
+                                .map(|name| match name {
+                                    ModuleExportName::Ident(ident) => ident.sym.clone(),
+                                    ModuleExportName::Str(value) => {
+                                        Atom::from(value.value.as_str().unwrap_or(""))
+                                    }
+                                })
+                                .unwrap_or_else(|| match &named_spec.orig {
+                                    ModuleExportName::Ident(ident) => ident.sym.clone(),
+                                    ModuleExportName::Str(value) => {
+                                        Atom::from(value.value.as_str().unwrap_or(""))
+                                    }
+                                });
+                            names.push(exported);
+                        }
+                        ExportSpecifier::Default(_) => names.push(Atom::from("default")),
+                        ExportSpecifier::Namespace(_) => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+struct ConsumedSuperFinder<'a> {
+    helpers: Es6ClassHelperContext,
+    callability: &'a CallabilityIndex,
+    reused: HashSet<BindingKey>,
+    inheritance: Option<&'a BindingUseIndex>,
+    unresolved_mark: Mark,
+    level: RewriteLevel,
+    pairs: Vec<(BindingKey, BindingKey)>,
+}
+
+impl ConsumedSuperFinder<'_> {
+    /// The superclass parameter is consumed only when this `var` IIFE actually
+    /// becomes a class. A recognized extends helper is not enough: a later
+    /// statement can still make `try_iife_to_class` keep the `.call`.
+    fn recovered_super_param(&self, var: &VarDecl) -> Option<(BindingKey, BindingKey)> {
+        let class = self.try_convert(var).or_else(|| {
+            let mut normalized = var.clone();
+            normalize_super_call_apply(&mut normalized, self.level, self.unresolved_mark);
+            self.try_convert(&normalized)
+        })?;
+        let [declarator] = var.decls.as_slice() else {
+            return None;
+        };
+        let Pat::Ident(owner) = &declarator.name else {
+            return None;
+        };
+        let init = declarator.init.as_deref()?;
+        let Expr::Call(call) = strip_parens(init) else {
+            return None;
+        };
+        if call.args.len() != 1 {
+            return None;
+        }
+        let Callee::Expr(callee) = &call.callee else {
+            return None;
+        };
+        let param = match strip_parens(callee) {
+            Expr::Fn(function) => match function.function.params.as_slice() {
+                [param] => match &param.pat {
+                    Pat::Ident(binding) => &binding.id,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            Expr::Arrow(arrow) => match arrow.params.as_slice() {
+                [Pat::Ident(binding)] => &binding.id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let param = binding_key(param);
+        // A call that survives on the class still needs [[Call]].
+        if class_still_invokes(&class, &param) {
+            return None;
+        }
+        Some((binding_key(&owner.id), param))
+    }
+
+    fn try_convert(&self, var: &VarDecl) -> Option<ClassDecl> {
+        try_iife_to_class(
+            var,
+            &self.reused,
+            self.callability,
+            &self.helpers.inherits_helpers,
+            &self.helpers.tslib_namespaces,
+            &self.helpers.create_class_helpers,
+            &self.helpers.call_super_helpers,
+            &self.helpers.class_call_check_helpers,
+            &self.helpers.set_prototype_of_helpers,
+            &self.helpers.ts_extends_helpers,
+            self.inheritance,
+            self.unresolved_mark,
+            self.level,
+            var.span,
+        )
+    }
+
+    /// Nested `var` is function-scoped. Phase 2 recomputes duplicates per
+    /// function; a module-level scan never sees `var Child; var Child = IIFE`.
+    fn consider_var(&mut self, var: &VarDecl) {
+        if let Some((owner, param)) = self.recovered_super_param(var) {
+            self.pairs.push((owner, param));
+        }
+    }
+
+    /// Only a `var` that is itself an element of a statement list is recovered.
+    /// `label: var Child = ...` and a var under `if` stay calls.
+    fn consider_direct_stmt(&mut self, stmt: &Stmt) {
+        if let Stmt::Decl(Decl::Var(var)) = stmt {
+            self.consider_var(var);
+            var.visit_children_with(self);
+            return;
+        }
+        stmt.visit_children_with(self);
+    }
+
+    fn visit_nested_stmts(&mut self, stmts: &[Stmt]) {
+        let mut reused = reused_var_bindings_in_stmts(stmts);
+        reused.extend(self.reused.iter().cloned());
+        // Same merge as `UnEs6ClassInner::visit_mut_stmts`: a helper declared
+        // in this statement list is visible to class recovery here.
+        let mut helpers = Es6ClassHelperContext::from_stmts(stmts, self.unresolved_mark);
+        helpers.extend(&self.helpers);
+        let mut nested = ConsumedSuperFinder {
+            helpers,
+            callability: self.callability,
+            reused,
+            inheritance: self.inheritance,
+            unresolved_mark: self.unresolved_mark,
+            level: self.level,
+            pairs: Vec::new(),
+        };
+        for stmt in stmts {
+            nested.consider_direct_stmt(stmt);
+        }
+        self.pairs.append(&mut nested.pairs);
+    }
+}
+
+fn class_still_invokes(class: &ClassDecl, param: &BindingKey) -> bool {
+    struct Find<'a> {
+        param: &'a BindingKey,
+        found: bool,
+    }
+    impl Visit for Find<'_> {
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if ordinary_call_target(call).as_ref() == Some(self.param) {
+                self.found = true;
+                return;
+            }
+            if !self.found {
+                call.visit_children_with(self);
+            }
+        }
+    }
+    let mut find = Find {
+        param,
+        found: false,
+    };
+    class.visit_with(&mut find);
+    find.found
+}
+
+/// Facts are collected before argument-spread. Rewrite the shapes Phase 2
+/// flattens at this `level` into `recv.call(...)`, and leave the rest alone.
+fn normalize_super_call_apply(var: &mut VarDecl, level: RewriteLevel, unresolved_mark: Mark) {
+    struct Rewriter {
+        level: RewriteLevel,
+        rest_params: Vec<HashSet<BindingKey>>,
+    }
+    impl Rewriter {
+        fn push_rests(&mut self, pats: &[Pat]) {
+            let mut rests = HashSet::default();
+            for pat in pats {
+                if let Some(key) = rest_param_key(pat) {
+                    rests.insert(key);
+                }
+            }
+            self.rest_params.push(rests);
+        }
+    }
+    impl VisitMut for Rewriter {
+        fn visit_mut_function(&mut self, function: &mut Function) {
+            let pats = function
+                .params
+                .iter()
+                .map(|param| param.pat.clone())
+                .collect::<Vec<_>>();
+            self.push_rests(&pats);
+            function.visit_mut_children_with(self);
+            self.rest_params.pop();
+        }
+
+        fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
+            self.push_rests(&arrow.params);
+            arrow.visit_mut_children_with(self);
+            self.rest_params.pop();
+        }
+
+        fn visit_mut_expr(&mut self, expr: &mut Expr) {
+            expr.visit_mut_children_with(self);
+            let Expr::Call(call) = &mut *expr else {
+                return;
+            };
+            let Callee::Expr(callee) = &call.callee else {
+                return;
+            };
+            let Expr::Member(outer) = strip_parens(callee) else {
+                return;
+            };
+            if !matches!(&outer.prop, MemberProp::Ident(name) if name.sym.as_ref() == "apply") {
+                return;
+            }
+            let Expr::Member(inner) = strip_parens(&outer.obj) else {
+                return;
+            };
+            if !matches!(&inner.prop, MemberProp::Ident(name) if name.sym.as_ref() == "call") {
+                return;
+            }
+            if call.args.len() != 2 || call.args[1].spread.is_some() {
+                return;
+            }
+            let payload = call.args[1].expr.take();
+            let args = expand_apply_payload(payload.as_ref(), self.level, self.rest_params.last())
+                .unwrap_or_else(|| {
+                    vec![ExprOrSpread {
+                        spread: Some(DUMMY_SP),
+                        expr: payload,
+                    }]
+                });
+            let call_callee = inner.clone();
+            *expr = Expr::Call(CallExpr {
+                span: call.span,
+                ctxt: call.ctxt,
+                callee: Callee::Expr(Box::new(Expr::Member(call_callee))),
+                args,
+                type_args: None,
+            });
+        }
+    }
+    var.visit_mut_with(&mut Rewriter {
+        level,
+        rest_params: Vec::new(),
+    });
+    // Proven arrays (`arguments` copy loops, `var extra = [a, 1]`) are flattened
+    // by the same pass that runs immediately before class recovery.
+    let mut module = Module {
+        span: DUMMY_SP,
+        body: vec![ModuleItem::Stmt(Stmt::Decl(Decl::Var(Box::new(
+            var.clone(),
+        ))))],
+        shebang: None,
+    };
+    module.visit_mut_with(
+        &mut super::un_array_concat_spread::UnArrayConcatSpreadRest::new(unresolved_mark, level),
+    );
+    module.visit_mut_with(&mut super::un_spread_array_literal::UnSpreadArrayLiteral);
+    if let ModuleItem::Stmt(Stmt::Decl(Decl::Var(rewritten))) = module.body.remove(0) {
+        *var = *rewritten;
+    }
+}
+
+fn rest_param_key(pat: &Pat) -> Option<BindingKey> {
+    let Pat::Rest(rest) = pat else {
+        return None;
+    };
+    let Pat::Ident(binding) = rest.arg.as_ref() else {
+        return None;
+    };
+    Some(binding_key(&binding.id))
+}
+
+/// Payload of `recv.call.apply(recv, payload)` after the spread passes that
+/// run before class recovery.
+fn expand_apply_payload(
+    payload: &Expr,
+    level: RewriteLevel,
+    rest_params: Option<&HashSet<BindingKey>>,
+) -> Option<Vec<ExprOrSpread>> {
+    // `UnSpreadArrayLiteral`: `fn(...[this, a])` → `fn(this, a)`.
+    if let Expr::Array(array) = strip_parens(payload) {
+        let mut args = Vec::new();
+        for elem in &array.elems {
+            args.push(elem.as_ref()?.clone());
+        }
+        return Some(args);
+    }
+    expand_this_concat_spread(payload, level, rest_params)
+}
+
+/// `[this].concat(extra)` as the payload of `call.apply` is the Babel
+/// `super` spread. Phase 2 flattens a literal, a rest parameter, or — at
+/// Aggressive — any extra. A plain parameter stays a call.
+fn expand_this_concat_spread(
+    payload: &Expr,
+    level: RewriteLevel,
+    rest_params: Option<&HashSet<BindingKey>>,
+) -> Option<Vec<ExprOrSpread>> {
+    let Expr::Call(concat) = strip_parens(payload) else {
+        return None;
+    };
+    let Callee::Expr(callee) = &concat.callee else {
+        return None;
+    };
+    let Expr::Member(member) = strip_parens(callee) else {
+        return None;
+    };
+    if !matches!(&member.prop, MemberProp::Ident(name) if name.sym.as_ref() == "concat") {
+        return None;
+    }
+    let Expr::Array(array) = strip_parens(&member.obj) else {
+        return None;
+    };
+    let [this_elem] = array.elems.as_slice() else {
+        return None;
+    };
+    let this_elem = this_elem.as_ref()?;
+    if this_elem.spread.is_some() || !matches!(strip_parens(&this_elem.expr), Expr::This(_)) {
+        return None;
+    }
+    let mut args = vec![ExprOrSpread {
+        spread: None,
+        expr: Box::new(Expr::This(ThisExpr { span: DUMMY_SP })),
+    }];
+    if concat.args.len() != 1 {
+        return None;
+    }
+    match strip_parens(&concat.args[0].expr) {
+        Expr::Array(extra) if extra.elems.is_empty() => {}
+        Expr::Array(extra) => {
+            for elem in &extra.elems {
+                let elem = elem.as_ref()?;
+                args.push(elem.clone());
+            }
+        }
+        Expr::Ident(ident)
+            if rest_params.is_some_and(|rests| rests.contains(&binding_key(ident))) =>
+        {
+            args.push(ExprOrSpread {
+                spread: Some(DUMMY_SP),
+                expr: Box::new(Expr::Ident(ident.clone())),
+            });
+        }
+        // Aggressive concat-spread flattens an unproven extra. Standard does not,
+        // so a plain parameter stays `e.call(...[this].concat(n))`.
+        other if level >= RewriteLevel::Aggressive => {
+            args.push(ExprOrSpread {
+                spread: Some(DUMMY_SP),
+                expr: Box::new(other.clone()),
+            });
+        }
+        _ => return None,
+    }
+    Some(args)
+}
+
+impl Visit for ConsumedSuperFinder<'_> {
+    fn visit_module_item(&mut self, item: &ModuleItem) {
+        match item {
+            ModuleItem::Stmt(stmt) => self.consider_direct_stmt(stmt),
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
+                if let Decl::Var(var) = &export.decl {
+                    self.consider_var(var);
+                    var.visit_children_with(self);
+                } else {
+                    export.visit_children_with(self);
+                }
+            }
+            other => other.visit_children_with(self),
+        }
+    }
+
+    fn visit_function(&mut self, function: &Function) {
+        if let Some(body) = &function.body {
+            self.visit_nested_stmts(&body.stmts);
+        }
+    }
+
+    fn visit_arrow_expr(&mut self, arrow: &ArrowExpr) {
+        match arrow.body.as_ref() {
+            ArrowFunctionBody::FunctionBody(body) => self.visit_nested_stmts(&body.stmts),
+            ArrowFunctionBody::Expr(expr) => expr.visit_with(self),
+        }
+    }
+
+    fn visit_constructor(&mut self, constructor: &Constructor) {
+        if let Some(body) = &constructor.body {
+            self.visit_nested_stmts(&body.stmts);
+        }
+    }
+
+    fn visit_static_block(&mut self, block: &swc_core::ecma::ast::StaticBlock) {
+        self.visit_nested_stmts(&block.body.stmts);
+    }
+
+    fn visit_block_stmt(&mut self, block: &swc_core::ecma::ast::BlockStmt) {
+        self.visit_nested_stmts(&block.stmts);
+    }
+
+    fn visit_switch_stmt(&mut self, switch: &swc_core::ecma::ast::SwitchStmt) {
+        switch.discriminant.visit_with(self);
+        for case in &switch.cases {
+            if let Some(test) = &case.test {
+                test.visit_with(self);
+            }
+            // `case` consequents are a statement list `UnEs6Class` rewrites.
+            self.visit_nested_stmts(&case.cons);
+        }
+    }
+}
+
+fn is_use_strict_directive(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Expr(ExprStmt { expr, .. })
+        if matches!(strip_parens(expr), Expr::Lit(Lit::Str(value))
+            if value.value.as_str() == Some("use strict")))
+}
+
+/// Return true if `expr` is `t.prototype` where `t` is `ctor_name`.
+fn is_prototype_member_expr(expr: &Expr, ctor_name: &str) -> bool {
+    let Expr::Member(MemberExpr { obj, prop, .. }) = expr else {
+        return false;
+    };
+    let Expr::Ident(obj_id) = obj.as_ref() else {
+        return false;
+    };
+    if obj_id.sym.as_ref() != ctor_name {
+        return false;
+    }
+    matches!(prop, MemberProp::Ident(n) if n.sym.as_ref() == "prototype")
+}
+
+/// Return true if `expr` matches the proto alias identifier.
+fn is_proto_alias_expr(expr: &Expr, proto_alias: &Option<Atom>) -> bool {
+    let Some(alias) = proto_alias else {
+        return false;
+    };
+    matches!(expr, Expr::Ident(id) if &id.sym == alias)
+}
+
+/// Check if `expr` is `t.prototype = Object.create(...)`.
+fn is_prototype_object_create(expr: &Expr, ctor_name: &str, unresolved_mark: Mark) -> bool {
+    let Expr::Assign(assign) = expr else {
+        return false;
+    };
+    if assign.op != swc_core::ecma::ast::AssignOp::Assign {
+        return false;
+    }
+    let swc_core::ecma::ast::AssignTarget::Simple(swc_core::ecma::ast::SimpleAssignTarget::Member(
+        lhs,
+    )) = &assign.left
+    else {
+        return false;
+    };
+    // LHS: `t.prototype`
+    if !is_prototype_member_expr(
+        &Expr::Member(MemberExpr {
+            span: DUMMY_SP,
+            obj: lhs.obj.clone(),
+            prop: lhs.prop.clone(),
+        }),
+        ctor_name,
+    ) {
+        return false;
+    }
+    // RHS: `Object.create(...)`
+    let rhs = strip_parens(&assign.right);
+    let Expr::Call(call) = rhs else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    is_object_create_callee(callee, unresolved_mark)
+}
+
+/// Check if `expr` is `t.prototype.constructor = t`.
+fn is_prototype_constructor_assign(expr: &Expr, ctor_name: &str) -> bool {
+    let Expr::Assign(assign) = expr else {
+        return false;
+    };
+    if assign.op != swc_core::ecma::ast::AssignOp::Assign {
+        return false;
+    }
+    let swc_core::ecma::ast::AssignTarget::Simple(swc_core::ecma::ast::SimpleAssignTarget::Member(
+        lhs,
+    )) = &assign.left
+    else {
+        return false;
+    };
+    // LHS must be `t.prototype.constructor`
+    let Expr::Member(obj_member) = lhs.obj.as_ref() else {
+        return false;
+    };
+    if !is_prototype_member_expr(
+        &Expr::Member(MemberExpr {
+            span: DUMMY_SP,
+            obj: obj_member.obj.clone(),
+            prop: obj_member.prop.clone(),
+        }),
+        ctor_name,
+    ) {
+        return false;
+    }
+    if !matches!(&lhs.prop, MemberProp::Ident(n) if n.sym.as_ref() == "constructor") {
+        return false;
+    }
+    // RHS must be `t`
+    matches!(strip_parens(&assign.right), Expr::Ident(id) if id.sym.as_ref() == ctor_name)
+}
+
+/// Extract the property name for a **static** assignment `t.prop = ...`.
+/// Returns `Some(PropName)` if `obj` is the constructor ident and `prop` is a static method name
+/// (not `prototype`).
+fn extract_static_method_name(obj: &Expr, prop: &MemberProp, ctor_name: &str) -> Option<PropName> {
+    let Expr::Ident(obj_id) = obj else {
+        return None;
+    };
+    if obj_id.sym.as_ref() != ctor_name {
+        return None;
+    }
+    match prop {
+        MemberProp::Ident(name) => {
+            // Skip `t.prototype`
+            if name.sym.as_ref() == "prototype" {
+                return None;
+            }
+            Some(PropName::Ident(IdentName::new(name.sym.clone(), DUMMY_SP)))
+        }
+        MemberProp::Computed(c) => {
+            if let Expr::Lit(swc_core::ecma::ast::Lit::Str(s)) = strip_parens(&c.expr) {
+                Some(PropName::Str(swc_core::ecma::ast::Str {
+                    span: DUMMY_SP,
+                    value: s.value.clone(),
+                    raw: None,
+                }))
+            } else {
+                Some(PropName::Computed(ComputedPropName {
+                    span: DUMMY_SP,
+                    expr: c.expr.clone(),
+                }))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract the property name for a **prototype** assignment.
+///
+/// Handles:
+///   `t.prototype.method` where `obj` is `t.prototype`
+///   `proto.method` where `obj` is the proto alias
+fn extract_proto_method_name(
+    obj: &Expr,
+    prop: &MemberProp,
+    ctor_name: &str,
+    proto_alias: &Option<Atom>,
+) -> Option<PropName> {
+    let obj_is_proto =
+        is_prototype_member_expr(obj, ctor_name) || is_proto_alias_expr(obj, proto_alias);
+    if !obj_is_proto {
+        return None;
+    }
+    // Skip the constructor property
+    if matches!(prop, MemberProp::Ident(n) if n.sym.as_ref() == "constructor") {
+        return None;
+    }
+    match prop {
+        MemberProp::Ident(name) => {
+            Some(PropName::Ident(IdentName::new(name.sym.clone(), DUMMY_SP)))
+        }
+        MemberProp::Computed(c) => {
+            if let Expr::Lit(swc_core::ecma::ast::Lit::Str(s)) = strip_parens(&c.expr) {
+                Some(PropName::Str(swc_core::ecma::ast::Str {
+                    span: DUMMY_SP,
+                    value: s.value.clone(),
+                    raw: None,
+                }))
+            } else {
+                Some(PropName::Computed(ComputedPropName {
+                    span: DUMMY_SP,
+                    expr: c.expr.clone(),
+                }))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_object_define_property_callee(callee: &Callee, unresolved_mark: Mark) -> bool {
+    let Callee::Expr(expr) = callee else {
+        return false;
+    };
+    let Expr::Member(m) = strip_parens(expr) else {
+        return false;
+    };
+    let Expr::Ident(obj_id) = m.obj.as_ref() else {
+        return false;
+    };
+    if !is_unresolved_ident(obj_id, "Object", unresolved_mark) {
+        return false;
+    }
+    matches!(&m.prop, MemberProp::Ident(n) if n.sym.as_ref() == "defineProperty")
+}
+
+fn is_object_create_callee(expr: &Expr, unresolved_mark: Mark) -> bool {
+    let Expr::Member(m) = strip_parens(expr) else {
+        return false;
+    };
+    let Expr::Ident(obj_id) = m.obj.as_ref() else {
+        return false;
+    };
+    if !is_unresolved_ident(obj_id, "Object", unresolved_mark) {
+        return false;
+    }
+    matches!(&m.prop, MemberProp::Ident(n) if n.sym.as_ref() == "create")
+}
+
+/// Check `_super && (Object.setPrototypeOf ? Object.setPrototypeOf(t, _super) : t.__proto__ = _super)`.
+/// This is the inlined static prototype chain setup emitted by webpack4 instead of `_inherits`.
+fn is_set_prototype_of_chain_expr(expr: &Expr, super_param: &str, unresolved_mark: Mark) -> bool {
+    let Expr::Bin(bin) = expr else {
+        return false;
+    };
+    if bin.op != swc_core::ecma::ast::BinaryOp::LogicalAnd {
+        return false;
+    }
+    // Left must be the super param ident
+    if !matches!(strip_parens(&bin.left), Expr::Ident(id) if id.sym.as_ref() == super_param) {
+        return false;
+    }
+    // Right must be a conditional whose test is `Object.setPrototypeOf`
+    let Expr::Cond(cond) = strip_parens(&bin.right) else {
+        return false;
+    };
+    let Expr::Member(m) = strip_parens(&cond.test) else {
+        return false;
+    };
+    let Expr::Ident(obj_id) = m.obj.as_ref() else {
+        return false;
+    };
+    is_unresolved_ident(obj_id, "Object", unresolved_mark)
+        && matches!(&m.prop, MemberProp::Ident(n) if n.sym.as_ref() == "setPrototypeOf")
+}
+
+/// Check `if (typeof _super !== "function" && _super !== null) { throw ... }`.
+/// Detect inline IIFE `_inherits` pattern:
+/// ```js
+/// ((e, t) => {
+///     if (typeof t != "function" && t !== null) throw TypeError(...)
+///     e.prototype = Object.create(t && t.prototype, { constructor: ... })
+///     t && (Object.setPrototypeOf ? ... : ...)
+/// })(ctor, super)
+/// ```
+fn is_inline_inherits_iife(
+    stmt: &Stmt,
+    ctor_name: &str,
+    super_param: &str,
+    unresolved_mark: Mark,
+) -> bool {
+    let Stmt::Expr(ExprStmt { expr, .. }) = stmt else {
+        return false;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+
+    // Must have 2 args: (ctor, super)
+    if call.args.len() != 2 {
+        return false;
+    }
+    let arg0 = strip_parens(&call.args[0].expr);
+    let arg1 = strip_parens(&call.args[1].expr);
+    if !matches!(arg0, Expr::Ident(id) if id.sym.as_ref() == ctor_name) {
+        return false;
+    }
+    if !matches!(arg1, Expr::Ident(id) if id.sym.as_ref() == super_param) {
+        return false;
+    }
+
+    // Callee must be an arrow or function with 2 params
+    let inner = strip_parens(callee);
+    let body_stmts: &[Stmt] = match inner {
+        Expr::Arrow(arrow) => {
+            if arrow.params.len() != 2 {
+                return false;
+            }
+            match &*arrow.body {
+                ArrowFunctionBody::FunctionBody(block) => &block.stmts,
+                _ => return false,
+            }
+        }
+        Expr::Fn(fn_expr) => {
+            if fn_expr.function.params.len() != 2 {
+                return false;
+            }
+            match &fn_expr.function.body {
+                Some(block) => &block.stmts,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+
+    // Body should contain Object.create (prototype chain setup)
+    body_stmts
+        .iter()
+        .any(|s| stmt_has_object_create(s, unresolved_mark))
+}
+
+/// Check if a statement contains `Object.create(...)` call.
+fn stmt_has_object_create(stmt: &Stmt, unresolved_mark: Mark) -> bool {
+    use swc_core::ecma::visit::{Visit, VisitWith};
+
+    struct Finder {
+        found: bool,
+        unresolved_mark: Mark,
+    }
+    impl Visit for Finder {
+        fn visit_call_expr(&mut self, call: &CallExpr) {
+            if let Callee::Expr(callee) = &call.callee {
+                if let Expr::Member(member) = callee.as_ref() {
+                    if let Expr::Ident(obj) = member.obj.as_ref() {
+                        if is_unresolved_ident(obj, "Object", self.unresolved_mark) {
+                            if let MemberProp::Ident(prop) = &member.prop {
+                                if prop.sym.as_ref() == "create" {
+                                    self.found = true;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut finder = Finder {
+        found: false,
+        unresolved_mark,
+    };
+    stmt.visit_with(&mut finder);
+    finder.found
+}
+
+fn is_super_typecheck_if_stmt(stmt: &Stmt, super_param: &str) -> bool {
+    let Stmt::If(if_stmt) = stmt else {
+        return false;
+    };
+    let Expr::Bin(bin) = strip_parens(&if_stmt.test) else {
+        return false;
+    };
+    if bin.op != swc_core::ecma::ast::BinaryOp::LogicalAnd {
+        return false;
+    }
+    is_typeof_not_function(strip_parens(&bin.left), super_param)
+        && is_not_null_check(strip_parens(&bin.right), super_param)
+}
+
+/// Return true if `expr` is `typeof name !== "function"`.
+fn is_typeof_not_function(expr: &Expr, name: &str) -> bool {
+    let Expr::Bin(bin) = expr else {
+        return false;
+    };
+    if bin.op != swc_core::ecma::ast::BinaryOp::NotEqEq {
+        return false;
+    }
+    let Expr::Unary(u) = strip_parens(&bin.left) else {
+        return false;
+    };
+    if u.op != swc_core::ecma::ast::UnaryOp::TypeOf {
+        return false;
+    }
+    if !matches!(strip_parens(&u.arg), Expr::Ident(id) if id.sym.as_ref() == name) {
+        return false;
+    }
+    matches!(
+        strip_parens(&bin.right),
+        Expr::Lit(swc_core::ecma::ast::Lit::Str(s)) if s.value.as_str() == Some("function")
+    )
+}
+
+/// Return true if `expr` is `name !== null`.
+fn is_not_null_check(expr: &Expr, name: &str) -> bool {
+    let Expr::Bin(bin) = expr else {
+        return false;
+    };
+    if bin.op != swc_core::ecma::ast::BinaryOp::NotEqEq {
+        return false;
+    }
+    if !matches!(strip_parens(&bin.left), Expr::Ident(id) if id.sym.as_ref() == name) {
+        return false;
+    }
+    matches!(
+        strip_parens(&bin.right),
+        Expr::Lit(swc_core::ecma::ast::Lit::Null(_))
+    )
+}
+
+// ============================================================
+// Builder helpers
+// ============================================================
+
+/// Drop a classCallCheck whose second argument is the inner constructor.
+/// That reference would make recovery refuse a class whose outer name differs
+/// (`var Foo` / `function t`). Other calls stay. Returns whether one was
+/// dropped.
+fn strip_inner_ctor_class_call_checks(
+    members: &mut [ClassMember],
+    helpers: &HashSet<BindingKey>,
+    ctor: &BindingKey,
+) -> bool {
+    let mut stripped = false;
+    for member in members.iter_mut() {
+        let ClassMember::Constructor(constructor) = member else {
+            continue;
+        };
+        let Some(body) = constructor.body.as_mut() else {
+            continue;
+        };
+        let before = body.stmts.len();
+        body.stmts.retain(|stmt| {
+            class_call_check_target(stmt, |id| helpers.contains(&binding_key(id)))
+                .is_none_or(|target| binding_key(target) != *ctor)
+        });
+        stripped |= body.stmts.len() < before;
+    }
+    stripped
+}
+
+fn build_constructor(
+    function: &Function,
+    inner_ctor_name: &str,
+    super_param: Option<&str>,
+    call_super_helpers: &HashSet<BindingKey>,
+    unresolved_mark: Mark,
+) -> Option<Constructor> {
+    let mut body = function.body.clone()?;
+    let params: Vec<ParamOrTsParamProp> = function
+        .params
+        .iter()
+        .map(|p| {
+            ParamOrTsParamProp::Param(Param {
+                span: DUMMY_SP,
+                decorators: vec![],
+                pat: p.pat.clone(),
+            })
+        })
+        .collect();
+
+    if let Some(sp) = super_param {
+        // Unwrap inline _possibleConstructorReturn IIFEs before super rewriting
+        unwrap_inline_pcr_iife(&mut body);
+        // Rewrite `_callSuper(this, Ctor, args)` → `super(...args)` (Babel 7.24+)
+        let mut call_super_rw = CallSuperRewriter {
+            helpers: call_super_helpers,
+            bailed: false,
+        };
+        body.visit_mut_with(&mut call_super_rw);
+        if call_super_rw.bailed {
+            return None;
+        }
+        // Rewrite `superParam.call(this, ...)` → `super(...)` in the constructor body
+        body.visit_mut_with(&mut SuperCallRewriter {
+            super_param_name: sp,
+        });
+        // Rewrite `(ctor.__proto__ || Object.getPrototypeOf(ctor)).apply(this, arguments)` → `super(...arguments)`
+        // This pattern appears in inlined Babel classes where _inherits is baked in.
+        body.visit_mut_with(&mut ProtoGetPrototypeOfSuperRewriter { unresolved_mark });
+        // Simplify `super(...) || this` → `super(...)` — the `|| this` is dead code
+        // per ES6 spec (super() always returns `this` in derived constructors)
+        body.visit_mut_with(&mut SuperOrThisSimplifier);
+        // Split `(alias = super(...)).prop = value` into `alias = super(...); alias.prop = value`
+        // so that cleanup_super_aliases can detect the alias pattern.
+        split_assign_prop_chains(&mut body);
+        // Clean up super() aliases: in `n = r = super()`, both n and r are `this`.
+        // Replace references with `this`, remove var decls and trailing `return alias`.
+        cleanup_super_aliases(&mut body);
+        remove_constructor_set_prototype_of_this(&mut body, inner_ctor_name, unresolved_mark);
+        // Strip `return super(...)` → `super(...)` (constructors return implicitly)
+        strip_return_super(&mut body);
+    }
+
+    let ctor_span = if function.span.lo.0 != 0 {
+        function.span
+    } else {
+        DUMMY_SP
+    };
+    Some(Constructor {
+        span: ctor_span,
+        ctxt: Default::default(),
+        key: PropName::Ident(IdentName::new("constructor".into(), DUMMY_SP)),
+        params,
+        body: Some(body),
+        accessibility: None,
+        is_optional: false,
+    })
+}
+
+/// Detect and unwrap inline `_possibleConstructorReturn` IIFEs in constructor bodies.
+///
+/// Pattern:
+/// ```js
+/// return (function(e, t) {
+///     if (!e) throw new ReferenceError("...");
+///     return !t || ... ? e : t;
+/// })(this, superCall);
+/// ```
+/// or the arrow variant: `((e, t) => { ... })(this, superCall)`
+///
+/// Replaced with: `return superCall`
+fn unwrap_inline_pcr_iife(body: &mut FunctionBody) {
+    for stmt in body.stmts.iter_mut() {
+        // Handle `return pcrIIFE(this, expr)` → `return expr`
+        if let Stmt::Return(ret) = stmt {
+            if let Some(arg) = &mut ret.arg {
+                if let Some(unwrapped) = try_unwrap_pcr_expr(arg) {
+                    **arg = unwrapped;
+                }
+            }
+        }
+        // Handle `pcrIIFE(this, expr)` as expression statement → `expr`
+        if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
+            if let Some(unwrapped) = try_unwrap_pcr_expr(expr) {
+                **expr = unwrapped;
+            }
+        }
+    }
+}
+
+/// Try to unwrap an expression if it's an inline PCR IIFE call.
+/// Also handles comma expressions like `classCallCheck(this, t), pcrIIFE(this, expr)`.
+fn try_unwrap_pcr_expr(expr: &Expr) -> Option<Expr> {
+    // Handle comma/sequence expression: `a, b` — check the last element
+    if let Expr::Seq(seq) = expr {
+        if let Some(last) = seq.exprs.last() {
+            if let Some(unwrapped) = try_unwrap_pcr_call(last) {
+                return Some(unwrapped);
+            }
+        }
+        return None;
+    }
+    try_unwrap_pcr_call(expr)
+}
+
+/// Check if expr is an IIFE call matching the _possibleConstructorReturn body shape,
+/// and return the second argument if so.
+fn try_unwrap_pcr_call(expr: &Expr) -> Option<Expr> {
+    let Expr::Call(call) = expr else { return None };
+    let Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let inner = strip_parens(callee);
+
+    // Must have exactly 2 args: (this, superCall)
+    if call.args.len() != 2 {
+        return None;
+    }
+    // First arg must be `this`
+    if !matches!(strip_parens(&call.args[0].expr), Expr::This(..)) {
+        return None;
+    }
+
+    // Extract params and body from the callee (function or arrow)
+    let (params, body_stmts): (Vec<&Pat>, &[Stmt]) = match inner {
+        Expr::Fn(fn_expr) => {
+            let body = fn_expr.function.body.as_ref()?;
+            let pats: Vec<&Pat> = fn_expr.function.params.iter().map(|p| &p.pat).collect();
+            (pats, &body.stmts)
+        }
+        Expr::Arrow(arrow) => {
+            let ArrowFunctionBody::FunctionBody(block) = &*arrow.body else {
+                return None;
+            };
+            let pats: Vec<&Pat> = arrow.params.iter().collect();
+            (pats, &block.stmts)
+        }
+        _ => return None,
+    };
+
+    // Must have 2 params
+    if params.len() != 2 {
+        return None;
+    }
+    let Pat::Ident(param1) = params[0] else {
+        return None;
+    };
+
+    // First statement must be `if (!param1) throw new ReferenceError(...)`
+    if body_stmts.is_empty() {
+        return None;
+    }
+    if !is_pcr_guard_stmt(&body_stmts[0], &param1.id.sym) {
+        return None;
+    }
+
+    // Matches! Return the second argument (the super call)
+    Some(*call.args[1].expr.clone())
+}
+
+/// Check if a statement matches `if (!param) throw new ReferenceError(...)`.
+/// Requires the throw to construct a `ReferenceError` specifically to avoid
+/// false-positives on other guard-shaped inline functions.
+fn is_pcr_guard_stmt(stmt: &Stmt, param_name: &str) -> bool {
+    let Stmt::If(if_stmt) = stmt else {
+        return false;
+    };
+    let Expr::Unary(unary) = if_stmt.test.as_ref() else {
+        return false;
+    };
+    if unary.op != swc_core::ecma::ast::UnaryOp::Bang {
+        return false;
+    }
+    if !matches!(strip_parens(&unary.arg), Expr::Ident(id) if id.sym.as_ref() == param_name) {
+        return false;
+    }
+    // Consequent should throw ReferenceError (block or direct)
+    let throw_expr = match if_stmt.cons.as_ref() {
+        Stmt::Throw(t) => Some(&t.arg),
+        Stmt::Block(block) if block.stmts.len() == 1 => {
+            if let Stmt::Throw(t) = &block.stmts[0] {
+                Some(&t.arg)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let Some(throw_arg) = throw_expr else {
+        return false;
+    };
+    is_new_reference_error(throw_arg)
+}
+
+/// Check if an expression is `new ReferenceError(...)`.
+fn is_new_reference_error(expr: &Expr) -> bool {
+    let Expr::New(new_expr) = strip_parens(expr) else {
+        return false;
+    };
+    matches!(strip_parens(&new_expr.callee), Expr::Ident(id) if id.sym.as_ref() == "ReferenceError")
+}
+
+/// Strip `return super(...)` at the end of a constructor body → `super(...)` as expr stmt.
+/// In derived constructors, `return super()` is unnecessary; super() implicitly returns this.
+fn strip_return_super(body: &mut FunctionBody) {
+    if let Some(Stmt::Return(ret)) = body.stmts.last() {
+        if let Some(arg) = &ret.arg {
+            if is_super_call(arg) {
+                let super_call = arg.clone();
+                let len = body.stmts.len();
+                body.stmts[len - 1] = Stmt::Expr(ExprStmt {
+                    span: DUMMY_SP,
+                    expr: super_call,
+                });
+            }
+        }
+    }
+}
+
+/// Split `(alias = super(...)).prop = value` into two statements:
+///   `alias = super(...);`
+///   `alias.prop = value;`
+///
+/// Babel minifiers produce `(o = super()).x = 1, o.y = 2, ...` where the assignment
+/// and property access are fused. Splitting allows `cleanup_super_aliases` to detect
+/// the alias and replace `o.x` with `this.x`.
+fn split_assign_prop_chains(body: &mut FunctionBody) {
+    let mut new_stmts = Vec::with_capacity(body.stmts.len());
+    for stmt in std::mem::take(&mut body.stmts) {
+        if let Stmt::Expr(ExprStmt { expr, span }) = &stmt {
+            if let Some((assign_stmt, prop_stmt)) = try_split_assign_prop(expr, *span) {
+                new_stmts.push(assign_stmt);
+                new_stmts.push(prop_stmt);
+                continue;
+            }
+        }
+        new_stmts.push(stmt);
+    }
+    body.stmts = new_stmts;
+}
+
+/// Try to split `(alias = super(...)).prop = value` into two statements.
+fn try_split_assign_prop(expr: &Expr, span: swc_core::common::Span) -> Option<(Stmt, Stmt)> {
+    let Expr::Assign(outer) = expr else {
+        return None;
+    };
+    if outer.op != AssignOp::Assign {
+        return None;
+    }
+
+    // LHS must be a member expression whose object is a paren-wrapped assignment
+    let AssignTarget::Simple(SimpleAssignTarget::Member(member)) = &outer.left else {
+        return None;
+    };
+
+    let obj = strip_parens(&member.obj);
+    let Expr::Assign(inner) = obj else {
+        return None;
+    };
+    if inner.op != AssignOp::Assign {
+        return None;
+    }
+
+    // The inner RHS must be a super call
+    if !is_super_call(&inner.right) {
+        return None;
+    }
+
+    // Extract the alias ident
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(alias)) = &inner.left else {
+        return None;
+    };
+
+    // Statement 1: alias = super(...)
+    let assign_stmt = Stmt::Expr(ExprStmt {
+        span,
+        expr: Box::new(Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: AssignOp::Assign,
+            left: inner.left.clone(),
+            right: inner.right.clone(),
+        })),
+    });
+
+    // Statement 2: alias.prop = value
+    let prop_stmt = Stmt::Expr(ExprStmt {
+        span,
+        expr: Box::new(Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: outer.op,
+            left: AssignTarget::Simple(SimpleAssignTarget::Member(MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(Expr::Ident(Ident::new(
+                    alias.sym.clone(),
+                    DUMMY_SP,
+                    alias.ctxt,
+                ))),
+                prop: member.prop.clone(),
+            })),
+            right: outer.right.clone(),
+        })),
+    });
+
+    Some((assign_stmt, prop_stmt))
+}
+
+/// Simplifies `super(...) || this` → `super(...)` in constructor bodies.
+/// In ES6, super() in a derived constructor always returns `this`, so the
+/// `|| this` fallback is dead code. Removing it allows cleanup_super_aliases
+/// to recognize the pattern.
+struct SuperOrThisSimplifier;
+
+impl VisitMut for SuperOrThisSimplifier {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Bin(bin) = expr else { return };
+        if bin.op != swc_core::ecma::ast::BinaryOp::LogicalOr {
+            return;
+        }
+        if !is_super_call(&bin.left) {
+            return;
+        }
+        if !matches!(*bin.right, Expr::This(..)) {
+            return;
+        }
+        // Replace `super(...) || this` with just `super(...)`
+        *expr = *bin.left.take();
+    }
+
+    // Don't descend into nested functions/arrows
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+    fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+}
+
+/// Rewrites `superParam.call(this, args...)` → `super(args...)`
+/// and `superParam.apply(this, arguments)` → `super(...arguments)` in constructor bodies.
+struct SuperCallRewriter<'a> {
+    super_param_name: &'a str,
+}
+
+impl VisitMut for SuperCallRewriter<'_> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Call(call) = expr else { return };
+        let Callee::Expr(callee) = &call.callee else {
+            return;
+        };
+        let Expr::Member(member) = callee.as_ref() else {
+            return;
+        };
+
+        // Check: superParam.call or superParam.apply
+        let Expr::Ident(obj_id) = member.obj.as_ref() else {
+            return;
+        };
+        if obj_id.sym.as_ref() != self.super_param_name {
+            return;
+        }
+        let MemberProp::Ident(prop) = &member.prop else {
+            return;
+        };
+
+        match prop.sym.as_ref() {
+            "call" => {
+                // Must have at least 1 arg (the `this` arg)
+                if call.args.is_empty() {
+                    return;
+                }
+                // First arg should be `this` — skip it, rest become super() args
+                if !matches!(call.args[0].expr.as_ref(), Expr::This(..)) {
+                    return;
+                }
+                let super_args: Vec<ExprOrSpread> = call.args[1..].to_vec();
+                *expr = Expr::Call(CallExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    callee: Callee::Super(swc_core::ecma::ast::Super { span: DUMMY_SP }),
+                    args: super_args,
+                    type_args: None,
+                });
+            }
+            "apply" => {
+                // e.apply(this, arguments) → super(...arguments)
+                // Only handle when second arg is `arguments` — other values like
+                // null/undefined have different semantics with .apply vs spread.
+                if call.args.len() != 2 {
+                    return;
+                }
+                if !matches!(call.args[0].expr.as_ref(), Expr::This(..)) {
+                    return;
+                }
+                // Second arg must be `arguments` or an array literal for safe conversion
+                let second = strip_parens(&call.args[1].expr);
+                let is_safe = matches!(second, Expr::Ident(id) if id.sym.as_ref() == "arguments")
+                    || matches!(second, Expr::Array(_));
+                if !is_safe {
+                    return;
+                }
+                // Second arg becomes a spread argument to super()
+                let spread_arg = ExprOrSpread {
+                    spread: Some(DUMMY_SP),
+                    expr: call.args[1].expr.take(),
+                };
+                *expr = Expr::Call(CallExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    callee: Callee::Super(swc_core::ecma::ast::Super { span: DUMMY_SP }),
+                    args: vec![spread_arg],
+                    type_args: None,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+
+    fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+
+    fn visit_mut_class(&mut self, _: &mut Class) {}
+}
+
+/// Rewrite `_callSuper(this, Ctor, args)` → `super(...args)` (Babel 7.24+ helper).
+///
+/// Handles:
+/// - `_callSuper(this, Foo, arguments)` → `super(...arguments)`
+/// - `_callSuper(this, Foo, [a, b])` → `super(a, b)`
+/// - `_callSuper(this, Foo)` → `super()`
+///
+/// Sets `bailed = true` if a call is detected but cannot be safely rewritten.
+struct CallSuperRewriter<'a> {
+    helpers: &'a HashSet<BindingKey>,
+    bailed: bool,
+}
+
+impl VisitMut for CallSuperRewriter<'_> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Call(call) = expr else { return };
+        let Callee::Expr(callee) = &call.callee else {
+            return;
+        };
+        let Expr::Ident(fn_name) = strip_parens(callee) else {
+            return;
+        };
+        if !self.helpers.contains(&binding_key(fn_name)) {
+            return;
+        }
+        // _callSuper(this, Ctor) or _callSuper(this, Ctor, argsExpr)
+        if call.args.len() < 2 || call.args.len() > 3 {
+            return;
+        }
+        // First arg must be `this`
+        if !matches!(strip_parens(&call.args[0].expr), Expr::This(..)) {
+            return;
+        }
+
+        let super_args = if call.args.len() == 3 {
+            let third = strip_parens(&call.args[2].expr);
+            match third {
+                // _callSuper(this, Foo, arguments) → super(...arguments)
+                Expr::Ident(id) if id.sym.as_ref() == "arguments" => {
+                    vec![ExprOrSpread {
+                        spread: Some(DUMMY_SP),
+                        expr: call.args[2].expr.take(),
+                    }]
+                }
+                // _callSuper(this, Foo, [a, b]) → super(a, b)
+                Expr::Array(arr) => arr
+                    .elems
+                    .iter()
+                    .filter_map(|e| {
+                        e.as_ref().map(|el| ExprOrSpread {
+                            spread: el.spread,
+                            expr: el.expr.clone(),
+                        })
+                    })
+                    .collect(),
+                // Unknown expression — unsafe to spread (Babel does `e || []`)
+                _ => {
+                    self.bailed = true;
+                    return;
+                }
+            }
+        } else {
+            // _callSuper(this, Foo) → super()
+            vec![]
+        };
+
+        *expr = Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            callee: Callee::Super(swc_core::ecma::ast::Super { span: DUMMY_SP }),
+            args: super_args,
+            type_args: None,
+        });
+    }
+
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+    fn visit_mut_arrow_expr(&mut self, _: &mut ArrowExpr) {}
+    fn visit_mut_class(&mut self, _: &mut Class) {}
+}
+
+/// Rewrite `(X.__proto__ || Object.getPrototypeOf(X)).apply(this, arguments)` → `super(...arguments)`
+/// and `(X.__proto__ || Object.getPrototypeOf(X)).call(this, ...)` → `super(...)`
+///
+/// This pattern appears in inlined Babel classes where `_inherits` is called inline
+/// rather than via a separate helper function.
+struct ProtoGetPrototypeOfSuperRewriter {
+    unresolved_mark: Mark,
+}
+
+impl VisitMut for ProtoGetPrototypeOfSuperRewriter {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        let Expr::Call(call) = expr else { return };
+        let Callee::Expr(callee) = &call.callee else {
+            return;
+        };
+        let Expr::Member(member) = callee.as_ref() else {
+            return;
+        };
+        let MemberProp::Ident(prop) = &member.prop else {
+            return;
+        };
+
+        // Object must be `(X.__proto__ || Object.getPrototypeOf(X))`
+        if !is_proto_or_get_prototype_of(strip_parens(&member.obj), self.unresolved_mark) {
+            return;
+        }
+
+        match prop.sym.as_ref() {
+            "apply" => {
+                if call.args.len() != 2 {
+                    return;
+                }
+                if !matches!(call.args[0].expr.as_ref(), Expr::This(..)) {
+                    return;
+                }
+                let second = strip_parens(&call.args[1].expr);
+                let is_safe = matches!(second, Expr::Ident(id) if id.sym.as_ref() == "arguments")
+                    || matches!(second, Expr::Array(_));
+                if !is_safe {
+                    return;
+                }
+                let spread_arg = ExprOrSpread {
+                    spread: Some(DUMMY_SP),
+                    expr: call.args[1].expr.take(),
+                };
+                *expr = Expr::Call(CallExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    callee: Callee::Super(swc_core::ecma::ast::Super { span: DUMMY_SP }),
+                    args: vec![spread_arg],
+                    type_args: None,
+                });
+            }
+            "call" => {
+                if call.args.is_empty() {
+                    return;
+                }
+                if !matches!(call.args[0].expr.as_ref(), Expr::This(..)) {
+                    return;
+                }
+                let super_args: Vec<ExprOrSpread> = call.args[1..].to_vec();
+                *expr = Expr::Call(CallExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    callee: Callee::Super(swc_core::ecma::ast::Super { span: DUMMY_SP }),
+                    args: super_args,
+                    type_args: None,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Check if an expression is `(X.__proto__ || Object.getPrototypeOf(X))`.
+fn is_proto_or_get_prototype_of(expr: &Expr, unresolved_mark: Mark) -> bool {
+    match expr {
+        Expr::Bin(bin) if bin.op == swc_core::ecma::ast::BinaryOp::LogicalOr => {
+            // Left: `X.__proto__`
+            if let Expr::Member(m) = strip_parens(&bin.left) {
+                if let MemberProp::Ident(p) = &m.prop {
+                    if p.sym.as_ref() == "__proto__" {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        Expr::Call(call) => {
+            // `Object.getPrototypeOf(X)`
+            if let Callee::Expr(callee) = &call.callee {
+                if let Expr::Member(m) = callee.as_ref() {
+                    if let (Expr::Ident(obj), MemberProp::Ident(prop)) = (m.obj.as_ref(), &m.prop) {
+                        return is_unresolved_ident(obj, "Object", unresolved_mark)
+                            && prop.sym.as_ref() == "getPrototypeOf";
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// In a derived constructor, `super()` returns `this`. Clean up:
+/// - `var r = super(...)` → `super(...)`; mark `r` as this-alias
+/// - `n = r = super(...)` → `super(...)`; mark both as this-aliases
+/// - Replace references to aliases with `this` where `this` is the
+///   constructor's: the body and any arrow nested in it
+/// - Remove `var` declarations for aliases
+/// - Remove trailing `return alias`
+///
+/// A reference inside a plain `function` or a class has its own `this`, so it
+/// cannot be rewritten. The alias is then re-declared as `var alias = this`
+/// right after the `super(...)` statement, which preserves the transpiled
+/// semantics: the alias is `undefined` while `super()` runs and `this` after.
+/// Aliases declared with anything other than `var` fail closed and stay as
+/// they are.
+fn cleanup_super_aliases(body: &mut FunctionBody) {
+    // Pass 1: Find super() call statements and collect aliases
+    let mut aliases: HashSet<BindingKey> = HashSet::default();
+    let mut var_declared: HashSet<BindingKey> = HashSet::default();
+    for stmt in body.stmts.iter() {
+        // Pattern: `var r = super(...)` as a var decl
+        if let Stmt::Decl(Decl::Var(var)) = stmt {
+            for decl in &var.decls {
+                if let Pat::Ident(bi) = &decl.name {
+                    if var.kind == VarDeclKind::Var {
+                        var_declared.insert(binding_key(&bi.id));
+                    }
+                    if decl.init.as_deref().is_some_and(is_super_call) {
+                        aliases.insert(binding_key(&bi.id));
+                    }
+                }
+            }
+        }
+
+        // Pattern: `n = r = super(...)` or `r = super(...)` as expr stmt
+        if let Stmt::Expr(ExprStmt { expr, .. }) = stmt {
+            collect_assign_chain_aliases(expr, &mut aliases);
+        }
+    }
+
+    if aliases.is_empty() {
+        return;
+    }
+
+    // Aliases read from a scope with its own `this` must stay declared.
+    let mut escape_scan = EscapingAliasScan {
+        aliases: &aliases,
+        other_this_depth: 0,
+        escaping: Vec::new(),
+    };
+    body.visit_with(&mut escape_scan);
+    let escaping = escape_scan.escaping;
+    for alias in &escaping {
+        if !var_declared.contains(alias) {
+            aliases.remove(alias);
+        }
+    }
+    let escaping: Vec<BindingKey> = escaping
+        .into_iter()
+        .filter(|alias| aliases.contains(alias))
+        .collect();
+    if aliases.is_empty() {
+        return;
+    }
+
+    // Pass 2: Rewrite alias references → `this`
+    body.visit_mut_with(&mut AliasToThisRewriter { aliases: &aliases });
+
+    // Pass 3: Rewrite statements — remove alias decls, simplify assign chains,
+    // replace alias references with `this`, remove trailing `return alias`.
+    let mut new_stmts = Vec::with_capacity(body.stmts.len());
+    for stmt in std::mem::take(&mut body.stmts) {
+        match stmt {
+            // `var n;` (bare alias) → drop
+            // `var r = super(...)` → keep `super(...)` as expr stmt
+            Stmt::Decl(Decl::Var(mut var)) => {
+                let mut keep_decls = Vec::new();
+                for d in std::mem::take(&mut var.decls) {
+                    let Pat::Ident(ref bi) = d.name else {
+                        keep_decls.push(d);
+                        continue;
+                    };
+                    if !aliases.contains(&binding_key(&bi.id)) {
+                        keep_decls.push(d);
+                        continue;
+                    }
+                    // Alias decl: extract super() call as statement if present
+                    if let Some(init) = &d.init {
+                        if is_super_call(init) {
+                            new_stmts.push(Stmt::Expr(ExprStmt {
+                                span: DUMMY_SP,
+                                expr: init.clone(),
+                            }));
+                        }
+                    }
+                    // Drop the var declarator
+                }
+                if !keep_decls.is_empty() {
+                    var.decls = keep_decls;
+                    new_stmts.push(Stmt::Decl(Decl::Var(var)));
+                }
+            }
+            // `n = r = super(...)` → `super(...)`
+            Stmt::Expr(ExprStmt { ref expr, span }) => {
+                if let Some(super_call) = extract_super_from_assign_chain(expr, &aliases) {
+                    new_stmts.push(Stmt::Expr(ExprStmt {
+                        expr: Box::new(super_call),
+                        span,
+                    }));
+                } else {
+                    new_stmts.push(stmt);
+                }
+            }
+            // `return alias` → drop (constructor implicitly returns this)
+            Stmt::Return(ref ret) => {
+                let should_drop = ret.arg.as_ref().is_some_and(|arg| {
+                    matches!(arg.as_ref(), Expr::Ident(id) if aliases.contains(&binding_key(id)))
+                        || matches!(arg.as_ref(), Expr::This(..))
+                });
+                if !should_drop {
+                    new_stmts.push(stmt);
+                }
+            }
+            other => new_stmts.push(other),
+        }
+    }
+
+    if !escaping.is_empty() {
+        let super_index = new_stmts.iter().position(
+            |stmt| matches!(stmt, Stmt::Expr(ExprStmt { expr, .. }) if is_super_call(expr)),
+        );
+        if let Some(index) = super_index {
+            let decls = escaping
+                .iter()
+                .map(|(sym, ctxt)| VarDeclarator {
+                    span: DUMMY_SP,
+                    name: Pat::Ident(BindingIdent {
+                        id: Ident::new(sym.clone(), DUMMY_SP, *ctxt),
+                        type_ann: None,
+                    }),
+                    init: Some(Box::new(Expr::This(ThisExpr { span: DUMMY_SP }))),
+                    definite: false,
+                })
+                .collect();
+            new_stmts.insert(
+                index + 1,
+                Stmt::Decl(Decl::Var(Box::new(VarDecl {
+                    span: DUMMY_SP,
+                    ctxt: SyntaxContext::empty(),
+                    kind: VarDeclKind::Var,
+                    declare: false,
+                    decls,
+                }))),
+            );
+        }
+    }
+    body.stmts = new_stmts;
+}
+
+/// Alias references inside a plain function or a class body: those scopes
+/// have their own `this`, so the reference cannot become `this`.
+struct EscapingAliasScan<'a> {
+    aliases: &'a HashSet<BindingKey>,
+    other_this_depth: usize,
+    escaping: Vec<BindingKey>,
+}
+
+impl Visit for EscapingAliasScan<'_> {
+    fn visit_ident(&mut self, ident: &Ident) {
+        if self.other_this_depth == 0 {
+            return;
+        }
+        let id = binding_key(ident);
+        if self.aliases.contains(&id) && !self.escaping.contains(&id) {
+            self.escaping.push(id);
+        }
+    }
+
+    fn visit_function(&mut self, function: &Function) {
+        self.other_this_depth += 1;
+        function.visit_children_with(self);
+        self.other_this_depth -= 1;
+    }
+
+    fn visit_class(&mut self, class: &Class) {
+        self.other_this_depth += 1;
+        class.visit_children_with(self);
+        self.other_this_depth -= 1;
+    }
+}
+
+fn remove_constructor_set_prototype_of_this(
+    body: &mut FunctionBody,
+    inner_ctor_name: &str,
+    unresolved_mark: Mark,
+) {
+    body.stmts.retain(|stmt| {
+        !matches!(
+            stmt,
+            Stmt::Expr(ExprStmt { expr, .. })
+                if is_set_prototype_of_this_to_ctor_prototype(
+                    expr,
+                    inner_ctor_name,
+                    unresolved_mark,
+                )
+        )
+    });
+}
+
+fn is_set_prototype_of_this_to_ctor_prototype(
+    expr: &Expr,
+    inner_ctor_name: &str,
+    unresolved_mark: Mark,
+) -> bool {
+    let Expr::Call(call) = strip_parens(expr) else {
+        return false;
+    };
+    let Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    if !is_object_set_prototype_of(callee, unresolved_mark) {
+        return false;
+    }
+    if call.args.len() != 2 || call.args.iter().any(|arg| arg.spread.is_some()) {
+        return false;
+    }
+    if !matches!(strip_parens(&call.args[0].expr), Expr::This(..)) {
+        return false;
+    }
+    is_ctor_prototype_expr(&call.args[1].expr, inner_ctor_name)
+}
+
+fn is_object_set_prototype_of(expr: &Expr, unresolved_mark: Mark) -> bool {
+    let Expr::Member(member) = strip_parens(expr) else {
+        return false;
+    };
+    let Expr::Ident(obj) = member.obj.as_ref() else {
+        return false;
+    };
+    is_unresolved_ident(obj, "Object", unresolved_mark)
+        && matches!(&member.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == "setPrototypeOf")
+}
+
+fn is_ctor_prototype_expr(expr: &Expr, inner_ctor_name: &str) -> bool {
+    let Expr::Member(member) = strip_parens(expr) else {
+        return false;
+    };
+    let Expr::Ident(obj) = member.obj.as_ref() else {
+        return false;
+    };
+    obj.sym.as_ref() == inner_ctor_name
+        && matches!(&member.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == "prototype")
+}
+
+fn is_super_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call(call) if matches!(call.callee, Callee::Super(..)))
+}
+
+/// Walk an assignment chain like `n = r = super()` and collect all LHS idents as aliases.
+fn collect_assign_chain_aliases(expr: &Expr, aliases: &mut HashSet<BindingKey>) {
+    let Expr::Assign(assign) = expr else { return };
+    if assign.op != AssignOp::Assign {
+        return;
+    }
+
+    // Check if the RHS is super() or another assignment chain ending in super()
+    let rhs_is_super = is_super_call(&assign.right)
+        || matches!(assign.right.as_ref(), Expr::Assign(_) if {
+            let mut inner_aliases = HashSet::default();
+            collect_assign_chain_aliases(&assign.right, &mut inner_aliases);
+            !inner_aliases.is_empty()
+        });
+
+    if rhs_is_super {
+        if let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left {
+            aliases.insert(binding_key(&id.id));
+        }
+        // Recurse into RHS for chained assigns
+        collect_assign_chain_aliases(&assign.right, aliases);
+    }
+}
+
+/// Extract the super() call from an assignment chain like `n = r = super(...)`.
+/// Returns Some(super_call_expr) if all LHS idents are known aliases, None otherwise.
+fn extract_super_from_assign_chain(expr: &Expr, aliases: &HashSet<BindingKey>) -> Option<Expr> {
+    let Expr::Assign(assign) = expr else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+
+    // LHS must be an alias
+    let is_alias_lhs = matches!(
+        &assign.left,
+        AssignTarget::Simple(SimpleAssignTarget::Ident(id)) if aliases.contains(&binding_key(&id.id))
+    );
+    if !is_alias_lhs {
+        return None;
+    }
+
+    // RHS is super() → return super()
+    if is_super_call(&assign.right) {
+        return Some(*assign.right.clone());
+    }
+
+    // RHS is another alias = super() chain → recurse
+    extract_super_from_assign_chain(&assign.right, aliases)
+}
+
+struct AliasToThisRewriter<'a> {
+    aliases: &'a HashSet<BindingKey>,
+}
+
+impl VisitMut for AliasToThisRewriter<'_> {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        expr.visit_mut_children_with(self);
+
+        if let Expr::Ident(id) = expr {
+            if self.aliases.contains(&binding_key(id)) {
+                *expr = Expr::This(ThisExpr { span: DUMMY_SP });
+            }
+        }
+    }
+
+    // Arrows share the constructor's `this`; plain functions and classes do
+    // not, and their alias references are handled by `EscapingAliasScan`.
+    fn visit_mut_function(&mut self, _: &mut Function) {}
+    fn visit_mut_class(&mut self, _: &mut Class) {}
+}
+
+/// Returns true if the constructor is empty or is the default derived constructor
+/// (`constructor() { super(...arguments); }` or `constructor(...args) { super(...args); }`).
+/// These are equivalent to omitting the constructor entirely.
+fn is_default_constructor(ctor: &Constructor) -> bool {
+    let Some(body) = &ctor.body else { return true };
+    if body.stmts.is_empty() {
+        return true;
+    }
+    // Must have no parameters (Babel default ctor pattern uses `arguments`)
+    // OR a single rest parameter that matches the super call's spread arg
+    if body.stmts.len() != 1 {
+        return false;
+    }
+    let Stmt::Expr(ExprStmt { expr, .. }) = &body.stmts[0] else {
+        return false;
+    };
+    let Expr::Call(call) = expr.as_ref() else {
+        return false;
+    };
+    // Must be super(...)
+    if !matches!(&call.callee, Callee::Super(_)) {
+        return false;
+    }
+    // super() with no params — default for parameterless constructors
+    if call.args.is_empty() && ctor.params.is_empty() {
+        return true;
+    }
+    // super(...arguments) with no declared params
+    if call.args.len() == 1 && ctor.params.is_empty() {
+        let arg = &call.args[0];
+        if arg.spread.is_some() {
+            if let Expr::Ident(id) = arg.expr.as_ref() {
+                return id.sym.as_ref() == "arguments";
+            }
+        }
+    }
+    // constructor(...args) { super(...args); } — rest param forwarded to super
+    if call.args.len() == 1 && ctor.params.len() == 1 {
+        let arg = &call.args[0];
+        if arg.spread.is_some() {
+            if let Expr::Ident(arg_id) = arg.expr.as_ref() {
+                if let ParamOrTsParamProp::Param(param) = &ctor.params[0] {
+                    if let Pat::Rest(rest) = &param.pat {
+                        if let Pat::Ident(bind) = rest.arg.as_ref() {
+                            return bind.id.sym == arg_id.sym;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn build_class_method(
+    key: PropName,
+    fn_expr: &FnExpr,
+    is_static: bool,
+    kind: MethodKind,
+) -> ClassMethod {
+    build_class_method_from_function(key, &fn_expr.function, is_static, kind)
+}
+
+fn build_class_method_from_function(
+    key: PropName,
+    source: &Function,
+    is_static: bool,
+    kind: MethodKind,
+) -> ClassMethod {
+    let method_span = if source.span.lo.0 != 0 {
+        source.span
+    } else {
+        DUMMY_SP
+    };
+    let mut function = Box::new(source.clone());
+    // Object.defineProperty setters may have zero parameters; class `set`
+    // accessors must have exactly one.
+    if kind == MethodKind::Setter {
+        ensure_setter_has_value_param(&mut function);
+    }
+    ClassMethod {
+        span: method_span,
+        key,
+        function,
+        kind,
+        is_static,
+        accessibility: None,
+        is_abstract: false,
+        is_optional: false,
+        is_override: false,
+    }
+}

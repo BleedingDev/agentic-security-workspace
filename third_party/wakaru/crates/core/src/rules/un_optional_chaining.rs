@@ -1,0 +1,2296 @@
+use crate::collections::{HashMap, HashSet};
+
+use swc_core::common::{Mark, Span, Spanned, DUMMY_SP};
+use swc_core::ecma::ast::{
+    AssignOp, AssignTarget, BinExpr, BinaryOp, CallExpr, Callee, CondExpr, Expr, Ident, IfStmt,
+    Lit, MemberExpr, MemberProp, Module, OptCall, OptChainBase, OptChainExpr, ParenExpr,
+    SimpleAssignTarget, Stmt, UnaryExpr, UnaryOp,
+};
+use swc_core::ecma::visit::{VisitMut, VisitMutWith};
+
+use super::binding_facts::TempIsolation;
+use super::dead_decls::remove_consumed_uninitialized_decls;
+use super::decl_utils::{binding_id, BindingId};
+use super::expr_utils::{exprs_structurally_equal, is_unresolved_undefined};
+use super::{RewriteLevel, RewritePolicy};
+use crate::analysis::binding_uses::BindingUseIndex;
+
+use crate::utils::paren::strip_parens;
+
+pub struct UnOptionalChaining {
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    consumed_uninitialized_bindings: HashSet<BindingId>,
+    isolation: TempIsolation,
+}
+
+impl UnOptionalChaining {
+    pub fn new(unresolved_mark: Mark, level: RewriteLevel) -> Self {
+        Self {
+            unresolved_mark,
+            policy: RewritePolicy::from_level(level),
+            consumed_uninitialized_bindings: HashSet::default(),
+            isolation: TempIsolation::default(),
+        }
+    }
+}
+
+impl VisitMut for UnOptionalChaining {
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        // Temps are hoisted `var _a;`, or `let _a;` declared before every use
+        // in the same function (VarDeclToLetConst's rewrite of the former); an
+        // uninitialized `let` elsewhere may be in its TDZ where the pattern
+        // assigns it, and `TempIsolation` rejects it.
+        self.isolation = TempIsolation::collect(module);
+        self.consumed_uninitialized_bindings.clear();
+        module.visit_mut_children_with(self);
+        remove_consumed_uninitialized_decls(module, &self.consumed_uninitialized_bindings);
+    }
+
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Some(result) = try_boolean_context_logical_and_optional_chain(
+            expr,
+            self.unresolved_mark,
+            self.policy,
+            &self.isolation,
+        )
+        .filter(|result| self.accept_expr_rewrite(expr, result))
+        {
+            replace_expr_preserving_span(expr, result);
+            expr.visit_mut_children_with(self);
+            return;
+        }
+
+        if let Some(result) =
+            try_optional_chaining(expr, self.unresolved_mark, self.policy, &self.isolation)
+                .filter(|result| self.accept_expr_rewrite(expr, result))
+        {
+            replace_expr_preserving_span(expr, result);
+            expr.visit_mut_children_with(self);
+            if let Some(result) = try_optional_call_cleanup(expr)
+                .filter(|result| self.accept_expr_rewrite(expr, result))
+            {
+                replace_expr_preserving_span(expr, result);
+            }
+            return;
+        }
+
+        expr.visit_mut_children_with(self);
+
+        if let Some(result) =
+            try_optional_call_cleanup(expr).filter(|result| self.accept_expr_rewrite(expr, result))
+        {
+            replace_expr_preserving_span(expr, result);
+            return;
+        }
+
+        if let Some(result) =
+            try_optional_chaining(expr, self.unresolved_mark, self.policy, &self.isolation)
+                .filter(|result| self.accept_expr_rewrite(expr, result))
+        {
+            replace_expr_preserving_span(expr, result);
+        }
+    }
+
+    fn visit_mut_stmt(&mut self, stmt: &mut Stmt) {
+        stmt.visit_mut_children_with(self);
+
+        if let Stmt::If(if_stmt) = stmt {
+            if let Some(result) = try_logical_and_optional_chain(
+                if_stmt.test.as_ref(),
+                self.unresolved_mark,
+                self.policy,
+                &self.isolation,
+            )
+            .filter(|result| self.accept_expr_rewrite(&if_stmt.test, result))
+            {
+                *if_stmt.test = result;
+            }
+        }
+
+        if let Some(result) =
+            try_optional_call_short_circuit_stmt(stmt, self.unresolved_mark, self.policy)
+                .filter(|result| self.accept_stmt_rewrite(stmt, result))
+        {
+            *stmt = result;
+            return;
+        }
+
+        if let Some(result) = try_optional_call_if_stmt(stmt, self.unresolved_mark)
+            .filter(|result| self.accept_stmt_rewrite(stmt, result))
+        {
+            *stmt = result;
+        }
+    }
+}
+
+/// Replace `*expr` with `result`, copying the original expression's span onto
+/// the outermost node of the replacement for source map fidelity.
+fn replace_expr_preserving_span(expr: &mut Expr, mut result: Expr) {
+    let original_span = expr.span();
+    if original_span.lo.0 != 0 {
+        propagate_span(&mut result, original_span);
+    }
+    *expr = result;
+}
+
+fn propagate_span(expr: &mut Expr, span: Span) {
+    match expr {
+        Expr::OptChain(e) => e.span = span,
+        Expr::Bin(e) => e.span = span,
+        Expr::Member(e) => e.span = span,
+        Expr::Call(e) => e.span = span,
+        _ => {}
+    }
+}
+
+impl UnOptionalChaining {
+    /// Every rewrite goes through `TempIsolation` so that no path drops a
+    /// write it has not proven: recovering a lowered inner chain turns
+    /// `null == (t = a()) ? void 0 : t.b` into `a()?.b` without proving `t`,
+    /// and the builders replace only a temp's object slots, copying keys and
+    /// arguments that may still read it (`a()?.b?.[t.length]`).
+    fn accept_expr_rewrite(&mut self, before: &Expr, after: &Expr) -> bool {
+        self.isolation
+            .accept_expr_rewrite(before, after, &mut self.consumed_uninitialized_bindings)
+    }
+
+    fn accept_stmt_rewrite(&mut self, before: &Stmt, after: &Stmt) -> bool {
+        self.isolation.accept_stmts_rewrite(
+            std::slice::from_ref(before),
+            std::slice::from_ref(after),
+            &mut self.consumed_uninitialized_bindings,
+        )
+    }
+}
+
+fn try_optional_call_cleanup(expr: &Expr) -> Option<Expr> {
+    let Expr::OptChain(OptChainExpr { base, .. }) = expr else {
+        return None;
+    };
+    let OptChainBase::Call(call) = base.as_ref() else {
+        return None;
+    };
+    let (context, call_args) = call.args.split_first()?;
+    let callee = extract_optional_call_target(call.callee.as_ref(), context.expr.as_ref())?;
+    Some(Expr::OptChain(OptChainExpr {
+        span: DUMMY_SP,
+        optional: true,
+        base: Box::new(OptChainBase::Call(OptCall {
+            span: call.span,
+            ctxt: call.ctxt,
+            callee: Box::new(callee),
+            args: call_args.to_vec(),
+            type_args: call.type_args.clone(),
+        })),
+    }))
+}
+
+fn try_optional_call_if_stmt(stmt: &Stmt, unresolved_mark: Mark) -> Option<Stmt> {
+    let Stmt::If(IfStmt {
+        test,
+        cons,
+        alt: None,
+        ..
+    }) = stmt
+    else {
+        return None;
+    };
+    let Expr::Unary(UnaryExpr {
+        op: UnaryOp::Bang,
+        arg,
+        ..
+    }) = test.as_ref()
+    else {
+        return None;
+    };
+
+    let NullCheckResult {
+        value: checked,
+        real_value,
+    } = extract_null_check(strip_parens(arg), unresolved_mark)?;
+    let real_rhs = real_value?;
+    let call_expr = extract_single_call_expr(cons)?;
+    build_optional_call_stmt(DUMMY_SP, &checked, &real_rhs, call_expr, unresolved_mark)
+}
+
+fn try_optional_call_short_circuit_stmt(
+    stmt: &Stmt,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> Option<Stmt> {
+    let Stmt::Expr(expr_stmt) = stmt else {
+        return None;
+    };
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalOr,
+        left,
+        right,
+        ..
+    }) = expr_stmt.expr.as_ref()
+    else {
+        return None;
+    };
+
+    if let Some(NullCheckResult {
+        value: checked,
+        real_value,
+    }) = extract_null_check(left, unresolved_mark)
+    {
+        return match real_value {
+            Some(real_rhs) => build_optional_call_stmt(
+                expr_stmt.span,
+                &checked,
+                &real_rhs,
+                right.as_ref(),
+                unresolved_mark,
+            ),
+            None => build_direct_optional_call_stmt(expr_stmt.span, *checked, right),
+        };
+    }
+
+    try_loose_direct_optional_call_stmt(expr_stmt.span, left, right, unresolved_mark, policy)
+}
+
+/// Recover the statement-only form emitted by esbuild and Terser:
+/// `handler == null || handler(value)` -> `handler?.(value)`.
+///
+/// The loose check relies on `no_document_all`. Keeping this statement-only is
+/// also essential: the original expression yields `true` for a missing handler,
+/// while the optional call yields `undefined`.
+fn try_loose_direct_optional_call_stmt(
+    stmt_span: Span,
+    null_check: &Expr,
+    call_expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> Option<Stmt> {
+    if !policy.assumptions.no_document_all {
+        return None;
+    }
+
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::EqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(null_check)
+    else {
+        return None;
+    };
+    let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+    build_direct_optional_call_stmt(stmt_span, checked, call_expr)
+}
+
+fn build_direct_optional_call_stmt(
+    stmt_span: Span,
+    checked: Expr,
+    call_expr: &Expr,
+) -> Option<Stmt> {
+    let Expr::Ident(checked_ident) = strip_parens(&checked) else {
+        return None;
+    };
+    // Optional-call syntax makes eval indirect, unlike the guarded direct call.
+    if checked_ident.sym == "eval" {
+        return None;
+    }
+    let Expr::Call(CallExpr {
+        callee: Callee::Expr(callee),
+        args,
+        type_args,
+        span,
+        ctxt,
+    }) = strip_parens(call_expr)
+    else {
+        return None;
+    };
+    if !exprs_structurally_equal(&checked, callee) {
+        return None;
+    }
+
+    Some(Stmt::Expr(swc_core::ecma::ast::ExprStmt {
+        span: stmt_span,
+        expr: Box::new(Expr::OptChain(OptChainExpr {
+            span: *span,
+            optional: true,
+            base: Box::new(OptChainBase::Call(OptCall {
+                span: *span,
+                ctxt: *ctxt,
+                callee: Box::new(checked),
+                args: args.clone(),
+                type_args: type_args.clone(),
+            })),
+        })),
+    }))
+}
+
+fn extract_single_call_expr(stmt: &Stmt) -> Option<&Expr> {
+    match stmt {
+        Stmt::Block(block) if block.stmts.len() == 1 => extract_single_call_expr(&block.stmts[0]),
+        Stmt::Expr(expr_stmt) => Some(expr_stmt.expr.as_ref()),
+        _ => None,
+    }
+}
+
+fn build_optional_call_stmt(
+    stmt_span: swc_core::common::Span,
+    checked: &Expr,
+    real_rhs: &Expr,
+    call_expr: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Stmt> {
+    let Expr::Call(CallExpr {
+        callee: Callee::Expr(callee_expr),
+        args,
+        type_args,
+        span,
+        ctxt,
+    }) = call_expr
+    else {
+        return None;
+    };
+    let Expr::Member(MemberExpr { obj, prop, .. }) = callee_expr.as_ref() else {
+        return None;
+    };
+    if !prop.is_ident_with("call") || !exprs_structurally_equal(obj, checked) {
+        return None;
+    }
+
+    let (context, call_args) = args.split_first()?;
+    let callee = match strip_parens(real_rhs) {
+        Expr::OptChain(OptChainExpr { base, .. })
+            if matches!(base.as_ref(), OptChainBase::Member(_))
+                && optional_call_context_matches_base(real_rhs, context.expr.as_ref()) =>
+        {
+            real_rhs.clone()
+        }
+        _ => recover_babel_optional_call_callee(real_rhs, context.expr.as_ref(), unresolved_mark)?,
+    };
+
+    Some(Stmt::Expr(swc_core::ecma::ast::ExprStmt {
+        span: stmt_span,
+        expr: Box::new(Expr::OptChain(OptChainExpr {
+            span: DUMMY_SP,
+            optional: true,
+            base: Box::new(OptChainBase::Call(OptCall {
+                span: *span,
+                ctxt: *ctxt,
+                callee: Box::new(callee),
+                args: call_args.to_vec(),
+                type_args: type_args.clone(),
+            })),
+        })),
+    }))
+}
+
+fn try_optional_chaining(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    // Pattern: `(obj === null || obj === void 0) ? void 0 : obj.access`
+    if let Some(result) = try_ternary_optional_chain(expr, unresolved_mark, policy, isolation) {
+        return Some(result);
+    }
+
+    // Pattern: Babel-style flattened chains:
+    // `(_a = obj) === null || _a === void 0 || (_a = _a.prop) === null || ... ? void 0 : _a.leaf`
+    if let Some(result) = try_flattened_optional_chain(expr, unresolved_mark, policy, isolation) {
+        return Some(result);
+    }
+
+    // Pattern: `obj == null ? undefined : obj.access`  (loose equality)
+    if let Some(result) = try_loose_eq_optional_chain(expr, unresolved_mark, policy, isolation) {
+        return Some(result);
+    }
+
+    None
+}
+
+fn try_boolean_context_logical_and_optional_chain(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let Expr::Unary(UnaryExpr {
+        op: UnaryOp::Bang,
+        arg,
+        span,
+    }) = expr
+    else {
+        return None;
+    };
+
+    Some(Expr::Unary(UnaryExpr {
+        span: *span,
+        op: UnaryOp::Bang,
+        arg: Box::new(try_logical_and_optional_chain(
+            arg,
+            unresolved_mark,
+            policy,
+            isolation,
+        )?),
+    }))
+}
+
+fn try_logical_and_optional_chain(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    if policy.level < RewriteLevel::Standard {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    collect_logical_and_terms(expr, &mut terms);
+    if terms.len() < 3 {
+        return None;
+    }
+
+    rewrite_logical_and_optional_chain_terms(&terms, unresolved_mark, policy, isolation)
+}
+
+fn rewrite_logical_and_optional_chain_terms(
+    terms: &[&Expr],
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let mut rewritten_terms = Vec::with_capacity(terms.len());
+    let mut changed = false;
+    let mut index = 0;
+
+    while index < terms.len() {
+        if let Some((chain, consumed)) = try_logical_and_optional_chain_prefix(
+            &terms[index..],
+            unresolved_mark,
+            policy,
+            isolation,
+        ) {
+            rewritten_terms.push(chain);
+            index += consumed;
+            changed = true;
+        } else {
+            rewritten_terms.push(terms[index].clone());
+            index += 1;
+        }
+    }
+
+    changed.then(|| build_logical_and_expr(rewritten_terms))?
+}
+
+fn try_logical_and_optional_chain_prefix(
+    terms: &[&Expr],
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<(Expr, usize)> {
+    if terms.len() < 3 {
+        return None;
+    }
+
+    let first = extract_logical_and_non_null_segment(terms, 0, unresolved_mark, policy)?;
+    let mut temps = Vec::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
+    let mut chain = if let Some(real_rhs) = first.real_rhs.as_ref() {
+        let Expr::Ident(tmp) = strip_parens(&first.checked) else {
+            return None;
+        };
+        temps.push(tmp.clone());
+        record_flattened_temp_value(
+            tmp,
+            real_rhs,
+            flattened_member_call_context(real_rhs, &temp_values),
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        real_rhs.clone()
+    } else {
+        if !matches!(strip_parens(&first.checked), Expr::Ident(_))
+            && !policy.assumptions.pure_getters
+        {
+            return None;
+        }
+        first.checked.clone()
+    };
+    let mut current_tmp = first.checked;
+    let mut index = first.consumed;
+
+    while index < terms.len() {
+        let Some(segment) =
+            extract_logical_and_non_null_segment(terms, index, unresolved_mark, policy)
+        else {
+            break;
+        };
+        let real_rhs = segment.real_rhs.as_ref()?;
+        if index + segment.consumed >= terms.len() {
+            break;
+        }
+        let Expr::Ident(tmp) = strip_parens(&segment.checked) else {
+            return None;
+        };
+        let tmp = tmp.clone();
+        chain = make_optional_chain_replacing(&current_tmp, &chain, real_rhs, unresolved_mark)?;
+        let call_context = flattened_member_call_context(real_rhs, &temp_values);
+        record_flattened_temp_value(
+            &tmp,
+            &chain,
+            call_context,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        current_tmp = segment.checked;
+        temps.push(tmp);
+        index += segment.consumed;
+    }
+
+    if index >= terms.len() {
+        return None;
+    }
+
+    if !chain_temps_are_safe(&temps, &terms[..=index], isolation) {
+        return None;
+    }
+
+    let chain = make_flattened_final_access(
+        &current_tmp,
+        &chain,
+        terms[index],
+        &temp_values,
+        &temp_call_contexts,
+        unresolved_mark,
+    )?;
+    Some((chain, index + 1))
+}
+
+fn build_logical_and_expr(terms: Vec<Expr>) -> Option<Expr> {
+    let mut terms = terms.into_iter();
+    let first = terms.next()?;
+    Some(terms.fold(first, make_logical_and_expr))
+}
+
+fn make_logical_and_expr(left: Expr, right: Expr) -> Expr {
+    Expr::Bin(BinExpr {
+        span: DUMMY_SP,
+        op: BinaryOp::LogicalAnd,
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+struct LogicalAndSegment {
+    checked: Expr,
+    real_rhs: Option<Expr>,
+    consumed: usize,
+}
+
+fn extract_logical_and_non_null_segment(
+    terms: &[&Expr],
+    index: usize,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+) -> Option<LogicalAndSegment> {
+    if index + 1 < terms.len() {
+        if let Some(null_value) = extract_strict_not_null_single(terms[index]) {
+            if let Some(undefined_value) =
+                extract_strict_not_undefined_single(terms[index + 1], unresolved_mark)
+            {
+                if let Some((tmp, real_rhs)) = extract_assign_parts(&null_value) {
+                    let checked = Expr::Ident(tmp);
+                    if exprs_structurally_equal(&checked, &undefined_value) {
+                        return Some(LogicalAndSegment {
+                            checked,
+                            real_rhs: Some((**real_rhs).clone()),
+                            consumed: 2,
+                        });
+                    }
+                    return None;
+                }
+
+                if exprs_structurally_equal(&null_value, &undefined_value) {
+                    return Some(LogicalAndSegment {
+                        checked: *undefined_value,
+                        real_rhs: None,
+                        consumed: 2,
+                    });
+                }
+            }
+        }
+    }
+
+    if !policy.assumptions.no_document_all {
+        return None;
+    }
+    let checked = extract_loose_not_null_single(terms[index], unresolved_mark)?;
+    let (checked, real_rhs) = split_optional_assignment_checked_value(checked);
+    Some(LogicalAndSegment {
+        checked,
+        real_rhs,
+        consumed: 1,
+    })
+}
+
+fn split_optional_assignment_checked_value(checked: Expr) -> (Expr, Option<Expr>) {
+    if let Some((tmp, real_rhs)) = extract_assign_parts(&checked) {
+        (Expr::Ident(tmp), Some((**real_rhs).clone()))
+    } else {
+        (checked, None)
+    }
+}
+
+fn collect_logical_and_terms<'a>(expr: &'a Expr, terms: &mut Vec<&'a Expr>) {
+    match strip_parens(expr) {
+        Expr::Bin(BinExpr {
+            op: BinaryOp::LogicalAnd,
+            left,
+            right,
+            ..
+        }) => {
+            collect_logical_and_terms(left, terms);
+            collect_logical_and_terms(right, terms);
+        }
+        expr => terms.push(expr),
+    }
+}
+
+fn extract_strict_not_null_single(expr: &Expr) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::NotEqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    if matches!(&**right, Expr::Lit(Lit::Null(_))) {
+        return Some(left.clone());
+    }
+    if matches!(&**left, Expr::Lit(Lit::Null(_))) {
+        return Some(right.clone());
+    }
+    None
+}
+
+fn extract_strict_not_undefined_single(expr: &Expr, unresolved_mark: Mark) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::NotEqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    if is_unresolved_undefined(right, unresolved_mark) {
+        return Some(left.clone());
+    }
+    if is_unresolved_undefined(left, unresolved_mark) {
+        return Some(right.clone());
+    }
+    None
+}
+
+fn extract_loose_not_null_single(expr: &Expr, unresolved_mark: Mark) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::NotEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    extract_loose_null_operand(left, right, unresolved_mark)
+}
+
+fn try_flattened_optional_chain(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    if policy.level < RewriteLevel::Standard {
+        return None;
+    }
+
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !is_void_or_undefined(cons, unresolved_mark) {
+        return None;
+    }
+
+    try_flattened_strict_optional_chain(test, alt, isolation, unresolved_mark)
+        .or_else(|| {
+            try_flattened_mixed_loose_root_optional_chain(
+                test,
+                alt,
+                policy,
+                isolation,
+                unresolved_mark,
+            )
+        })
+        .or_else(|| {
+            try_flattened_loose_optional_chain(test, alt, policy, isolation, unresolved_mark)
+        })
+}
+
+fn try_flattened_strict_optional_chain(
+    test: &Expr,
+    alt: &Expr,
+    isolation: &TempIsolation,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    let mut terms = Vec::new();
+    collect_logical_or_terms(test, &mut terms);
+    if terms.len() < 4 || terms.len() % 2 != 0 {
+        return None;
+    }
+
+    let first = extract_null_single(terms[0])?;
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
+    let mut temps = Vec::new();
+    let (mut chain, mut current_tmp) = if let Some((first_tmp, chain)) =
+        extract_flattened_assignment_segment(&first, terms[1], unresolved_mark)
+    {
+        record_flattened_temp_value(
+            &first_tmp,
+            &chain,
+            None,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        temps.push(first_tmp.clone());
+        (chain, Expr::Ident(first_tmp))
+    } else {
+        let undefined_value = extract_undefined_single(terms[1], unresolved_mark)?;
+        if !exprs_structurally_equal(&first, &undefined_value)
+            || !matches!(strip_parens(&first), Expr::Ident(_))
+        {
+            return None;
+        }
+        let chain = *first;
+        (chain.clone(), chain)
+    };
+
+    let mut index = 2;
+    while index < terms.len() {
+        let segment = extract_null_single(terms[index])?;
+        let (next_tmp, real_rhs) =
+            extract_flattened_assignment_segment(&segment, terms[index + 1], unresolved_mark)?;
+        chain = make_optional_chain_replacing(&current_tmp, &chain, &real_rhs, unresolved_mark)?;
+        let call_context = flattened_member_call_context(&real_rhs, &temp_values);
+        record_flattened_temp_value(
+            &next_tmp,
+            &chain,
+            call_context,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        current_tmp = Expr::Ident(next_tmp.clone());
+        temps.push(next_tmp);
+        index += 2;
+    }
+
+    if !flattened_chain_temps_are_safe(&temps, test, alt, isolation) {
+        return None;
+    }
+
+    make_flattened_final_access(
+        &current_tmp,
+        &chain,
+        alt,
+        &temp_values,
+        &temp_call_contexts,
+        unresolved_mark,
+    )
+}
+
+fn try_flattened_mixed_loose_root_optional_chain(
+    test: &Expr,
+    alt: &Expr,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if !policy.assumptions.no_document_all {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    collect_logical_or_terms(test, &mut terms);
+    if terms.len() < 3 || terms.len() % 2 == 0 {
+        return None;
+    }
+
+    let base = extract_loose_null_single(terms[0], unresolved_mark)?;
+    if !matches!(strip_parens(&base), Expr::Ident(_)) && !policy.assumptions.pure_getters {
+        return None;
+    }
+
+    let mut chain = base.clone();
+    let mut current_tmp = base;
+    let mut temps = Vec::new();
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
+
+    let mut index = 1;
+    while index < terms.len() {
+        let segment = extract_null_single(terms[index])?;
+        let (next_tmp, real_rhs) =
+            extract_flattened_assignment_segment(&segment, terms[index + 1], unresolved_mark)?;
+        chain = make_optional_chain_replacing(&current_tmp, &chain, &real_rhs, unresolved_mark)?;
+        let call_context = flattened_member_call_context(&real_rhs, &temp_values);
+        record_flattened_temp_value(
+            &next_tmp,
+            &chain,
+            call_context,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        current_tmp = Expr::Ident(next_tmp.clone());
+        temps.push(next_tmp);
+        index += 2;
+    }
+
+    if !flattened_chain_temps_are_safe(&temps, test, alt, isolation) {
+        return None;
+    }
+
+    make_flattened_final_access(
+        &current_tmp,
+        &chain,
+        alt,
+        &temp_values,
+        &temp_call_contexts,
+        unresolved_mark,
+    )
+}
+
+fn try_flattened_loose_optional_chain(
+    test: &Expr,
+    alt: &Expr,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if !policy.assumptions.no_document_all {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    collect_logical_or_terms(test, &mut terms);
+    if terms.len() < 2 {
+        return None;
+    }
+
+    let mut temp_values = HashMap::default();
+    let mut temp_call_contexts = HashMap::default();
+    let mut temps = Vec::new();
+    let (mut chain, mut current_tmp) = if let Some((first_tmp, chain)) =
+        extract_flattened_loose_assignment_segment(terms[0], unresolved_mark)
+    {
+        record_flattened_temp_value(
+            &first_tmp,
+            &chain,
+            None,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        temps.push(first_tmp.clone());
+        (chain, Expr::Ident(first_tmp))
+    } else {
+        let chain = extract_loose_null_single(terms[0], unresolved_mark)?;
+        if !matches!(strip_parens(&chain), Expr::Ident(_)) {
+            return None;
+        }
+        (chain.clone(), chain)
+    };
+
+    for (index, term) in terms.iter().enumerate().skip(1) {
+        let Some((next_tmp, real_rhs)) =
+            extract_flattened_loose_assignment_segment(term, unresolved_mark)
+        else {
+            if index == terms.len() - 1 && policy.assumptions.pure_getters {
+                if !flattened_chain_temps_are_safe(&temps, test, alt, isolation) {
+                    return None;
+                }
+                return make_flattened_loose_repeated_access(
+                    &current_tmp,
+                    &chain,
+                    term,
+                    alt,
+                    unresolved_mark,
+                );
+            }
+            return None;
+        };
+        chain = make_optional_chain_replacing(&current_tmp, &chain, &real_rhs, unresolved_mark)?;
+        let call_context = flattened_member_call_context(&real_rhs, &temp_values);
+        record_flattened_temp_value(
+            &next_tmp,
+            &chain,
+            call_context,
+            &mut temp_values,
+            &mut temp_call_contexts,
+        );
+        current_tmp = Expr::Ident(next_tmp.clone());
+        temps.push(next_tmp);
+    }
+
+    if !flattened_chain_temps_are_safe(&temps, test, alt, isolation) {
+        return None;
+    }
+
+    make_flattened_final_access(
+        &current_tmp,
+        &chain,
+        alt,
+        &temp_values,
+        &temp_call_contexts,
+        unresolved_mark,
+    )
+}
+
+fn make_flattened_loose_repeated_access(
+    current_tmp: &Expr,
+    chain: &Expr,
+    term: &Expr,
+    alt: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::EqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(term)
+    else {
+        return None;
+    };
+    let checked_access = extract_loose_null_operand(left, right, unresolved_mark)?;
+    let optional_access =
+        make_optional_chain_replacing(current_tmp, chain, &checked_access, unresolved_mark)?;
+
+    if exprs_structurally_equal(alt, &checked_access) {
+        return Some(optional_access);
+    }
+
+    let Expr::Call(CallExpr {
+        callee: Callee::Expr(callee_expr),
+        args,
+        type_args,
+        span,
+        ctxt,
+    }) = strip_parens(alt)
+    else {
+        return None;
+    };
+    if !exprs_structurally_equal(callee_expr.as_ref(), &checked_access) {
+        return None;
+    }
+
+    Some(Expr::OptChain(OptChainExpr {
+        span: DUMMY_SP,
+        optional: true,
+        base: Box::new(OptChainBase::Call(OptCall {
+            span: *span,
+            ctxt: *ctxt,
+            callee: Box::new(optional_access),
+            args: args.clone(),
+            type_args: type_args.clone(),
+        })),
+    }))
+}
+
+fn collect_logical_or_terms<'a>(expr: &'a Expr, terms: &mut Vec<&'a Expr>) {
+    match strip_parens(expr) {
+        Expr::Bin(BinExpr {
+            op: BinaryOp::LogicalOr,
+            left,
+            right,
+            ..
+        }) => {
+            collect_logical_or_terms(left, terms);
+            collect_logical_or_terms(right, terms);
+        }
+        expr => terms.push(expr),
+    }
+}
+
+fn extract_flattened_assignment_segment(
+    null_value: &Expr,
+    undefined_check: &Expr,
+    unresolved_mark: Mark,
+) -> Option<(Ident, Expr)> {
+    let (tmp, real_rhs) = extract_assign_ident_parts(null_value)?;
+    let undefined_value = extract_undefined_single(undefined_check, unresolved_mark)?;
+    if !exprs_structurally_equal(&Expr::Ident(tmp.clone()), &undefined_value) {
+        return None;
+    }
+    Some((tmp, *real_rhs.clone()))
+}
+
+fn extract_flattened_loose_assignment_segment(
+    term: &Expr,
+    unresolved_mark: Mark,
+) -> Option<(Ident, Expr)> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::EqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(term)
+    else {
+        return None;
+    };
+    let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+    let (tmp, real_rhs) = extract_assign_ident_parts(&checked)?;
+    Some((tmp, *real_rhs.clone()))
+}
+
+fn extract_loose_null_single(expr: &Expr, unresolved_mark: Mark) -> Option<Expr> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::EqEq,
+        left,
+        right,
+        ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    extract_loose_null_operand(left, right, unresolved_mark)
+}
+
+fn record_flattened_temp_value(
+    tmp: &Ident,
+    value: &Expr,
+    call_context: Option<Expr>,
+    temp_values: &mut HashMap<BindingId, Expr>,
+    temp_call_contexts: &mut HashMap<BindingId, Expr>,
+) {
+    let binding_id = binding_id(tmp);
+    temp_values.insert(binding_id.clone(), value.clone());
+    if let Some(call_context) = call_context {
+        temp_call_contexts.insert(binding_id, call_context);
+    }
+}
+
+fn flattened_member_call_context(
+    real_rhs: &Expr,
+    temp_values: &HashMap<BindingId, Expr>,
+) -> Option<Expr> {
+    let Expr::Member(MemberExpr { obj, .. }) = strip_parens(real_rhs) else {
+        return None;
+    };
+    Some(resolve_flattened_temp_expr(obj, temp_values))
+}
+
+fn make_flattened_final_access(
+    current_tmp: &Expr,
+    chain: &Expr,
+    access: &Expr,
+    temp_values: &HashMap<BindingId, Expr>,
+    temp_call_contexts: &HashMap<BindingId, Expr>,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if let Some(chain) = make_optional_chain_replacing(current_tmp, chain, access, unresolved_mark)
+    {
+        return Some(chain);
+    }
+    make_flattened_optional_call(current_tmp, chain, access, temp_values, temp_call_contexts)
+}
+
+fn make_flattened_optional_call(
+    current_tmp: &Expr,
+    chain: &Expr,
+    access: &Expr,
+    temp_values: &HashMap<BindingId, Expr>,
+    temp_call_contexts: &HashMap<BindingId, Expr>,
+) -> Option<Expr> {
+    let Expr::Ident(current_ident) = strip_parens(current_tmp) else {
+        return None;
+    };
+    let Expr::Call(CallExpr {
+        callee: Callee::Expr(callee_expr),
+        args,
+        type_args,
+        span,
+        ctxt,
+    }) = access
+    else {
+        return None;
+    };
+    let Expr::Member(MemberExpr { obj, prop, .. }) = callee_expr.as_ref() else {
+        return None;
+    };
+    if !prop.is_ident_with("call") || !exprs_structurally_equal(obj, current_tmp) {
+        return None;
+    }
+
+    let (context, call_args) = args.split_first()?;
+    let binding_id = binding_id(current_ident);
+    let expected_context = temp_call_contexts.get(&binding_id)?;
+    let actual_context = resolve_flattened_temp_expr(context.expr.as_ref(), temp_values);
+    if !flattened_call_contexts_equal(expected_context, &actual_context) {
+        return None;
+    }
+
+    Some(Expr::OptChain(OptChainExpr {
+        span: DUMMY_SP,
+        optional: true,
+        base: Box::new(OptChainBase::Call(OptCall {
+            span: *span,
+            ctxt: *ctxt,
+            callee: Box::new(chain.clone()),
+            args: call_args.to_vec(),
+            type_args: type_args.clone(),
+        })),
+    }))
+}
+
+fn resolve_flattened_temp_expr(expr: &Expr, temp_values: &HashMap<BindingId, Expr>) -> Expr {
+    let Expr::Ident(ident) = strip_parens(expr) else {
+        return expr.clone();
+    };
+    temp_values
+        .get(&binding_id(ident))
+        .cloned()
+        .unwrap_or_else(|| expr.clone())
+}
+
+fn flattened_call_contexts_equal(a: &Expr, b: &Expr) -> bool {
+    if exprs_structurally_equal(a, b) {
+        return true;
+    }
+
+    match (strip_parens(a), strip_parens(b)) {
+        (
+            Expr::OptChain(OptChainExpr {
+                base: a_base,
+                optional: a_optional,
+                ..
+            }),
+            Expr::OptChain(OptChainExpr {
+                base: b_base,
+                optional: b_optional,
+                ..
+            }),
+        ) if a_optional == b_optional => match (a_base.as_ref(), b_base.as_ref()) {
+            (
+                OptChainBase::Member(MemberExpr {
+                    obj: a_obj,
+                    prop: a_prop,
+                    ..
+                }),
+                OptChainBase::Member(MemberExpr {
+                    obj: b_obj,
+                    prop: b_prop,
+                    ..
+                }),
+            ) => {
+                member_props_equal(a_prop, b_prop)
+                    && flattened_call_contexts_equal(a_obj.as_ref(), b_obj.as_ref())
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn member_props_equal(a: &MemberProp, b: &MemberProp) -> bool {
+    match (a, b) {
+        (MemberProp::Ident(ai), MemberProp::Ident(bi)) => ai.sym == bi.sym,
+        (MemberProp::Computed(ac), MemberProp::Computed(bc)) => {
+            flattened_call_contexts_equal(ac.expr.as_ref(), bc.expr.as_ref())
+        }
+        _ => false,
+    }
+}
+
+fn flattened_chain_temps_are_safe(
+    temps: &[Ident],
+    test: &Expr,
+    alt: &Expr,
+    isolation: &TempIsolation,
+) -> bool {
+    chain_temps_are_safe(temps, &[test, alt], isolation)
+}
+
+fn chain_temps_are_safe(
+    temps: &[Ident],
+    pattern_exprs: &[&Expr],
+    isolation: &TempIsolation,
+) -> bool {
+    let unique_temps: HashSet<BindingId> = temps.iter().map(binding_id).collect();
+    isolation.are_isolated_to(&unique_temps, pattern_exprs)
+}
+
+fn temp_expr_is_safe_for_pattern(temp: &Expr, exprs: &[&Expr], isolation: &TempIsolation) -> bool {
+    let Expr::Ident(ident) = strip_parens(temp) else {
+        return false;
+    };
+    isolation.are_isolated_to([&binding_id(ident)], exprs)
+}
+
+/// Handle: `(obj === null || obj === void 0) ? void 0 : obj.access`  →  `obj?.access`
+/// Also handles assignment form: `(tmp = expr) === null || tmp === void 0 ? void 0 : tmp.access`
+fn try_ternary_optional_chain(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    // consequent must be `void 0` or `undefined`
+    if !is_void_or_undefined(cons, unresolved_mark) {
+        return None;
+    }
+
+    // test must be `x === null || x === void 0`
+    let NullCheckResult {
+        value: checked,
+        real_value,
+    } = extract_null_check(test, unresolved_mark)?;
+
+    if let Some(real_rhs) = real_value {
+        // Strict Babel lowering uses the temp three times: the assignment
+        // (the null check's left side), the `void 0` check, and the final
+        // access/call; an optional call on the checked value adds one.
+        if is_exact_temp_expr(&checked, isolation, 3)
+            || (is_optional_call_on_checked(alt, &checked)
+                && is_exact_temp_expr(&checked, isolation, 4))
+        {
+            if let Some(chain) =
+                make_optional_chain_replacing(&checked, &real_rhs, alt, unresolved_mark)
+            {
+                return (policy.level >= RewriteLevel::Standard).then_some(chain);
+            }
+        }
+        // No further path: an undeclared, observed, or initialized temp cannot
+        // lose its assignment at any level (Generated Temporaries hard rule),
+        // and the declared `var _a;` shape is exactly what the proof above
+        // accepts.
+        return None;
+    }
+
+    // Plain form
+    make_optional_chain(*checked, alt)
+}
+
+/// Build `base?.prop` or `base?.method(...)` where `access` uses `base` as its object.
+fn make_optional_chain(base: Expr, access: &Expr) -> Option<Expr> {
+    match access {
+        // x.prop → x?.prop
+        Expr::Member(MemberExpr { obj, prop, .. }) if exprs_structurally_equal(obj, &base) => {
+            Some(Expr::OptChain(OptChainExpr {
+                span: DUMMY_SP,
+                optional: true,
+                base: Box::new(OptChainBase::Member(MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(base),
+                    prop: prop.clone(),
+                })),
+            }))
+        }
+        // x.prop.deep → x?.prop.deep
+        Expr::Member(MemberExpr { obj, prop, .. }) => {
+            let replaced_obj = make_optional_chain(base, obj)?;
+            Some(make_required_member_tail(replaced_obj, prop.clone()))
+        }
+
+        // `x.member?.leaf` may have been recovered while visiting the nested
+        // conditional first. Add the leading optional segment without
+        // discarding the already-recovered segment.
+        Expr::OptChain(OptChainExpr {
+            base: opt_base,
+            optional,
+            ..
+        }) => match opt_base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, prop, .. }) => {
+                if exprs_structurally_equal(obj, &base) {
+                    return Some(access.clone());
+                }
+                let replaced_obj = make_optional_chain(base, obj)?;
+                Some(Expr::OptChain(OptChainExpr {
+                    span: DUMMY_SP,
+                    optional: *optional,
+                    base: Box::new(OptChainBase::Member(MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(replaced_obj),
+                        prop: prop.clone(),
+                    })),
+                }))
+            }
+            OptChainBase::Call(_) => None,
+        },
+
+        // x(...) → x?.(...)
+        Expr::Call(CallExpr {
+            callee: Callee::Expr(callee_expr),
+            args,
+            type_args,
+            span,
+            ctxt,
+        }) => {
+            if matches!(&base, Expr::Ident(ident) if ident.sym != "eval")
+                && exprs_structurally_equal(callee_expr, &base)
+            {
+                return Some(Expr::OptChain(OptChainExpr {
+                    span: DUMMY_SP,
+                    optional: true,
+                    base: Box::new(OptChainBase::Call(OptCall {
+                        span: *span,
+                        ctxt: *ctxt,
+                        callee: Box::new(base),
+                        args: args.clone(),
+                        type_args: type_args.clone(),
+                    })),
+                }));
+            }
+
+            // x.method(...) → x?.method(...)
+            if let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr {
+                if exprs_structurally_equal(obj, &base) {
+                    if prop.is_ident_with("call")
+                        && optional_call_context_matches_base(&base, args.first()?.expr.as_ref())
+                    {
+                        return Some(Expr::OptChain(OptChainExpr {
+                            span: DUMMY_SP,
+                            optional: true,
+                            base: Box::new(OptChainBase::Call(OptCall {
+                                span: *span,
+                                ctxt: *ctxt,
+                                callee: Box::new(base),
+                                args: args[1..].to_vec(),
+                                type_args: type_args.clone(),
+                            })),
+                        }));
+                    }
+                    let opt_member = Expr::OptChain(OptChainExpr {
+                        span: DUMMY_SP,
+                        optional: true,
+                        base: Box::new(OptChainBase::Member(MemberExpr {
+                            span: DUMMY_SP,
+                            obj: Box::new(base),
+                            prop: prop.clone(),
+                        })),
+                    });
+                    return Some(Expr::OptChain(OptChainExpr {
+                        span: DUMMY_SP,
+                        optional: false,
+                        base: Box::new(OptChainBase::Call(OptCall {
+                            span: *span,
+                            ctxt: *ctxt,
+                            callee: Box::new(opt_member),
+                            args: args.clone(),
+                            type_args: type_args.clone(),
+                        })),
+                    }));
+                }
+            }
+            None
+        }
+
+        _ => None,
+    }
+}
+
+fn is_optional_call_on_checked(access: &Expr, checked: &Expr) -> bool {
+    let Expr::OptChain(OptChainExpr { base, .. }) = strip_parens(access) else {
+        return false;
+    };
+    let OptChainBase::Call(OptCall { callee, .. }) = base.as_ref() else {
+        return false;
+    };
+    match strip_parens(callee.as_ref()) {
+        Expr::Member(MemberExpr { obj, .. }) => exprs_structurally_equal(obj, checked),
+        Expr::OptChain(OptChainExpr { base, .. }) => match base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, .. }) => exprs_structurally_equal(obj, checked),
+            OptChainBase::Call(_) => false,
+        },
+        _ => false,
+    }
+}
+
+fn make_required_member_tail(obj: Expr, prop: MemberProp) -> Expr {
+    if matches!(strip_parens(&obj), Expr::OptChain(_)) {
+        return Expr::OptChain(OptChainExpr {
+            span: DUMMY_SP,
+            optional: false,
+            base: Box::new(OptChainBase::Member(MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(obj),
+                prop,
+            })),
+        });
+    }
+    Expr::Member(MemberExpr {
+        span: DUMMY_SP,
+        obj: Box::new(obj),
+        prop,
+    })
+}
+
+/// Build an optional chain for the assignment temp-var case.
+/// `tmp` is the temp variable expr, `real_rhs` is what it was assigned from.
+/// `access` should use `tmp` as its object; we replace `tmp` with `real_rhs` in the output.
+fn make_optional_chain_replacing(
+    tmp: &Expr,
+    real_rhs: &Expr,
+    access: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    match access {
+        Expr::Member(MemberExpr { obj, prop, .. }) if exprs_structurally_equal(obj, tmp) => {
+            Some(Expr::OptChain(OptChainExpr {
+                span: DUMMY_SP,
+                optional: true,
+                base: Box::new(OptChainBase::Member(MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(real_rhs.clone()),
+                    prop: prop.clone(),
+                })),
+            }))
+        }
+        Expr::Member(MemberExpr { obj, prop, .. }) => {
+            let replaced_obj = make_optional_chain_replacing(tmp, real_rhs, obj, unresolved_mark)?;
+            Some(make_required_member_tail(replaced_obj, prop.clone()))
+        }
+
+        Expr::OptChain(OptChainExpr {
+            base: opt_base,
+            optional,
+            ..
+        }) => match opt_base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, prop, .. }) => {
+                let replaced_obj = if exprs_structurally_equal(obj, tmp) {
+                    real_rhs.clone()
+                } else {
+                    make_optional_chain_replacing(tmp, real_rhs, obj, unresolved_mark)?
+                };
+                Some(Expr::OptChain(OptChainExpr {
+                    span: DUMMY_SP,
+                    optional: *optional,
+                    base: Box::new(OptChainBase::Member(MemberExpr {
+                        span: DUMMY_SP,
+                        obj: Box::new(replaced_obj),
+                        prop: prop.clone(),
+                    })),
+                }))
+            }
+            OptChainBase::Call(OptCall {
+                callee,
+                args,
+                type_args,
+                span,
+                ctxt,
+            }) => {
+                let replaced_callee =
+                    make_optional_chain_replacing(tmp, real_rhs, callee, unresolved_mark)?;
+                Some(Expr::OptChain(OptChainExpr {
+                    span: DUMMY_SP,
+                    optional: *optional,
+                    base: Box::new(OptChainBase::Call(OptCall {
+                        span: *span,
+                        ctxt: *ctxt,
+                        callee: Box::new(replaced_callee),
+                        args: args.clone(),
+                        type_args: type_args.clone(),
+                    })),
+                }))
+            }
+        },
+
+        Expr::Call(CallExpr {
+            callee: Callee::Expr(callee_expr),
+            args,
+            type_args,
+            span,
+            ctxt,
+        }) => {
+            if let Expr::Member(MemberExpr { obj, prop, .. }) = &**callee_expr {
+                if exprs_structurally_equal(obj, tmp) {
+                    if prop.is_ident_with("call") {
+                        return make_optional_call_replacing(
+                            real_rhs,
+                            args,
+                            type_args,
+                            *span,
+                            *ctxt,
+                            unresolved_mark,
+                        );
+                    }
+                    let opt_member = Expr::OptChain(OptChainExpr {
+                        span: DUMMY_SP,
+                        optional: true,
+                        base: Box::new(OptChainBase::Member(MemberExpr {
+                            span: DUMMY_SP,
+                            obj: Box::new(real_rhs.clone()),
+                            prop: prop.clone(),
+                        })),
+                    });
+                    return Some(Expr::OptChain(OptChainExpr {
+                        span: DUMMY_SP,
+                        optional: false,
+                        base: Box::new(OptChainBase::Call(OptCall {
+                            span: *span,
+                            ctxt: *ctxt,
+                            callee: Box::new(opt_member),
+                            args: args.clone(),
+                            type_args: type_args.clone(),
+                        })),
+                    }));
+                }
+            }
+            if let Some(replaced_callee) =
+                make_optional_chain_replacing(tmp, real_rhs, callee_expr, unresolved_mark)
+            {
+                return Some(Expr::OptChain(OptChainExpr {
+                    span: DUMMY_SP,
+                    optional: false,
+                    base: Box::new(OptChainBase::Call(OptCall {
+                        span: *span,
+                        ctxt: *ctxt,
+                        callee: Box::new(replaced_callee),
+                        args: args.clone(),
+                        type_args: type_args.clone(),
+                    })),
+                }));
+            }
+            None
+        }
+
+        _ => None,
+    }
+}
+
+/// Handle loose equality forms:
+/// - `obj == null ? undefined : obj.prop`  →  `obj?.prop`
+/// - `obj != null ? obj.prop : undefined`  →  `obj?.prop`
+/// - `(tmp = expr) == null ? undefined : tmp.prop`  →  `expr?.prop` (aggressive)
+/// - `(tmp = expr) != null ? tmp.prop : undefined`  →  `expr?.prop` (aggressive)
+///
+/// `x == null` matches both `null` and `undefined`, which is exactly what `?.` does.
+fn try_loose_eq_optional_chain(
+    expr: &Expr,
+    unresolved_mark: Mark,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+) -> Option<Expr> {
+    if !policy.assumptions.no_document_all {
+        return None;
+    }
+
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = &**test
+    else {
+        return None;
+    };
+
+    match op {
+        // `x == null ? undefined : x.prop`
+        // `(tmp = expr) == null ? undefined : tmp.prop`
+        BinaryOp::EqEq => {
+            if !is_void_or_undefined(cons, unresolved_mark) {
+                return None;
+            }
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            try_loose_chain_with_assign(checked, alt, policy, isolation, unresolved_mark)
+        }
+        // `x != null ? x.prop : undefined`
+        // `(tmp = expr) != null ? tmp.prop : undefined`
+        BinaryOp::NotEq => {
+            if !is_void_or_undefined(alt, unresolved_mark) {
+                return None;
+            }
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            try_loose_chain_with_assign(checked, cons, policy, isolation, unresolved_mark)
+        }
+        _ => None,
+    }
+}
+
+fn try_loose_chain_with_assign(
+    checked: Expr,
+    access: &Expr,
+    policy: RewritePolicy,
+    isolation: &TempIsolation,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if let Some((tmp, real_rhs)) = extract_assign_parts(&checked) {
+        let tmp_ident_expr = find_ident_by_binding(access, &tmp)?;
+        let recovered_real_rhs = recover_lowered_optional_chain_expr(real_rhs, unresolved_mark)
+            .map(|recovered| recovered.chain);
+        // Loose Babel lowering references the temp twice inside the chain:
+        // once in the null check and once in the final access/call. Only a
+        // declared temp proven isolated to the pattern may lose its
+        // assignment — at every level (Generated Temporaries hard rule).
+        let temp_proven = is_exact_temp_expr(&tmp_ident_expr, isolation, 2)
+            || temp_expr_is_safe_for_pattern(&tmp_ident_expr, &[&checked, access], isolation);
+        if !temp_proven {
+            return None;
+        }
+        let build = |rhs: &Expr, recovered_rhs: Option<&Expr>| {
+            if let Some(chain) = make_optional_chain_replacing_preferred(
+                &tmp_ident_expr,
+                rhs,
+                recovered_rhs,
+                access,
+                unresolved_mark,
+            ) {
+                return Some(chain);
+            }
+            if policy.assumptions.pure_getters {
+                if let Some(recovered_access) =
+                    recover_loose_repeated_optional_call_chain(access, unresolved_mark)
+                {
+                    return make_optional_chain_replacing(
+                        &tmp_ident_expr,
+                        rhs,
+                        &recovered_access,
+                        unresolved_mark,
+                    );
+                }
+            }
+            None
+        };
+        let chain = build(real_rhs, recovered_real_rhs.as_ref())?;
+        // Only the temp's object slots are replaced; a computed key or an
+        // argument (`e[e.length - 1]`, `e.foo(e)`) is cloned and still reads
+        // it. Then the base keeps the assignment, which runs before the rest
+        // of the chain: `(e = expr)?.[e.length - 1]`.
+        if BindingUseIndex::collect_expr(&chain).use_count(&binding_id(&tmp)) == 0 {
+            return Some(chain);
+        }
+        let assigned_base = Expr::Paren(ParenExpr {
+            span: DUMMY_SP,
+            expr: Box::new(strip_parens(&checked).clone()),
+        });
+        build(&assigned_base, None)
+    } else {
+        make_optional_chain(checked, access)
+    }
+}
+
+fn recover_loose_repeated_optional_call_chain(expr: &Expr, unresolved_mark: Mark) -> Option<Expr> {
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    if !is_void_or_undefined(cons, unresolved_mark) {
+        return None;
+    }
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::EqEq,
+        left,
+        right,
+        ..
+    }) = test.as_ref()
+    else {
+        return None;
+    };
+    let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+
+    if let Some((tmp, real_rhs)) = extract_assign_parts(&checked) {
+        let tmp_ident_expr = find_ident_by_binding(alt, &tmp)?;
+        let recovered_alt = recover_loose_repeated_optional_call_chain(alt, unresolved_mark)?;
+        return make_optional_chain_replacing(
+            &tmp_ident_expr,
+            real_rhs,
+            &recovered_alt,
+            unresolved_mark,
+        );
+    }
+
+    let Expr::Call(CallExpr {
+        callee: Callee::Expr(callee_expr),
+        args,
+        type_args,
+        span,
+        ctxt,
+    }) = strip_parens(alt)
+    else {
+        return None;
+    };
+    if !exprs_structurally_equal(callee_expr.as_ref(), &checked) {
+        return None;
+    }
+
+    Some(Expr::OptChain(OptChainExpr {
+        span: DUMMY_SP,
+        optional: true,
+        base: Box::new(OptChainBase::Call(OptCall {
+            span: *span,
+            ctxt: *ctxt,
+            callee: Box::new(checked),
+            args: args.clone(),
+            type_args: type_args.clone(),
+        })),
+    }))
+}
+
+fn make_optional_chain_replacing_preferred(
+    tmp: &Expr,
+    original_rhs: &Expr,
+    recovered_rhs: Option<&Expr>,
+    access: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if is_call_expr(access) {
+        return make_optional_chain_replacing(tmp, original_rhs, access, unresolved_mark).or_else(
+            || make_optional_chain_replacing(tmp, recovered_rhs?, access, unresolved_mark),
+        );
+    }
+
+    if let Some(recovered_access) = recover_lowered_optional_chain_expr(access, unresolved_mark)
+        .map(|recovered| recovered.chain)
+    {
+        if let Some(chain) = recovered_rhs
+            .and_then(|real_rhs| {
+                make_optional_chain_replacing(tmp, real_rhs, &recovered_access, unresolved_mark)
+            })
+            .or_else(|| {
+                make_optional_chain_replacing(tmp, original_rhs, &recovered_access, unresolved_mark)
+            })
+        {
+            return Some(chain);
+        }
+    }
+
+    recovered_rhs
+        .and_then(|real_rhs| make_optional_chain_replacing(tmp, real_rhs, access, unresolved_mark))
+        .or_else(|| make_optional_chain_replacing(tmp, original_rhs, access, unresolved_mark))
+}
+
+fn is_call_expr(expr: &Expr) -> bool {
+    matches!(strip_parens(expr), Expr::Call(_))
+}
+
+fn find_ident_by_binding(access: &Expr, binding: &Ident) -> Option<Expr> {
+    match access {
+        Expr::Paren(paren) => find_ident_by_binding(&paren.expr, binding),
+        Expr::Ident(id) if same_binding(id, binding) => Some(Expr::Ident(id.clone())),
+        Expr::Cond(CondExpr {
+            test, cons, alt, ..
+        }) => find_ident_by_binding(test, binding)
+            .or_else(|| find_ident_by_binding(cons, binding))
+            .or_else(|| find_ident_by_binding(alt, binding)),
+        Expr::Bin(BinExpr { left, right, .. }) => {
+            find_ident_by_binding(left, binding).or_else(|| find_ident_by_binding(right, binding))
+        }
+        Expr::Assign(assign) => find_ident_by_binding(&assign.right, binding),
+        Expr::Member(MemberExpr { obj, .. }) => {
+            if let Expr::Ident(id) = &**obj {
+                if same_binding(id, binding) {
+                    return Some(Expr::Ident(id.clone()));
+                }
+            }
+            find_ident_by_binding(obj, binding)
+        }
+        Expr::Call(CallExpr {
+            callee: Callee::Expr(callee_expr),
+            ..
+        }) => find_ident_by_binding(callee_expr, binding),
+        Expr::OptChain(OptChainExpr { base, .. }) => match base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, .. }) => find_ident_by_binding(obj, binding),
+            OptChainBase::Call(OptCall { callee, .. }) => find_ident_by_binding(callee, binding),
+        },
+        _ => None,
+    }
+}
+
+fn same_binding(a: &Ident, b: &Ident) -> bool {
+    a.sym == b.sym && a.ctxt == b.ctxt
+}
+
+/// From a binary `x == null` or `null == x`, extract the non-null operand.
+fn extract_loose_null_operand(
+    left: &Box<Expr>,
+    right: &Box<Expr>,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    if matches!(&**right, Expr::Lit(Lit::Null(_)))
+        || is_unresolved_undefined(right, unresolved_mark)
+    {
+        return Some((**left).clone());
+    }
+    if matches!(&**left, Expr::Lit(Lit::Null(_))) || is_unresolved_undefined(left, unresolved_mark)
+    {
+        return Some((**right).clone());
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Null-check extraction helpers
+// ---------------------------------------------------------------------------
+
+struct NullCheckResult {
+    value: Box<Expr>,
+    real_value: Option<Box<Expr>>,
+}
+
+/// Extract from `x === null || x === void 0`.
+/// Handles assignment form `(tmp = expr) === null || tmp === void 0`.
+fn extract_null_check(expr: &Expr, unresolved_mark: Mark) -> Option<NullCheckResult> {
+    let Expr::Bin(BinExpr {
+        op: BinaryOp::LogicalOr,
+        left,
+        right,
+        ..
+    }) = expr
+    else {
+        return None;
+    };
+
+    let left_val = extract_null_single(left)?;
+    let right_val = extract_undefined_single(right, unresolved_mark)?;
+
+    if let Some((tmp, real_rhs)) = extract_assign_parts(&left_val) {
+        if let Expr::Ident(ri) = &*right_val {
+            if same_binding(ri, &tmp) {
+                return Some(NullCheckResult {
+                    value: Box::new(Expr::Ident(ri.clone())),
+                    real_value: Some(real_rhs.clone()),
+                });
+            }
+        }
+        return None;
+    }
+
+    if !exprs_structurally_equal(&left_val, &right_val) {
+        return None;
+    }
+
+    Some(NullCheckResult {
+        value: left_val,
+        real_value: None,
+    })
+}
+
+/// Extract from `x !== null && x !== void 0`.
+fn extract_null_single(expr: &Expr) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::EqEqEq | BinaryOp::EqEq) {
+        return None;
+    }
+    if matches!(&**right, Expr::Lit(Lit::Null(_))) {
+        return Some(left.clone());
+    }
+    if matches!(&**left, Expr::Lit(Lit::Null(_))) {
+        return Some(right.clone());
+    }
+    None
+}
+
+fn extract_undefined_single(expr: &Expr, unresolved_mark: Mark) -> Option<Box<Expr>> {
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = expr
+    else {
+        return None;
+    };
+    if !matches!(op, BinaryOp::EqEqEq | BinaryOp::EqEq) {
+        return None;
+    }
+    if is_unresolved_undefined(right, unresolved_mark) {
+        return Some(left.clone());
+    }
+    if is_unresolved_undefined(left, unresolved_mark) {
+        return Some(right.clone());
+    }
+    None
+}
+
+fn is_void_or_undefined(expr: &Expr, unresolved_mark: Mark) -> bool {
+    is_unresolved_undefined(expr, unresolved_mark)
+}
+
+fn make_optional_call_replacing(
+    real_rhs: &Expr,
+    args: &[swc_core::ecma::ast::ExprOrSpread],
+    type_args: &Option<Box<swc_core::ecma::ast::TsTypeParamInstantiation>>,
+    span: swc_core::common::Span,
+    ctxt: swc_core::common::SyntaxContext,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    let (context, call_args) = args.split_first()?;
+    let recovered_callee =
+        recover_babel_optional_call_callee(real_rhs, context.expr.as_ref(), unresolved_mark)?;
+    Some(Expr::OptChain(OptChainExpr {
+        span: DUMMY_SP,
+        optional: true,
+        base: Box::new(OptChainBase::Call(OptCall {
+            span,
+            ctxt,
+            callee: Box::new(recovered_callee),
+            args: call_args.to_vec(),
+            type_args: type_args.clone(),
+        })),
+    }))
+}
+
+fn extract_optional_call_target(callee: &Expr, context: &Expr) -> Option<Expr> {
+    match strip_parens(callee) {
+        Expr::Member(MemberExpr { obj, prop, .. }) if prop.is_ident_with("call") => {
+            optional_call_context_matches_base(obj, context).then(|| (**obj).clone())
+        }
+        Expr::OptChain(OptChainExpr { base, .. }) => match base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, prop, .. }) if prop.is_ident_with("call") => {
+                optional_call_context_matches_base(obj, context).then(|| (**obj).clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn optional_call_context_matches_base(base: &Expr, context: &Expr) -> bool {
+    match strip_parens(base) {
+        Expr::Member(MemberExpr { obj, .. }) => recover_babel_call_context(obj, context).is_some(),
+        Expr::OptChain(OptChainExpr { base: opt_base, .. }) => match opt_base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, .. }) => {
+                recover_babel_call_context(obj, context).is_some()
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn recover_babel_optional_call_callee(
+    real_rhs: &Expr,
+    context: &Expr,
+    unresolved_mark: Mark,
+) -> Option<Expr> {
+    match strip_parens(real_rhs) {
+        Expr::Member(MemberExpr { obj, prop, .. }) => {
+            let recovered_obj = recover_babel_call_context(obj, context)?;
+            Some(Expr::Member(MemberExpr {
+                span: DUMMY_SP,
+                obj: Box::new(recovered_obj),
+                prop: prop.clone(),
+            }))
+        }
+        Expr::OptChain(OptChainExpr { base, .. }) => match base.as_ref() {
+            OptChainBase::Member(MemberExpr { obj, .. })
+                if recover_babel_call_context(obj, context).is_some() =>
+            {
+                Some(real_rhs.clone())
+            }
+            _ => None,
+        },
+        _ => {
+            let recovered = recover_lowered_optional_chain_expr(real_rhs, unresolved_mark)?;
+            if let Some(expected_context) = recovered.expected_context.as_ref() {
+                if !exprs_structurally_equal(context, expected_context) {
+                    return None;
+                }
+            }
+            Some(recovered.chain)
+        }
+    }
+}
+
+struct RecoveredLoweredOptionalChain {
+    chain: Expr,
+    expected_context: Option<Expr>,
+}
+
+fn recover_lowered_optional_chain_expr(
+    expr: &Expr,
+    unresolved_mark: Mark,
+) -> Option<RecoveredLoweredOptionalChain> {
+    if let Some(recovered) = recover_strict_lowered_optional_chain_expr(expr, unresolved_mark) {
+        return Some(recovered);
+    }
+    recover_loose_lowered_optional_chain_expr(expr, unresolved_mark)
+}
+
+fn recover_strict_lowered_optional_chain_expr(
+    expr: &Expr,
+    unresolved_mark: Mark,
+) -> Option<RecoveredLoweredOptionalChain> {
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+
+    if !is_void_or_undefined(cons, unresolved_mark) {
+        return None;
+    }
+
+    let NullCheckResult {
+        value: checked,
+        real_value,
+    } = extract_null_check(test, unresolved_mark)?;
+
+    let expected_context = Some((*checked).clone());
+    let chain = if let Some(real_rhs) = real_value {
+        make_optional_chain_replacing(&checked, &real_rhs, alt, unresolved_mark)?
+    } else {
+        make_optional_chain(*checked, alt)?
+    };
+
+    Some(RecoveredLoweredOptionalChain {
+        chain,
+        expected_context,
+    })
+}
+
+fn recover_loose_lowered_optional_chain_expr(
+    expr: &Expr,
+    unresolved_mark: Mark,
+) -> Option<RecoveredLoweredOptionalChain> {
+    let Expr::Cond(CondExpr {
+        test, cons, alt, ..
+    }) = strip_parens(expr)
+    else {
+        return None;
+    };
+    let Expr::Bin(BinExpr {
+        op, left, right, ..
+    }) = &**test
+    else {
+        return None;
+    };
+
+    match op {
+        BinaryOp::EqEq => {
+            if !is_void_or_undefined(cons, unresolved_mark) {
+                return None;
+            }
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            recover_loose_lowered_optional_chain_parts(checked, alt, unresolved_mark)
+        }
+        BinaryOp::NotEq => {
+            if !is_void_or_undefined(alt, unresolved_mark) {
+                return None;
+            }
+            let checked = extract_loose_null_operand(left, right, unresolved_mark)?;
+            recover_loose_lowered_optional_chain_parts(checked, cons, unresolved_mark)
+        }
+        _ => None,
+    }
+}
+
+fn recover_loose_lowered_optional_chain_parts(
+    checked: Expr,
+    access: &Expr,
+    unresolved_mark: Mark,
+) -> Option<RecoveredLoweredOptionalChain> {
+    if let Some((tmp, real_rhs)) = extract_assign_parts(&checked) {
+        let tmp_ident_expr = find_ident_by_binding(access, &tmp)?;
+        Some(RecoveredLoweredOptionalChain {
+            chain: make_optional_chain_replacing(
+                &tmp_ident_expr,
+                real_rhs,
+                access,
+                unresolved_mark,
+            )?,
+            expected_context: Some(tmp_ident_expr),
+        })
+    } else {
+        Some(RecoveredLoweredOptionalChain {
+            chain: make_optional_chain(checked, access)?,
+            expected_context: None,
+        })
+    }
+}
+
+fn recover_babel_call_context(member_obj: &Expr, context: &Expr) -> Option<Expr> {
+    if exprs_structurally_equal(member_obj, context) {
+        return Some(member_obj.clone());
+    }
+
+    let Expr::Ident(context_ident) = strip_parens(context) else {
+        return None;
+    };
+    let (assigned, assigned_rhs) = extract_assign_parts(member_obj)?;
+    if same_binding(&assigned, context_ident) {
+        return Some((**assigned_rhs).clone());
+    }
+
+    None
+}
+
+fn extract_assign_parts(expr: &Expr) -> Option<(Ident, &Box<Expr>)> {
+    let Expr::Assign(assign) = strip_parens(expr) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left else {
+        return None;
+    };
+    Some((id.id.clone(), &assign.right))
+}
+
+fn extract_assign_ident_parts(expr: &Expr) -> Option<(Ident, &Box<Expr>)> {
+    let Expr::Assign(assign) = strip_parens(expr) else {
+        return None;
+    };
+    if assign.op != AssignOp::Assign {
+        return None;
+    }
+    let AssignTarget::Simple(SimpleAssignTarget::Ident(id)) = &assign.left else {
+        return None;
+    };
+    Some((id.id.clone(), &assign.right))
+}
+
+/// A declared temp whose uses are exactly the `expected_uses` a fixed
+/// lowering shape consumes. Only a shape with no other reads of the temp may
+/// use this; any other shape proves isolation over its pattern expressions.
+fn is_exact_temp_expr(expr: &Expr, isolation: &TempIsolation, expected_uses: usize) -> bool {
+    let Expr::Ident(ident) = strip_parens(expr) else {
+        return false;
+    };
+    isolation.is_isolated(&binding_id(ident), expected_uses)
+}
+
+#[cfg(test)]
+mod tests {
+    use swc_core::common::{Globals, SyntaxContext, GLOBALS};
+    use swc_core::ecma::ast::{AssignExpr, BindingIdent, ExprOrSpread, Null};
+
+    use super::*;
+
+    fn ident(sym: &str, ctxt: SyntaxContext) -> Ident {
+        Ident::new(sym.into(), DUMMY_SP, ctxt)
+    }
+
+    fn ident_expr(sym: &str, ctxt: SyntaxContext) -> Expr {
+        Expr::Ident(ident(sym, ctxt))
+    }
+
+    fn assign_ident_expr(sym: &str, ctxt: SyntaxContext, rhs: Expr) -> Expr {
+        Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: AssignOp::Assign,
+            left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                id: ident(sym, ctxt),
+                type_ann: None,
+            })),
+            right: Box::new(rhs),
+        })
+    }
+
+    fn eq_null(expr: Expr) -> Expr {
+        Expr::Bin(BinExpr {
+            span: DUMMY_SP,
+            op: BinaryOp::EqEqEq,
+            left: Box::new(expr),
+            right: Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+        })
+    }
+
+    fn eq_undefined(expr: Expr, unresolved_mark: Mark) -> Expr {
+        Expr::Bin(BinExpr {
+            span: DUMMY_SP,
+            op: BinaryOp::EqEqEq,
+            left: Box::new(expr),
+            right: Box::new(ident_expr(
+                "undefined",
+                SyntaxContext::empty().apply_mark(unresolved_mark),
+            )),
+        })
+    }
+
+    #[test]
+    fn null_check_assignment_requires_matching_context() {
+        GLOBALS.set(&Globals::default(), || {
+            let unresolved_mark = Mark::new();
+            let first_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let second_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let test = Expr::Bin(BinExpr {
+                span: DUMMY_SP,
+                op: BinaryOp::LogicalOr,
+                left: Box::new(eq_null(assign_ident_expr(
+                    "tmp",
+                    first_ctxt,
+                    ident_expr("obj", SyntaxContext::empty()),
+                ))),
+                right: Box::new(eq_undefined(
+                    ident_expr("tmp", second_ctxt),
+                    unresolved_mark,
+                )),
+            });
+
+            assert!(extract_null_check(&test, unresolved_mark).is_none());
+        });
+    }
+
+    #[test]
+    fn babel_call_context_assignment_requires_matching_context() {
+        GLOBALS.set(&Globals::default(), || {
+            let first_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let second_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let member_obj =
+                assign_ident_expr("tmp", first_ctxt, ident_expr("obj", SyntaxContext::empty()));
+            let context = ident_expr("tmp", second_ctxt);
+
+            assert!(recover_babel_call_context(&member_obj, &context).is_none());
+        });
+    }
+
+    #[test]
+    fn find_ident_by_binding_requires_matching_context() {
+        GLOBALS.set(&Globals::default(), || {
+            let first_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let second_ctxt = SyntaxContext::empty().apply_mark(Mark::new());
+            let target = ident("tmp", first_ctxt);
+            let access = Expr::Call(CallExpr {
+                span: DUMMY_SP,
+                ctxt: SyntaxContext::empty(),
+                callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
+                    span: DUMMY_SP,
+                    obj: Box::new(ident_expr("tmp", second_ctxt)),
+                    prop: MemberProp::Ident(ident("method", SyntaxContext::empty()).into()),
+                }))),
+                args: vec![ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(ident_expr("arg", SyntaxContext::empty())),
+                }],
+                type_args: None,
+            });
+
+            assert!(find_ident_by_binding(&access, &target).is_none());
+        });
+    }
+}

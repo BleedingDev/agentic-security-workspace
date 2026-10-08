@@ -1,0 +1,136 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "playground/**"
+      - "website/**"
+      - "*.md"
+      - "docs/**"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "playground/**"
+      - "website/**"
+      - "*.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  INSTA_UPDATE: "no"
+
+jobs:
+  workflow-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Reject privileged PR workflows
+        shell: bash
+        run: |
+          pattern="^[[:space:]]*pull_request""_target[[:space:]]*:"
+          if grep -R --line-number --include='*.yml' --include='*.yaml' -E "$pattern" .github/workflows; then
+            echo "::error::Privileged PR workflows are not allowed. Use pull_request for PR code."
+            exit 1
+          fi
+
+  npm-platforms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Verify npm platform packages
+        run: node --test scripts/release/npm-platforms.test.mjs
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - name: Format check
+        run: cargo fmt --check
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - name: Package Rust façade and engine
+        run: |
+          cargo package -p wakaru-core --allow-dirty --no-verify
+          cargo package -p wakaru --allow-dirty --no-verify \
+            --config 'patch.crates-io.wakaru-core.path="crates/core"'
+
+  external-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install rustdoc JSON toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-20
+      - name: Install external type checker
+        run: cargo install --locked cargo-check-external-types --version 0.5.0
+      - name: Reject dependency types in the public façade
+        run: >-
+          cargo +nightly-2026-03-20 check-external-types
+          --manifest-path crates/wakaru/Cargo.toml
+
+  wasm:
+    # The playground deploy (playground.yml) is the only place the wasm crate
+    # is built for its real target, and it runs post-merge; this catches a
+    # core change that breaks the wasm32 build before it lands.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check wasm crate for wasm32
+        run: cargo check -p wakaru-wasm --target wasm32-unknown-unknown
+
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Clippy
+        # --all-targets matches the local Definition of Done gate: it also
+        # lints tests, which plain `cargo clippy` skips.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo nextest run --workspace --profile ci
+      - name: Doctests
+        # nextest does not run doctests; keep them covered (none today, but
+        # this guards against a future doctest being silently skipped).
+        run: cargo test --workspace --doc

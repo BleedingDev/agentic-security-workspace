@@ -1,0 +1,117 @@
+---
+title: Read an unpacked bundle
+icon: BookOpen
+description: Find relevant code, follow imports, and trace a recovered module back to the bundle.
+---
+
+Start with a question about the code. A URL, error message, storage key, or
+exported function can lead you to the relevant modules without reading the
+whole bundle.
+
+This walkthrough answers: **Where does the Authorization header on
+`/api/profile` come from?**
+
+## Unpack the example
+
+Download [request-demo.js](/examples/request-demo.js) and save it to a working
+directory. It is a small minified esbuild bundle. Unpack it with:
+
+```bash
+npx wakaru request-demo.js --unpack --provenance -o out/
+```
+
+Use a new or empty output directory. The example produces:
+
+```text
+out/
+├── entry.js
+├── c.js
+├── a.js
+├── n.js
+└── provenance.json
+```
+
+The short filenames come from names left in this bundle. They are useful
+for following references, but are not the original source filenames.
+
+## Search for a clue
+
+Open `out/` in your editor and search for `/api/profile`. You will find it
+in `c.js`:
+
+```js title="Excerpts from c.js"
+import { a } from "./a.js";
+// ...
+const s = a();
+window.loadProfile = () => s("/api/profile");
+```
+
+This tells you that `loadProfile` calls `s`, which comes from `a()`.
+Follow the import to `a.js`.
+
+You do not always need to start at `entry.js`. For a question about a
+specific request or error, a search hit is often a more direct starting point.
+
+## Follow the imports
+
+In `a.js`, the request code uses another imported function:
+
+```js title="Excerpts from a.js"
+import { n } from "./n.js";
+// ...
+const u = n();
+i.exports = (e) => fetch(e, {
+    headers: {
+        Authorization: `Bearer ${u()}`
+    }
+});
+```
+
+The header combines `Bearer ` with the result of `u()`. Follow `n` to
+`n.js` to find where that value comes from:
+
+```js title="Excerpt from n.js"
+t.exports = () => localStorage.getItem("demo-token");
+```
+
+You can now answer the original question: **Calling `window.loadProfile()`
+sends a request to `/api/profile`. Its Authorization header uses the value
+stored under `demo-token` in localStorage, prefixed with `Bearer `.**
+
+The wrappers around these snippets preserve module initialization and
+caching. You can follow the imports and returned values even while some
+names stay short.
+
+## Check the original bundle
+
+Keep the input alongside the recovered files. Search it for `demo-token` or
+`Authorization` to check the code behind your conclusion.
+
+For a larger input, `--provenance` gives you a more precise starting point.
+Open `out/provenance.json` and look up a recovered filename. For example:
+
+```json title="Entry for a.js"
+{
+  "a.js": {
+    "input": "request-demo.js",
+    "ranges": [[154, 256]],
+    "extraction": "structural"
+  }
+}
+```
+
+This points to bytes 154 through 255 in `request-demo.js`. The range identifies
+the input region used to recover the module. It is not a line-by-line map of
+the output. See [Module provenance](/reference/cli#module-provenance).
+
+## Apply the workflow to your bundle
+
+- Start with a string or operation related to your question, then follow
+  imports and callers. Record the filenames that support your answer.
+- Include the entry and its chunks when unpacking a split build. See
+  [Unpack a bundle](/guides/unpack-a-bundle#inputs).
+- If a referenced module is missing or the command reports failures, check
+  [Output & warnings](/reference/output-and-warnings) before relying on the result.
+
+You can also ask a [coding agent](/guides/coding-agents) to follow this workflow
+and report the relevant modules with its findings.

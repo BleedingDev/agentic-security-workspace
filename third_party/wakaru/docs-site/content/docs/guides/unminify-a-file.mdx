@@ -1,0 +1,68 @@
+---
+title: Unminify a file
+icon: FileCode
+description: Turn one minified or transpiled file back into readable JavaScript.
+---
+
+Have a minified script or library you need to understand? Write a readable
+copy so you can follow its logic in your editor:
+
+```bash
+npx wakaru input.js -o output.js
+```
+
+This keeps the code in one file. If you want to split a bundle into modules,
+see [Unpack a bundle](/guides/unpack-a-bundle).
+
+## See what changes
+
+Minifiers squeeze conditions and several actions into a single expression:
+
+```js title="input.js"
+function submit(e){e.valid&&(track("submit"),send(e.data)),e.pending=!1}
+```
+
+Wakaru turns those actions back into separate statements:
+
+```js title="output.js"
+function submit(e) {
+    if (e.valid) {
+        track("submit");
+        send(e.data);
+    }
+    e.pending = false;
+}
+```
+
+You can now see the two paths: valid input triggers tracking and sending,
+while `pending` is cleared either way.
+
+For transpiled code, Wakaru also restores modern syntax such as classes
+and `async`/`await` where it recognizes the compiled patterns.
+See [What is Wakaru](/what-is-wakaru) for an example.
+
+## Why are some names still short?
+
+The parameter `e` stays `e` in this example. Wakaru improves names when the
+code provides enough clues, but most names lost during minification cannot
+be recovered from the code alone.
+
+If you have a source map, use it to recover original names. See
+[Source maps](/guides/source-maps). Without one, a coding agent can help
+choose names from context once the code is readable. Those names are
+interpretations, not the original source names.
+
+## If you need to run the result
+
+Start with `minimal` to prioritize preserving the input's behavior:
+
+```bash
+npx wakaru input.js --level minimal -o output.js
+```
+
+Wakaru aims to produce working code, but cannot guarantee every case. Check
+the result in your application. [Rewrite levels](/guides/rewrite-levels)
+explains the tradeoffs and shows how the output can differ.
+
+For a quick comparison without writing files, try your code in the
+[playground](https://wakarujs.com/playground/).

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "calls"
+    ],
+    "paths": [
+      "test/language/expressions/call",
+      "test/language/expressions/new",
+      "test/language/expressions/member-expression",
+      "test/language/expressions/property-accessors",
+      "test/language/expressions/this",
+      "test/language/expressions/new.target"
+    ]
+  },
+  "totals": {
+    "discovered": 193,
+    "runnable": 193,
+    "skipped": 0,
+    "unsupported": 9,
+    "rejected": 0,
+    "passed": 184,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/call/eval-realm-indirect.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "9430d800289276bb55fb41bdd557d8bfb3f75ddf78201cad2d5eecd1425e4dfc",
+      "summary": "Error: sloppy: expected success, got runtime TypeError: eval is not a function"
+    },
+    {
+      "path": "test/language/expressions/call/eval-spread.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "4d409c17073fa45bd2e23ce24e05d4d674c08d0a2150ff7303211be3ae19896e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"local\"», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/call/tco-call-args.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/call/tco-member-args.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/call/tco-non-eval-function-dynamic.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "30b5d007776d25725ef44281b3bf763865f69116616b0b752b1a1657b8594643",
+      "summary": "Error: sloppy: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/call/tco-non-eval-function.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "30b5d007776d25725ef44281b3bf763865f69116616b0b752b1a1657b8594643",
+      "summary": "Error: sloppy: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/call/tco-non-eval-global.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "30b5d007776d25725ef44281b3bf763865f69116616b0b752b1a1657b8594643",
+      "summary": "Error: sloppy: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/call/tco-non-eval-with.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "30b5d007776d25725ef44281b3bf763865f69116616b0b752b1a1657b8594643",
+      "summary": "Error: sloppy: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/new/non-ctor-err-realm.js",
+      "variant": "sloppy,strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "eb6597c7776ac8ca9a784ec4ded6eacd74e3b4c16261a233717da8d38ace26b5",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+    }
+  ]
+}

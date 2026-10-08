@@ -1,0 +1,8 @@
+---
+source: crates/core/tests/un_sliced_to_array_rule.rs
+assertion_line: 447
+expression: output
+---
+import _slicedToArray from "@babel/runtime/helpers/slicedToArray";
+const _ref = _slicedToArray(a, 2);
+const name = _ref[0];

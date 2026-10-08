@@ -1,0 +1,15 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { Component } from "./module-50.js";
+import "./module-28.js";
+class i extends Component {
+    componentDidMount() {
+        this.props.fetchData();
+    }
+    render() {
+        return <div><h1>Front page</h1></div>;
+    }
+}
+export default i;

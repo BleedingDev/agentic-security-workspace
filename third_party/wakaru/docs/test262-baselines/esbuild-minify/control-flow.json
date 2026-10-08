@@ -1,0 +1,575 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "esbuild-minify",
+    "version": "0.23.1",
+    "configHash": "5cc7678984b5d2f567c58fa41b6aef47740bd1d8d00a72443d6b759eeeaf1a6f"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "control-flow"
+    ],
+    "paths": [
+      "test/language/statements/if",
+      "test/language/statements/switch",
+      "test/language/statements/try",
+      "test/language/statements/return",
+      "test/language/statements/throw",
+      "test/language/statements/break",
+      "test/language/statements/continue",
+      "test/language/statements/labeled",
+      "test/language/statements/for",
+      "test/language/statements/for-in",
+      "test/language/statements/while",
+      "test/language/statements/do-while",
+      "test/language/expressions/conditional",
+      "test/language/expressions/logical-and",
+      "test/language/expressions/logical-or",
+      "test/language/expressions/comma"
+    ]
+  },
+  "totals": {
+    "discovered": 1117,
+    "runnable": 1117,
+    "skipped": 0,
+    "unsupported": 21,
+    "rejected": 44,
+    "passed": 1052,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/comma/tco-final.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-cond.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-pos.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-and/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-or/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/break/S12.8_A3.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "65ef85a145fa2d04e324193f6ed23fb9cede88625ec041cf3e9f07798c86ee67",
+      "summary": "Error: strict: expected success, got runtime ReferenceError: x is not defined"
+    },
+    {
+      "path": "test/language/statements/break/S12.8_A4_T1.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e4d32b93eb64850c6590a0f6b9afde90d6ee7f7220cec53f5c6265c543772e95",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: x is not defined"
+    },
+    {
+      "path": "test/language/statements/break/S12.8_A4_T2.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e4d32b93eb64850c6590a0f6b9afde90d6ee7f7220cec53f5c6265c543772e95",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: x is not defined"
+    },
+    {
+      "path": "test/language/statements/break/S12.8_A4_T3.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e4d32b93eb64850c6590a0f6b9afde90d6ee7f7220cec53f5c6265c543772e95",
+      "summary": "Error: sloppy: expected success, got runtime ReferenceError: x is not defined"
+    },
+    {
+      "path": "test/language/statements/do-while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for-in/scope-body-lex-open.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-in/scope-head-lex-close.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for-in/scope-head-lex-open.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "8a78ded9c99441e65918abc2fa2166d4e472c6e1e343a87ab8c286c71a0ccbe7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/for/tco-const-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-let-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-lhs-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-var-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/tco-else-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/tco-if-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/value-await-non-module-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "8eaf106cdfd3da946e97d88abf176446bcd4d00a5546083b33b7750f859a5faa",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:15:0: ERROR: The keyword \"await\" cannot be escaped"
+    },
+    {
+      "path": "test/language/statements/labeled/value-await-non-module.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "a0403c0b37a6e412ef87600939a3f9fcdc3d32887f5d77cd39d9b44fdd573f49",
+      "summary": "Error: Transform failed with 1 error:\n<stdin>:14:5: ERROR: Unexpected \":\""
+    },
+    {
+      "path": "test/language/statements/return/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body-dflt.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-dftl-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/12.14-14.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "0264eb31d774700946edf194e75f4988297fa6ab37db45f7ff114901ded9e7dd",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: result Expected SameValue(«undefined», «\"test\"») to be true"
+    },
+    {
+      "path": "test/language/statements/try/12.14-15.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "0264eb31d774700946edf194e75f4988297fa6ab37db45f7ff114901ded9e7dd",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: result Expected SameValue(«undefined», «\"test\"») to be true"
+    },
+    {
+      "path": "test/language/statements/try/12.14-16.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "3a16dc3b9dbe1bc5ddd910bed48ad3c7bad0bb6f03d04b6d884d00b4529d3c81",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: result Expected SameValue(«undefined», «\"test1\"») to be true"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elem-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elem-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elem-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elem-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/obj-ptrn-id-init-fn-name-class.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "33f8ce38e81d6b891a51da398fd01cc708c5e0acffa4dc7f79e27a5d39f8eced",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCls\"», «\"xCls\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/obj-ptrn-id-init-fn-name-cover.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "1c5863a4376c9c13576e6b4d8c58163db72489eeb0e387c9cc7f3c82e24180f7",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xCover\"», «\"xCover\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/obj-ptrn-id-init-fn-name-fn.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "c8d12dc25dce3c9d61ae80c885d058919fa9515e405f43284074306692d9d81e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xFn\"», «\"xFn\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/dstr/obj-ptrn-id-init-fn-name-gen.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime-inferred-name",
+      "fingerprint": "87e14f19ab86dd4eddcc317bed1eaaf81fbbc2c3a4dc7b0030e19b26e33fceb9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"xGen\"», «\"xGen\"») to be false"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    }
+  ]
+}

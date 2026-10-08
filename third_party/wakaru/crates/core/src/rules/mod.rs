@@ -1,0 +1,283 @@
+mod arg_rest;
+mod arrow_function;
+mod arrow_return;
+pub(crate) mod binding_facts;
+pub(crate) mod builtin_aliases;
+mod call_required;
+mod callability;
+mod class_expression_to_declaration;
+mod constructor_sensitivity;
+pub(crate) mod cross_module_helper_refs;
+pub(crate) mod dead_decls;
+pub(crate) mod dead_imports;
+pub(crate) mod decl_utils;
+pub(crate) mod eval_utils;
+mod exponent;
+pub(crate) mod expr_utils;
+mod extract_inlined_function;
+mod flip_comparisons;
+pub(crate) mod helper_matcher;
+mod import_dedup;
+pub(crate) mod match_context;
+mod merge_declaration_init;
+mod obj_method_shorthand;
+mod obj_shorthand;
+mod object_assign_spread;
+mod pipeline;
+mod remove_void;
+pub(crate) mod rename_utils;
+mod simplify_sequence;
+mod smart_inline;
+mod smart_rename;
+pub(crate) mod state_machine;
+pub(crate) mod transpiler_helper_utils;
+mod un_argument_spread;
+mod un_array_concat_spread;
+mod un_assert_this_initialized;
+mod un_assignment_merging;
+mod un_async_await;
+mod un_bracket_notation;
+mod un_builtin_aliases;
+mod un_builtin_prototype;
+mod un_class_call_check;
+mod un_class_fields;
+mod un_computed_properties;
+mod un_conditionals;
+mod un_curly_braces;
+mod un_define_property;
+mod un_destructuring;
+mod un_double_negation;
+mod un_enum;
+mod un_es6_class;
+mod un_esbuild_cjs_wrapper;
+mod un_esm;
+mod un_esmodule_flag;
+mod un_export_rename;
+mod un_for_await;
+mod un_for_of;
+mod un_iife;
+mod un_import_rename;
+mod un_indirect_call;
+mod un_infinity;
+mod un_interop_require_default;
+mod un_interop_require_wildcard;
+mod un_jsx;
+mod un_namespace;
+mod un_nullish_coalescing;
+mod un_numeric_literal;
+mod un_object_rest;
+mod un_object_spread;
+mod un_optional_chaining;
+mod un_parameters;
+mod un_possible_constructor_return;
+mod un_prototype_class;
+mod un_regenerator;
+mod un_rest_array_copy;
+mod un_return;
+mod un_sliced_to_array;
+mod un_spread_array_literal;
+mod un_string_escape;
+mod un_template_literal;
+mod un_to_array;
+mod un_to_consumable_array;
+mod un_type_constructor;
+mod un_typeof;
+mod un_typeof_polyfill;
+mod un_typeof_strict;
+mod un_undefined_init;
+mod un_variable_merging;
+mod un_webpack_define_getters;
+mod un_webpack_interop;
+mod un_webpack_object_getters;
+mod un_while_loop;
+mod unminify_booleans;
+mod var_decl_to_let_const;
+mod var_decl_to_let_const_captures;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RewriteLevel {
+    Minimal,
+    #[default]
+    Standard,
+    Aggressive,
+}
+
+impl RewriteLevel {
+    /// Parse a rewrite level from its lowercase string form (`"minimal"`,
+    /// `"standard"`, `"aggressive"`). Any unrecognized or absent value falls
+    /// back to [`RewriteLevel::Standard`]. Shared by the CLI and wasm edges so
+    /// level-string handling stays identical across both.
+    pub fn from_str_or_default(level: Option<&str>) -> Self {
+        match level {
+            Some("minimal") => Self::Minimal,
+            Some("aggressive") => Self::Aggressive,
+            _ => Self::Standard,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewriteAssumptions {
+    pub no_document_all: bool,
+    pub pure_getters: bool,
+    pub stable_builtins: bool,
+}
+
+impl RewriteAssumptions {
+    pub fn from_level(level: RewriteLevel) -> Self {
+        match level {
+            RewriteLevel::Minimal => Self {
+                no_document_all: false,
+                pure_getters: false,
+                stable_builtins: false,
+            },
+            RewriteLevel::Standard => Self {
+                no_document_all: true,
+                pure_getters: false,
+                // Matches the documented contract and actual behavior: SmartInline's
+                // builtin-alias inlining and UnBuiltinAliases both run at standard+.
+                // Nothing consumes this flag yet; it exists so future consumers
+                // inherit the correct policy.
+                stable_builtins: true,
+            },
+            RewriteLevel::Aggressive => Self {
+                no_document_all: true,
+                pure_getters: true,
+                stable_builtins: true,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewritePolicy {
+    pub level: RewriteLevel,
+    pub assumptions: RewriteAssumptions,
+}
+
+impl RewritePolicy {
+    pub fn from_level(level: RewriteLevel) -> Self {
+        Self {
+            level,
+            assumptions: RewriteAssumptions::from_level(level),
+        }
+    }
+}
+
+pub use arg_rest::ArgRest;
+pub use arrow_function::ArrowFunction;
+pub use arrow_return::ArrowReturn;
+pub(crate) use call_required::{collect_import_call_edges, pinned_export_names, CallRequiredPlan};
+pub use class_expression_to_declaration::ClassExpressionToDeclaration;
+pub use dead_decls::{DeadDecls, DeadUninitializedDecls};
+pub use dead_imports::DeadImports;
+pub use exponent::Exponent;
+pub use extract_inlined_function::{
+    ExtractInlinedFunction, ExtractedFunctionNames, SharedExtractedFunctionNames,
+};
+pub use flip_comparisons::FlipComparisons;
+pub use import_dedup::ImportDedup;
+pub use merge_declaration_init::MergeDeclarationInit;
+pub use obj_method_shorthand::ObjMethodShorthand;
+pub use obj_shorthand::ObjShorthand;
+pub use object_assign_spread::ObjectAssignSpread;
+pub use pipeline::{
+    apply_rules, rule_descriptors, rule_names, RuleDescriptor, RulePipelineOptions, RuleStage,
+};
+pub(crate) use pipeline::{apply_rules_to_recovered_module, apply_rules_with_observer};
+pub use remove_void::RemoveVoid;
+pub use simplify_sequence::SimplifySequence;
+pub use smart_inline::SmartInline;
+pub use smart_rename::{strip_redundant_sentry_source_file, SmartRename, SmartRenameSecondPass};
+pub use un_argument_spread::UnArgumentSpread;
+pub use un_array_concat_spread::{UnArrayConcatSpread, UnArrayConcatSpreadRest};
+pub use un_assert_this_initialized::UnAssertThisInitialized;
+pub use un_assignment_merging::UnAssignmentMerging;
+pub use un_async_await::UnAsyncAwait;
+pub use un_bracket_notation::UnBracketNotation;
+pub use un_builtin_aliases::UnBuiltinAliases;
+pub use un_builtin_prototype::UnBuiltinPrototype;
+pub use un_class_call_check::UnClassCallCheck;
+pub use un_class_fields::UnClassFields;
+pub use un_computed_properties::UnComputedProperties;
+pub use un_conditionals::{
+    UnConditionals, UnConditionalsAssignmentOnly, UnConditionalsExprStmtOnly,
+};
+pub use un_curly_braces::UnCurlyBraces;
+pub use un_define_property::UnDefineProperty;
+pub use un_destructuring::UnDestructuring;
+pub use un_double_negation::UnDoubleNegation;
+pub use un_enum::UnEnum;
+pub use un_es6_class::UnEs6Class;
+pub use un_esbuild_cjs_wrapper::UnEsbuildCjsWrapper;
+pub(crate) use un_esm::contains_local_self_require;
+pub use un_esm::UnEsm;
+pub use un_esmodule_flag::UnEsmoduleFlag;
+pub use un_export_rename::UnExportRename;
+pub use un_for_of::UnForOf;
+pub use un_iife::UnIife;
+pub use un_import_rename::UnImportRename;
+pub use un_indirect_call::UnIndirectCall;
+pub use un_infinity::UnInfinity;
+pub use un_interop_require_default::UnInteropRequireDefault;
+pub use un_interop_require_wildcard::UnInteropRequireWildcard;
+pub use un_jsx::UnJsx;
+pub use un_namespace::UnNamespace;
+pub use un_nullish_coalescing::UnNullishCoalescing;
+pub use un_numeric_literal::UnNumericLiteral;
+pub use un_object_rest::UnObjectRest;
+pub use un_object_spread::UnObjectSpread;
+pub use un_optional_chaining::UnOptionalChaining;
+pub use un_parameters::UnParameters;
+pub use un_possible_constructor_return::UnPossibleConstructorReturn;
+pub use un_prototype_class::UnPrototypeClass;
+pub use un_regenerator::UnRegenerator;
+pub use un_rest_array_copy::UnRestArrayCopy;
+pub use un_return::UnReturn;
+pub use un_sliced_to_array::UnSlicedToArray;
+pub use un_spread_array_literal::UnSpreadArrayLiteral;
+pub use un_string_escape::UnStringEscape;
+pub use un_template_literal::UnTemplateLiteral;
+pub use un_to_array::UnToArray;
+pub use un_to_consumable_array::UnToConsumableArray;
+pub use un_type_constructor::UnTypeConstructor;
+pub use un_typeof::UnTypeof;
+pub use un_typeof_polyfill::UnTypeofPolyfill;
+pub use un_typeof_strict::UnTypeofStrict;
+pub use un_undefined_init::UnUndefinedInit;
+pub use un_variable_merging::{UnVariableMerging, UnVariableMergingDeclsOnly};
+pub use un_webpack_define_getters::UnWebpackDefineGetters;
+pub use un_webpack_interop::UnWebpackInterop;
+pub use un_webpack_object_getters::UnWebpackObjectGetters;
+pub use un_while_loop::UnWhileLoop;
+pub use unminify_booleans::UnminifyBooleans;
+pub use var_decl_to_let_const::VarDeclToLetConst;
+
+#[cfg(test)]
+mod rewrite_assumptions_tests {
+    use super::{RewriteAssumptions, RewriteLevel};
+
+    // Pins the current per-level assumption table. `stable_builtins` matches
+    // the documented standard+ contract and the rules that embody it
+    // (SmartInline builtin-alias inlining, UnBuiltinAliases). `pure_getters`
+    // is pinned at its current aggressive-only value; the documented contract
+    // is shape-sensitive (identifier bases at standard), which a single
+    // boolean cannot express — reconcile matcher gating before widening it.
+    #[test]
+    fn assumption_table_pins_current_policy() {
+        let minimal = RewriteAssumptions::from_level(RewriteLevel::Minimal);
+        assert!(!minimal.no_document_all);
+        assert!(!minimal.pure_getters);
+        assert!(!minimal.stable_builtins);
+
+        let standard = RewriteAssumptions::from_level(RewriteLevel::Standard);
+        assert!(standard.no_document_all);
+        assert!(!standard.pure_getters);
+        assert!(standard.stable_builtins);
+
+        let aggressive = RewriteAssumptions::from_level(RewriteLevel::Aggressive);
+        assert!(aggressive.no_document_all);
+        assert!(aggressive.pure_getters);
+        assert!(aggressive.stable_builtins);
+    }
+}

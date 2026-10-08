@@ -1,0 +1,92 @@
+import threading
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import ParamSpec, TypeVar
+
+from structlog import get_logger
+
+from unblob._rust.sandbox import (
+    AccessFS as AccessFS,
+)
+from unblob._rust.sandbox import (
+    SandboxError as SandboxError,
+)
+from unblob._rust.sandbox import (
+    restrict_access as restrict_access,
+)
+from unblob.processing import ExtractionConfig
+
+logger = get_logger()
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class Sandbox:
+    """Configures restricted file-systems to run functions in.
+
+    When calling ``run()``, a separate thread will be configured with
+    minimum required file-system permissions. All subprocesses spawned
+    from that thread will honor the restrictions.
+    """
+
+    def __init__(
+        self,
+        config: ExtractionConfig,
+        log_path: Path,
+        report_file: Path | None,
+        extra_passthrough: Iterable[AccessFS] = (),
+    ):
+        self.passthrough = [
+            # Python, shared libraries, extractor binaries and so on
+            AccessFS.read("/"),
+            # Multiprocessing
+            AccessFS.read_write("/dev/shm"),  # noqa: S108
+            # Extracted contents
+            AccessFS.read_write(config.extract_root),
+            AccessFS.remove_dir(config.extract_root),
+            AccessFS.remove_file(config.extract_root),
+            AccessFS.make_dir(config.extract_root.parent),
+            AccessFS.read_write(log_path),
+            *extra_passthrough,
+        ]
+
+        if report_file:
+            self.passthrough += [
+                AccessFS.read_write(report_file.parent),
+            ]
+
+    def run(self, callback: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+        """Run callback with restricted filesystem access."""
+        exception = None
+        result = None
+
+        def _run_in_thread(callback, *args, **kwargs):
+            nonlocal exception, result
+
+            self._try_enter_sandbox()
+            try:
+                result = callback(*args, **kwargs)
+            except BaseException as e:
+                exception = e
+
+        thread = threading.Thread(
+            target=_run_in_thread,
+            args=(callback, *args),
+            kwargs=kwargs,
+            daemon=True,
+        )
+        thread.start()
+        thread.join()
+
+        if exception:
+            raise exception  # pyright: ignore[reportGeneralTypeIssues]
+        return result  # pyright: ignore[reportReturnType]
+
+    def _try_enter_sandbox(self):
+        try:
+            restrict_access(*self.passthrough)
+        except SandboxError:
+            logger.warning(
+                "Sandboxing FS access is unavailable on this system, skipping."
+            )

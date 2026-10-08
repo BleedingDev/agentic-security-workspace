@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "terser-light",
+    "version": "5.31.6",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "literals"
+    ],
+    "paths": [
+      "test/language/literals"
+    ]
+  },
+  "totals": {
+    "discovered": 534,
+    "runnable": 534,
+    "skipped": 0,
+    "unsupported": 0,
+    "rejected": 3,
+    "passed": 531,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/literals/regexp/mongolian-vowel-separator.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "58d9309242e7c0e3f8536afd4402e11e7aed98212642e9bb4a5665256b96655e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"//u180e\"», «\"᠎\"») to be true"
+    },
+    {
+      "path": "test/language/literals/string/line-continuation-double.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "abaabe0330546ac07381908c78a20e92c32cb48a5ba8563565a7e23dcddfa341",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"/r\"», «\"\"») to be true"
+    },
+    {
+      "path": "test/language/literals/string/line-continuation-single.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "abaabe0330546ac07381908c78a20e92c32cb48a5ba8563565a7e23dcddfa341",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«\"/r\"», «\"\"») to be true"
+    }
+  ]
+}

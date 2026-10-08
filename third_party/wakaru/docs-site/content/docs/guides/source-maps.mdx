@@ -1,0 +1,75 @@
+---
+title: Source maps
+icon: Map
+description: Recover names and original sources from a map, or emit maps for the decompiled output.
+---
+
+Choose the operation that matches what you want to recover or trace:
+
+| I want to… | Use |
+| --- | --- |
+| Get the original source files back | [Extract the sources](#recover-the-original-sources) with `wakaru extract` |
+| Improve variable names in decompiled code | [Provide an input map](#recover-names-with-an-input-map) with `--source-map` |
+| Trace decompiled code back to its input file | [Emit an output map](#emit-a-map-for-the-output) with `--emit-source-map` |
+
+If you have a source map, try extracting the original files first. You may
+not need to decompile anything. If you only want to trace Wakaru's output,
+you can emit a map without having an original source map.
+
+## Recover the original sources
+
+```bash
+npx wakaru extract input.js.map -o src/
+```
+
+Many production maps embed the original files themselves, in a field called
+`sourcesContent`. `wakaru extract` writes those files straight to disk. When
+this works, you get the original source, not a reconstruction. Try it first
+whenever a map is available.
+
+## Recover names with an input map
+
+```bash
+npx wakaru input.js --source-map input.js.map -o output.js
+```
+
+Use an input map when you want to keep decompiling the code and improve its
+names. Wakaru can recover identifiers from names recorded in the map or
+from embedded source files.
+
+This works in single-file mode only. `--unpack` rejects input maps because
+the split modules no longer line up with the bundle's coordinates.
+
+## Emit a map for the output
+
+```bash
+npx wakaru input.js --emit-source-map -o output.js
+npx wakaru bundle.js --unpack --emit-source-map -o out/
+```
+
+`--emit-source-map` writes a `.map` next to each output file, mapping the
+decompiled code back to the input. Unlike input maps, this works with
+`--unpack`: each module's map points into the bundle.
+
+Code that Wakaru adds, such as recovered `import` and `export` statements,
+has no position in the input and stays unmapped. Each map refers to its
+input by a path relative to the map file. Unpack maps leave the bundle's
+text out of the map, so keep the bundle where it was when you open the maps
+in a tool.
+
+## See the mapping visually
+
+The [playground](https://wakarujs.com/playground/) has a Mapping toggle. It
+colors each line of the output and highlights the input it came from, so you
+can trace any decompiled line back to the original.
+
+Hover any line below to see its counterpart on the other side. This is the
+live playground, so the code is editable:
+
+<iframe
+  src="https://wakarujs.com/playground/?embed=1#state=1|H4sIAAAAAAAAA51XUW_bNhD-K6wwFBQqyPaKFYGyrAvSYk8bhjRvdhDQ1MnWLFMaSTl1U__33VGWTMlu4kyAYfF4vON99_GOegpMWWsJQRLMgtoAM1bn0s6Cy5naCM0eZCGMuRFFcbMEuWJXTMO_da6Bz4Lf52IOxUjXyuZrGC2hqECbUX_FLAg7UxqEhRuaPsvOQd0zIsxWybvyD1CghS31OZaGazxzpsglpHfltdZie46t3oKDoVsQ0vbWa5I0CjOV1UravFQsK_Va2FswdWG5CNnTTDF8yMQcl4u4IK-XB6l0UiNLDZ40ddI1WOEJH1JvAKjBH0gPf1dXTNVFwb5_3482ZZ6yMfvYviQsja1YhOxNq_r2Ldpzw04XxwmbBapU4PhBrjTYWiuUTmdBLEslheUQ4fgef2ErmZMk8SV_CruMq_KRy4j9HBJIO8Kpja3Fi0MPIkIYYrnMi1SDiphqxkSRv8TaB2iJM_3kcj6OmjTFyPMvFrkVYppwT7QDb-kCly6n4_uIbd3b5N6b_Eaw-oZuIQs5IRb2Eem7-5xlIG3Iu7i6sOjZctWu3kVsqu7DqBk165uD8LmANSiLW07zzSyI2BPrAidoD_grQtsHe4EhasgS3D3atw3c-EvjNDdVIbZkAwObBQRLbf4WCgqXYo-5lS4lGHNdFCd4O20xQn4zTtIcpYiAo-8ljn5lMi5ALewSR-_e9eJvsy6neWvniNP_n9fu7JzB7LHnCdhvOIGa87iqzZL3jm0adtnqpXzus9jU67XQ-Tfw2XzqwGd5YUEfmCFRp7Uo43Ll4nozvmS7cFAW5vFaVIeF6RGm5BtzLKyIWObey5UX5N7JEyONhOGxNS79CSp_RDJUrvK6M5-JHAnBdm3c7VaQYKYsIC7KBRLzE1YG0m5512ac-Djy-Cg8OSMvkOLs4ADJPUkbOO-EWd3WCgu4j2cXccfSg54HNj2DRsbtMjeRpx4OiSc8ASnHqjkk_EFQ3gaEEgNCCQdbCplAxnTVsrNl0a_xz02fSX6r5Ic9Ym3wIlrBlnyIFMGL_M0XNWbhBOf88Bz39KKmkmL26UDOTyiYTo6lrx9WbyZhk8u-4UNozal5YsoVJ6RfpfNS5xZ3jL3AIsU-YXyxwgYQHtjUPn1WeZ2ly0PTYa7TFNJeWxGOUry6Gjaf0COYhzeWw2NEseW_EtE2bcOLBtewaN9vm4sEnlm96g4tZhoZCcCPTLaJ0mAqhAMjplN6eay0933C06P2ykPr6Sf-gLhY-GpPuqTnEfsrMD4JmXnMrVyybklcadhQZ23H6jk7LpUC75Tj5McK9AzNj0-EeVKf3KP--xf09xBlgMEgoUaiykeOpqMDtYTjVTik4lEs71-Ipc2Xj5LBI_PKkD6cF1LrLf7HUDl8afMfXtg8UeyVG-8q1n6JmOu6su7-SxPNRaVcJdjCon2jcV6ODv3RZi9eyZqLcyG2Yy9GrC6YfrnEesLHz-3pdcFOIgZal5rqCRVwNmSaK1TUVl3vOwOOyeQZPJzGLACFxl4kaD8GY8vqh8zZHYuxZO5LSeTaHzalKab24v5-aGQXhvxUzXWKOx52zV23jV3Bo9_BqYGuy-YbqtGJsds5cVWUW4Lb3dz9fuFdU_dL3EkPh3rd_YxPh_x8Yu4jjFJnwVhy4-6QCfuF7Wj7ZCuIgnWZ0ndzCrJcV5hIFKH3tJagUew-H1FUwAb_kwDvVioVOkVRc5u0pJaJAmt7gBe5KleLILG6xuGmhi-Z7GY3-OGJJRyNbCbxZByPg91_2wkG-7gPAAA"
+  title="Wakaru playground with the mapping view enabled"
+  loading="lazy"
+  className="w-full rounded-lg border border-fd-border bg-fd-card"
+  style={{ height: '520px' }}
+/>

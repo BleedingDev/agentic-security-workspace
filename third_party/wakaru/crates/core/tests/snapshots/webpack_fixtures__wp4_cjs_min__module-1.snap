@@ -1,0 +1,7 @@
+---
+source: crates/core/tests/webpack_fixtures.rs
+expression: code
+---
+export const greet = function(e) {
+    return `Hello, ${e}!`;
+};

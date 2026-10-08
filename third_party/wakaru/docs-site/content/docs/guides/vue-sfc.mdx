@@ -1,0 +1,79 @@
+---
+title: Vue SFC
+icon: PanelsTopLeft
+description: Read compiled Vue 3 components as templates and setup code.
+---
+
+Compiled Vue components can hide a simple template behind a wall of render
+calls. With `--vue-sfc`, Wakaru can recover a readable `.vue` file so you
+can follow the component's structure, state, and event handlers.
+
+This is experimental Vue 3 recovery. The result helps you understand the
+component; it does not recreate the original source file.
+
+## Recover a component
+
+```bash
+mkdir -p out
+npx wakaru component.js --vue-sfc -o out/component.js
+```
+
+Wakaru writes decompiled JavaScript and, when recovery succeeds, a `.vue`
+file alongside it:
+
+```text
+out/
+├── component.js
+└── component.vue
+```
+
+Open the `.vue` file to read the component. Keep the JavaScript nearby to
+check anything that looks incomplete or unclear.
+
+## Read the recovered component
+
+The `<template>` brings elements, bindings, conditions, and loops back into
+view. The `<script setup>` brings together state and logic such as props,
+refs, computed values, and event handlers.
+
+In this example, the recovered template makes it easy to spot a list and
+its insert, reset, shuffle, and remove buttons. You can follow each
+`@click` to the function that changes the list:
+
+![Playground with Vue SFC on: compiled render function on the left, recovered script setup and template on the right](/screenshots/vue-sfc.png)
+
+[Try the Vue list transition example in the playground][vue-example].
+
+Styles, comments, and custom SFC blocks are not recovered. Names depend on
+what survived compilation, and imports or complex template patterns may
+still need work. Review the result before trying to use it in an application.
+
+## Recover components from a bundle
+
+```bash
+npx wakaru bundle.js --unpack --vue-sfc -o out/
+```
+
+Every unpacked module still gets a JavaScript file. Modules that recover as
+Vue components also get a sibling `.vue` file. You can browse the recovered
+components without losing the rest of the application's code.
+
+See [Unpack a bundle](/guides/unpack-a-bundle) for working with multiple
+files or chunks.
+
+## Checking what happened
+
+If no `.vue` file appears, use the JavaScript output to inspect the
+component. Some compiled patterns are not yet supported.
+
+With `--unpack`, add `--json` to check each module's recovery status:
+
+- `recovered_vue_sfc`: a `.vue` artifact was written
+- `vue_sfc_source_js`: the paired JavaScript for a recovered module
+- `vue_sfc_fallback_js`: the module looked like Vue but stayed JavaScript
+
+If you only want the recovered Vue file, use `-o App.vue`. This makes the
+command fail when recovery is not possible. See the
+[CLI reference](/reference/cli#vue-sfc-recovery-experimental) for the output options.
+
+[vue-example]: https://wakarujs.com/playground/#state=1|H4sIAAAAAAAAA6VW-2_bNhD-Vw5aAcsJa0ddVgwuWiBt3SLoI0EcDBuqQGAkylZDUQJJeQ4C_-87PmTTjw57JD-YPN599-B3Jz5FqulkzqJJND6BGWOw0LpVk_F42bHvatTI-ZitaN1ypsY_8Urp51pSoSpdNQJOxqmo6raRGp5AshLWUMqmhgEaD1Jh_vNGKA1Zpso8y-A1PKUCcCtozSYwuGjbATESxXTXxlnWyqZVBNHYqm0UqmSZW8F62Ns6QTx8tcWfM30pMCbKLzWrFfqJh_D6DXxLCLwg8DOBcwK_3PXqlVfCkOM903g4TAVnqFOgglUcLSnv2IgzMdcLOIXE-C07kdsaVEIxqWMfncdH0y9UL0ay6UQRuyUVRVOj3skR1KGxDcWq5VXO4orAGcFQTk9RY73jVzKsWe82MEXXBylZlb_LZxdaLbqy5Ow4eNafBuIjwdXN0qkcFCaMoRIFW12VTtH6KiGu4A08T7zdj8qSWPW1d9yzTCKNpGCFo9p-IYjDIkaO9TD5gbMw1VkTw0IjX5oDW6-lkbobJq7ipK8O8UkSR_xUXN1_Z7keFaysBLtGHqPRYxzGRGCQZZWa5bJq9cwwfmCpLrqaSXrPke4l5QohbbYT0LIzxE-FjzIE85mvXwUtmEtGNZtyVjOhf_vaFAyoguxQbILG0svP2NBWZbsl8EHSudG0B_2GACYk3vImf7DyzY7set1qHIoJ6OZ9hXdIH2daVmJu9fZkPd4tWx2ksJERuN1MoY_YZK1V2pMR-LPSi3d6ZQ_9uoffh3Z7P7_SCAdYGgXMWjRYGix7gqT4lkaNeIdEfEijux3SmxrGWW68ZDnNFxjnMz_RntkJh78F1RR_mtbYKM9yf7_xtqzxkBwrYRxciOg4JxiN7ZIjlxyn0X2ndSPSyNDMxzzxoYwcrQ3B0-jSrakGN6bANmYaDcl_RbfN4sBvzPL_YPmOc2gztznAc0CHHPBTBEDT-QTtO45Oepn7DKVRSQsWiHNOlTJyvH1NsZ2lIYM5WQeA2Om043qy4VbsPzq9AuxcqGnmf3qpQT_G_XW50eVnKrp52rr5NwRKI17ZMofmQcoGPyiF-3tgjxM7PEPxmoSpBlexadN4v7l99KfoB0wQCeCr43b6-y0-JYbkKNiPebKrDgFt2NKML6xRvGHj9ns03LWzpFoZwF9NMNc3V9czjIYEPb9jcRcCrLHIyQtr-Gn6x_R99uHm4uOX6Vebz0bvbptaNnE5z24v3n6e2geUwzG_dwRenm9P98Fw3vt31MjRw75gzGJ7kGVlxc1nOo2UzMf4vhr5UWZeTdjinrT9iywiUY2FxedfwfKmbtEYRTizii5nEsX39J5xFHGsKce90jggqCxQVDayplobNcNtRKJti5ccTdxXzAzRWZn3p0smFbYlYiyTUZKMzk6L8-Ts7Iy-jNZ_AQZLuc-HCgAA

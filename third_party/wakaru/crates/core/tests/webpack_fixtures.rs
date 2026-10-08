@@ -1,0 +1,873 @@
+use std::fs;
+
+use wakaru_core::driver::test_support::{unpack, unpack_raw};
+use wakaru_core::{validate_output_modules, DecompileOptions};
+
+fn fixture(path: &str) -> String {
+    let full = format!("tests/bundles/webpack-gen/dist/{path}");
+    fs::read_to_string(&full).unwrap_or_else(|e| panic!("failed to read {full}: {e}"))
+}
+
+fn unpack_fixture(path: &str) -> Vec<(String, String)> {
+    unpack_fixture_with_options(path, false)
+}
+
+fn unpack_fixture_with_options(path: &str, emit_source_map: bool) -> Vec<(String, String)> {
+    let source = fixture(path);
+    let output = unpack(
+        &source,
+        DecompileOptions {
+            filename: path.to_string(),
+            emit_source_map,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|_| panic!("unpack should succeed for {path}"));
+    assert!(
+        !output.has_errors(),
+        "unexpected warnings for {path}: {:?}",
+        output.warnings
+    );
+    output.modules
+}
+
+fn filenames(pairs: &[(String, String)]) -> Vec<&str> {
+    pairs.iter().map(|(n, _)| n.as_str()).collect()
+}
+
+fn assert_has_entry(pairs: &[(String, String)], path: &str) {
+    let names = filenames(pairs);
+    // Entry is "entry.js" for array-form (numeric IDs), or named from key for object-form
+    assert!(
+        names
+            .iter()
+            .any(|n| n.contains("entry") || n.contains("index")),
+        "{path}: expected an entry module, got {names:?}"
+    );
+}
+
+fn assert_no_traversal(pairs: &[(String, String)], path: &str) {
+    for (name, _) in pairs {
+        assert!(
+            !name.contains(".."),
+            "{path}: filename {name} contains path traversal"
+        );
+    }
+}
+
+fn assert_no_runtime_helpers(pairs: &[(String, String)], path: &str) {
+    for (name, code) in pairs {
+        assert!(
+            !code.contains("require.r("),
+            "{path}/{name}: still has require.r"
+        );
+        assert!(
+            !code.contains("require.d("),
+            "{path}/{name}: still has require.d"
+        );
+    }
+}
+
+// ========================================================================
+// Webpack 4 — dev mode (object form, string keys)
+// ========================================================================
+
+#[test]
+fn wp4_cjs_dev() {
+    let pairs = unpack_fixture("wp4-cjs/bundle.js");
+    assert_eq!(pairs.len(), 3, "wp4-cjs: {}", filenames(&pairs).join(", "));
+    assert_has_entry(&pairs, "wp4-cjs");
+    assert_no_traversal(&pairs, "wp4-cjs");
+}
+
+#[test]
+fn wp4_umd_library_wrapper() {
+    let pairs = unpack_fixture("wp4-umd/bundle.js");
+    assert_eq!(pairs.len(), 3, "wp4-umd: {}", filenames(&pairs).join(", "));
+    assert_has_entry(&pairs, "wp4-umd");
+    assert_no_traversal(&pairs, "wp4-umd");
+}
+
+#[test]
+fn wp4_amd_library_wrapper() {
+    let pairs = unpack_fixture("wp4-amd/bundle.js");
+    assert_eq!(pairs.len(), 3, "wp4-amd: {}", filenames(&pairs).join(", "));
+    assert_has_entry(&pairs, "wp4-amd");
+    assert_no_traversal(&pairs, "wp4-amd");
+}
+
+#[test]
+fn wp4_esm_dev() {
+    let pairs = unpack_fixture("wp4-esm/bundle.js");
+    assert_eq!(pairs.len(), 3, "wp4-esm: {}", filenames(&pairs).join(", "));
+    assert_has_entry(&pairs, "wp4-esm");
+    assert_no_runtime_helpers(&pairs, "wp4-esm");
+}
+
+#[test]
+fn wp4_mixed_dev() {
+    let pairs = unpack_fixture("wp4-mixed/bundle.js");
+    assert_eq!(
+        pairs.len(),
+        3,
+        "wp4-mixed: {}",
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp4-mixed");
+}
+
+#[test]
+fn wp4_require_n_dev() {
+    let pairs = unpack_fixture("wp4-require-n/bundle.js");
+    assert_eq!(
+        pairs.len(),
+        3,
+        "wp4-require-n: {}",
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp4-require-n");
+}
+
+// ========================================================================
+// Webpack 4 — production (array form, numeric keys)
+// ========================================================================
+
+#[test]
+fn wp4_cjs_min() {
+    let pairs = unpack_fixture("wp4-cjs-min/bundle.js");
+    assert_eq!(
+        pairs.len(),
+        3,
+        "wp4-cjs-min: {}",
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp4-cjs-min");
+}
+
+#[test]
+fn wp4_inner_umd_commonjs_branches_recover_defaults() {
+    assert_inner_umd_defaults("wp4-inner-umd-min/bundle.js");
+}
+
+#[test]
+fn wp4_cjs_min_snapshots() {
+    let mut pairs = unpack_fixture("wp4-cjs-min/bundle.js");
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (filename, code) in &pairs {
+        let snap_name = format!("wp4_cjs_min__{}", filename.trim_end_matches(".js"));
+        insta::assert_snapshot!(snap_name, code);
+    }
+}
+
+// ========================================================================
+// Webpack 4 — dynamic import (JSONP chunks)
+// ========================================================================
+
+#[test]
+fn wp4_dynamic_main_bundle() {
+    let pairs = unpack_fixture("wp4-dynamic/bundle.js");
+    assert!(
+        pairs.len() >= 2,
+        "wp4-dynamic main: expected >=2 modules, got {}",
+        pairs.len()
+    );
+    assert_has_entry(&pairs, "wp4-dynamic");
+}
+
+#[test]
+fn wp4_dynamic_chunk() {
+    let source = fixture("wp4-dynamic/0.bundle.js");
+    let output = unpack(
+        &source,
+        DecompileOptions {
+            filename: "0.bundle.js".to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("wp4 JSONP chunk should unpack");
+    assert!(
+        !output.has_errors(),
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let pairs = output.modules;
+    assert_eq!(
+        pairs.len(),
+        1,
+        "wp4 chunk: {}",
+        filenames(&pairs).join(", ")
+    );
+}
+
+#[test]
+fn wp4_dynamic_min_chunk() {
+    let source = fixture("wp4-dynamic-min/1.bundle.js");
+    let output = unpack(
+        &source,
+        DecompileOptions {
+            filename: "1.bundle.js".to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("wp4 minified JSONP chunk should unpack");
+    assert!(
+        !output.has_errors(),
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let pairs = output.modules;
+    assert_eq!(
+        pairs.len(),
+        1,
+        "wp4 min chunk: {}",
+        filenames(&pairs).join(", ")
+    );
+}
+
+// ========================================================================
+// Webpack 4 — var injection
+// ========================================================================
+
+#[test]
+fn wp4_var_inject() {
+    let pairs = unpack_fixture("wp4-var-inject/bundle.js");
+    assert!(
+        pairs.len() >= 2,
+        "wp4-var-inject: expected >=2, got {}",
+        pairs.len()
+    );
+    assert_has_entry(&pairs, "wp4-var-inject");
+    let global_user = pairs
+        .iter()
+        .find(|(name, _)| name == "src/global-user.js")
+        .map(|(_, code)| code)
+        .expect("expected generated global-user module");
+    assert!(
+        global_user.contains("export") && global_user.contains("getGlobal"),
+        "webpack's generated variable injection must expose its exports:\n{global_user}"
+    );
+    assert!(
+        global_user.contains("class GlobalBox") && global_user.contains("get current"),
+        "the generated fixture must retain its class and accessor bodies:\n{global_user}"
+    );
+    assert!(
+        !global_user.contains(".call(this"),
+        "class and accessor scopes must not block generated-wrapper recovery:\n{global_user}"
+    );
+    assert_eq!(validate_output_modules(&pairs), vec![]);
+}
+
+// ========================================================================
+// Webpack 5 — dev mode (string keys)
+// ========================================================================
+
+#[test]
+fn wp5_cjs_dev() {
+    let pairs = unpack_fixture("wp5-cjs/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-cjs: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+}
+
+#[test]
+fn wp5_esm_dev() {
+    let pairs = unpack_fixture("wp5-esm/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-esm: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+    assert_no_runtime_helpers(&pairs, "wp5-esm");
+}
+
+#[test]
+fn wp5_mixed_dev() {
+    let pairs = unpack_fixture("wp5-mixed/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-mixed: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+}
+
+#[test]
+fn wp5_umd_library_wrapper() {
+    let pairs = unpack_fixture("wp5-umd/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-umd: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp5-umd");
+    assert_no_traversal(&pairs, "wp5-umd");
+}
+
+#[test]
+fn wp5_umd_esm_library_wrapper() {
+    let pairs = unpack_fixture("wp5-umd-esm/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-umd-esm: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp5-umd-esm");
+    assert_no_runtime_helpers(&pairs, "wp5-umd-esm");
+    assert_no_traversal(&pairs, "wp5-umd-esm");
+}
+
+#[test]
+fn wp5_amd_library_wrapper() {
+    let pairs = unpack_fixture("wp5-amd/bundle.js");
+    assert!(
+        pairs.len() >= 3,
+        "wp5-amd: expected >=3, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+    assert_has_entry(&pairs, "wp5-amd");
+    assert_no_traversal(&pairs, "wp5-amd");
+}
+
+// ========================================================================
+// Webpack 5 — production (numeric keys, minified)
+// ========================================================================
+
+#[test]
+fn wp5_cjs_min() {
+    let pairs = unpack_fixture("wp5-cjs-min/bundle.js");
+    assert!(
+        pairs.len() >= 2,
+        "wp5-cjs-min: expected >=2, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+}
+
+#[test]
+fn wp5_inner_umd_commonjs_branches_recover_defaults() {
+    assert_inner_umd_defaults("wp5-inner-umd-min/bundle.js");
+}
+
+#[test]
+fn wp5_variable_factory_call_recovers_the_default() {
+    let path = "wp5-variable-factory-min/bundle.js";
+    let raw = unpack_raw(
+        &fixture(path),
+        &DecompileOptions {
+            filename: path.into(),
+            ..Default::default()
+        },
+    )
+    .expect("generated factory should unpack");
+    assert!(raw
+        .modules
+        .iter()
+        .any(|(_, code)| code.contains(".call(exports, require, exports, module)")));
+    for maps in [false, true] {
+        let pairs = unpack_fixture_with_options(path, maps);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, code)| code.contains("export default"))
+                .count(),
+            2
+        );
+        assert!(pairs
+            .iter()
+            .all(|(_, code)| !code.contains("module.exports")));
+    }
+}
+
+#[test]
+fn wp5_amd_return_factories_preserve_both_export_paths() {
+    let path = "wp5-amd-return-min/bundle.js";
+    let raw = unpack_raw(&fixture(path), &DecompileOptions::default()).unwrap();
+    assert!(raw
+        .modules
+        .iter()
+        .any(|(_, code)| code.contains(".apply(exports, [])")));
+    assert!(raw
+        .modules
+        .iter()
+        .any(|(_, code)| code.contains(".call(exports, require, exports, module)")));
+    for maps in [false, true] {
+        let pairs = unpack_fixture_with_options(path, maps);
+        assert_eq!(pairs.len(), 4);
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(_, code)| code.contains("export default"))
+                .count(),
+            4
+        );
+    }
+}
+
+fn assert_inner_umd_defaults(path: &str) {
+    let source = fixture(path);
+    let raw = unpack_raw(
+        &source,
+        &DecompileOptions {
+            filename: path.to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|_| panic!("raw unpack should succeed for {path}"));
+    assert_eq!(raw.modules.len(), 3, "{path}: raw detector output changed");
+    assert!(
+        raw.modules
+            .iter()
+            .any(|(_, code)| code.contains("syntheticChoose") && code.contains("module.exports")),
+        "{path}: raw output should preserve the truthy UMD expression"
+    );
+    assert!(
+        raw.modules.iter().any(|(_, code)| {
+            code.contains(".apply(exports") && code.contains("module.exports")
+        }),
+        "{path}: raw output should preserve the undefined-guarded UMD expression"
+    );
+
+    for emit_source_map in [false, true] {
+        let pairs = unpack_fixture_with_options(path, emit_source_map);
+        assert_eq!(pairs.len(), 3, "{path}: {}", filenames(&pairs).join(", "));
+        assert_eq!(
+            validate_output_modules(&pairs),
+            vec![],
+            "webpack's initialized CommonJS runtime should make both inner UMD defaults recoverable"
+        );
+
+        let providers = pairs
+            .iter()
+            .filter(|(_, code)| code.contains("export default"))
+            .map(|(filename, code)| (filename.as_str(), code.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(providers.len(), 3, "{path}: {providers:#?}");
+        for (provider, code) in providers {
+            if code.contains("chosen:") {
+                continue;
+            }
+            assert!(
+                code.contains("export default") && !code.contains("module.exports"),
+                "{provider} should expose its proven CommonJS value:\n{code}"
+            );
+        }
+    }
+}
+
+#[test]
+fn wp5_umd_min_library_wrapper() {
+    let pairs = unpack_fixture("wp5-umd-min/bundle.js");
+    assert!(
+        pairs.len() >= 2,
+        "wp5-umd-min: expected >=2, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+    assert!(
+        !filenames(&pairs).contains(&"module.js"),
+        "wp5-umd-min should not fall back to the whole wrapper"
+    );
+    assert_no_traversal(&pairs, "wp5-umd-min");
+}
+
+#[test]
+fn wp5_cjs_min_snapshots() {
+    let mut pairs = unpack_fixture("wp5-cjs-min/bundle.js");
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (filename, code) in &pairs {
+        let snap_name = format!("wp5_cjs_min__{}", filename.trim_end_matches(".js"));
+        insta::assert_snapshot!(snap_name, code);
+    }
+}
+
+// ========================================================================
+// Webpack 5 — dynamic import (async chunks)
+// ========================================================================
+
+#[test]
+fn wp5_dynamic_main_bundle() {
+    let pairs = unpack_fixture("wp5-dynamic/bundle.js");
+    assert!(
+        pairs.len() >= 2,
+        "wp5-dynamic main: expected >=2, got {} — {}",
+        pairs.len(),
+        filenames(&pairs).join(", ")
+    );
+}
+
+// ========================================================================
+// Vercel ncc — webpack 5 module table with inline startup
+// ========================================================================
+
+#[test]
+fn wp5_ncc_inline_entry() {
+    let pairs = unpack_fixture("wp5-ncc/index.cjs");
+    assert_eq!(pairs.len(), 3, "wp5-ncc: {}", filenames(&pairs).join(", "));
+
+    let entry = pairs
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .map(|(_, code)| code)
+        .expect("wp5-ncc: inline startup should become entry.js");
+    assert!(
+        entry.contains("./module-582.js") && entry.contains("console.log"),
+        "wp5-ncc: entry should retain startup code and target the extracted module:\n{entry}"
+    );
+    assert!(
+        !entry.contains("__nccwpck_require__"),
+        "wp5-ncc: runtime require should be normalized:\n{entry}"
+    );
+}
+
+#[test]
+fn wp5_ncc_minified_inline_entry() {
+    let pairs = unpack_fixture("wp5-ncc-min/index.cjs");
+    assert_eq!(
+        pairs.len(),
+        3,
+        "wp5-ncc-min: {}",
+        filenames(&pairs).join(", ")
+    );
+
+    let entry = pairs
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .map(|(_, code)| code)
+        .expect("wp5-ncc-min: inline startup should become entry.js");
+    assert!(
+        entry.contains("./module-582.js") && entry.contains("console.log"),
+        "wp5-ncc-min: entry should retain startup code and target the extracted module:\n{entry}"
+    );
+    assert!(
+        !entry.contains("__nccwpck_require__"),
+        "wp5-ncc-min: runtime require should be normalized:\n{entry}"
+    );
+}
+
+// ========================================================================
+// Webpack 5 — require.s entry (hand-crafted)
+// ========================================================================
+
+#[test]
+fn wp5_require_s_entry() {
+    let pairs = unpack_fixture("wp5-require-s/bundle.js");
+    assert_eq!(
+        pairs.len(),
+        2,
+        "wp5-require-s: {}",
+        filenames(&pairs).join(", ")
+    );
+    let names = filenames(&pairs);
+    let has_entry = pairs
+        .iter()
+        .any(|(name, _)| name == "entry.js" || name.contains("entry") || name == "module-2.js");
+    assert!(
+        has_entry,
+        "wp5-require-s: expected entry module, got {names:?}"
+    );
+}
+
+#[test]
+fn wp5_require_o_entry() {
+    let source = fixture("wp5-require-o/bundle.js");
+    assert!(
+        source.contains(".O(void 0") && source.contains("=>"),
+        "wp5-require-o fixture should contain webpack's require.O arrow startup"
+    );
+
+    let pairs = unpack_fixture("wp5-require-o/bundle.js");
+    assert_eq!(
+        pairs.len(),
+        1,
+        "wp5-require-o: {}",
+        filenames(&pairs).join(", ")
+    );
+    assert!(
+        pairs.iter().any(|(_, code)| code.contains("entry:")),
+        "wp5-require-o: expected extracted entry module, got {:?}",
+        filenames(&pairs)
+    );
+}
+
+// ========================================================================
+// Path traversal (hand-crafted)
+// ========================================================================
+
+#[test]
+fn wp_path_traversal_sanitized() {
+    let pairs = unpack_fixture("wp-path-traversal/bundle.js");
+    assert!(!pairs.is_empty(), "wp-path-traversal should unpack");
+    assert_no_traversal(&pairs, "wp-path-traversal");
+}
+
+// ========================================================================
+// Snapshot tests for key variants
+// ========================================================================
+
+#[test]
+fn wp4_cjs_dev_snapshots() {
+    let mut pairs = unpack_fixture("wp4-cjs/bundle.js");
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (filename, code) in &pairs {
+        let snap_name = format!(
+            "wp4_cjs_dev__{}",
+            filename.replace('/', "_").trim_end_matches(".js")
+        );
+        insta::assert_snapshot!(snap_name, code);
+    }
+}
+
+#[test]
+fn wp5_cjs_dev_snapshots() {
+    let mut pairs = unpack_fixture("wp5-cjs/bundle.js");
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (filename, code) in &pairs {
+        let snap_name = format!(
+            "wp5_cjs_dev__{}",
+            filename.replace('/', "_").trim_end_matches(".js")
+        );
+        insta::assert_snapshot!(snap_name, code);
+    }
+}
+
+// ========================================================================
+// Webpack 5 — numeric require rewriting
+// ========================================================================
+
+#[test]
+fn wp5_numeric_require_rewritten() {
+    // Webpack5 production bundles use numeric module IDs.
+    // require(N) calls between modules in the same bundle should be
+    // rewritten to require("./module-N.js") so un_esm can convert to imports.
+    let source = r#"
+(() => {
+  var __webpack_modules__ = ({
+    10: (function(module, exports, require) {
+      "use strict";
+      require.r(exports);
+      require.d(exports, { "greet": function() { return greet; } });
+      function greet(name) { return "Hello, " + name; }
+    }),
+    20: (function(module, exports, require) {
+      "use strict";
+      require.r(exports);
+      var g = require(10);
+      console.log(g.greet("world"));
+    })
+  });
+  var __webpack_module_cache__ = {};
+  function __webpack_require__(moduleId) {
+    var cachedModule = __webpack_module_cache__[moduleId];
+    if (cachedModule !== undefined) return cachedModule.exports;
+    var module = __webpack_module_cache__[moduleId] = { exports: {} };
+    __webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+    return module.exports;
+  }
+  __webpack_require__(20);
+})();
+"#;
+    let output = unpack(
+        source,
+        DecompileOptions {
+            filename: "bundle.js".to_string(),
+            ..Default::default()
+        },
+    )
+    .expect("wp5 numeric bundle should unpack");
+    assert!(
+        !output.has_errors(),
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let pairs = output.modules;
+
+    let mod_20 = pairs
+        .iter()
+        .find(|(name, _)| name == "module-20.js")
+        .expect("module-20.js should exist");
+
+    assert!(
+        !mod_20.1.contains("require(10)"),
+        "require(10) should be rewritten, got:\n{}",
+        mod_20.1
+    );
+    assert!(
+        mod_20.1.contains("./module-10.js"),
+        "should reference ./module-10.js, got:\n{}",
+        mod_20.1
+    );
+}
+
+// ========================================================================
+// Webpack 5 — dense natural ids (issue #200 array-form containers)
+// ========================================================================
+
+#[test]
+fn wp5_array_main_bundle() {
+    // Dense numeric module ids render the table as a holey array
+    // (`var __webpack_modules__ = ([, fn, ...])`, entry inlined at id 0).
+    let pairs = unpack_fixture("wp5-array/bundle.js");
+    let names = filenames(&pairs);
+    for id in 1..=17 {
+        let expected = format!("module-{id}.js");
+        assert!(
+            names.contains(&expected.as_str()),
+            "wp5-array: missing {expected}, got {names:?}"
+        );
+    }
+    let entry = pairs
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .unwrap_or_else(|| {
+            panic!("wp5-array: inline startup should become entry.js, got {names:?}")
+        });
+    assert!(
+        entry.1.contains("./module-1.js") && entry.1.contains("./module-17.js"),
+        "wp5-array entry should import the static modules, got:\n{}",
+        entry.1
+    );
+    assert_no_traversal(&pairs, "wp5-array");
+}
+
+#[test]
+fn wp5_array_concat_chunk() {
+    // The lazy chunk's smallest id is high enough that webpack wraps its
+    // table in `Array(18).concat([...])`; ids must be offset accordingly.
+    let pairs = unpack_fixture("wp5-array/chunk-1.js");
+    let names = filenames(&pairs);
+    assert_eq!(
+        pairs.len(),
+        15,
+        "wp5-array chunk: expected 15 modules, got {names:?}"
+    );
+    for id in 18..=32 {
+        let expected = format!("module-{id}.js");
+        assert!(
+            names.contains(&expected.as_str()),
+            "wp5-array chunk: missing {expected} (concat offset), got {names:?}"
+        );
+    }
+    let mod_18 = pairs
+        .iter()
+        .find(|(name, _)| name == "module-18.js")
+        .expect("module-18.js should exist");
+    assert!(
+        mod_18.1.contains("./module-19.js") && !mod_18.1.contains("require(19)"),
+        "chunk require ids should be rewritten with the offset applied, got:\n{}",
+        mod_18.1
+    );
+}
+
+#[test]
+fn wp5_minified_entry_require_mutation_stays_in_entry() {
+    // Webpack exposes its raw require binding to source modules. In production,
+    // Terser may place source-authored property writes before and after the
+    // entry load, while a dormant getter can capture that same binding. None
+    // of those entry effects are webpack runtime definitions.
+    let pairs = unpack_fixture("wp5-require-mutation-min/bundle.js");
+    let names = filenames(&pairs);
+    let entry = pairs
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .unwrap_or_else(|| panic!("require mutation: missing entry.js, got {names:?}"));
+    assert!(
+        entry.1.contains("./module-1.js")
+            && entry.1.contains("review")
+            && entry.1.contains("require.p = \"/entry-owned/\"")
+            && entry.1.contains("require.instrumentedBefore = true")
+            && entry.1.contains("require.instrumentedFromGetter = true")
+            && entry.1.contains("require.instrumentedAfter = true")
+            && entry.1.contains("get value"),
+        "require mutation startup must be recovered intact, got:\n{}",
+        entry.1
+    );
+}
+
+#[test]
+fn wp5_umd_min_entry_is_a_valid_module() {
+    // The minified UMD factory ends with `return console.log(...), ..., {}` —
+    // the startup slice reaches that wrapper return, and a recovered entry
+    // carrying a top-level `return` is not a legal module. The return is
+    // lowered: its side-effectful sequence stays, the inert tail value goes.
+    let pairs = unpack_fixture("wp5-umd-min/bundle.js");
+    let entry = pairs
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .unwrap_or_else(|| {
+            panic!(
+                "wp5-umd-min: entry.js should exist, got {:?}",
+                filenames(&pairs)
+            )
+        });
+    assert!(
+        entry.1.contains("greet"),
+        "startup calls must be recovered, got:\n{}",
+        entry.1
+    );
+    assert!(
+        !entry
+            .1
+            .lines()
+            .any(|line| line.trim_start().starts_with("return")),
+        "no top-level return may survive in entry.js, got:\n{}",
+        entry.1
+    );
+}
+
+#[test]
+fn wp5_trailing_user_iife_keeps_entry_dependencies_and_async_boundary() {
+    // webpack 5.101.3 production output: Terser inlines main() into a
+    // trailing async IIFE after three entry-scope require declarations.
+    let source = fixture("wp5-trailing-iife-min/bundle.js");
+    let raw = unpack_raw(&source, &DecompileOptions::default())
+        .expect("generated webpack bundle should unpack");
+    let raw_entry = &raw
+        .modules
+        .iter()
+        .find(|(name, _)| name == "entry.js")
+        .expect("entry")
+        .1;
+    for dependency in ["module-891.js", "module-878.js", "module-783.js"] {
+        assert!(
+            raw_entry.contains(dependency),
+            "lost entry dependency {dependency}: {}",
+            raw_entry
+        );
+    }
+    assert!(
+        raw_entry.contains("async"),
+        "async invocation must survive raw extraction: {}",
+        raw_entry
+    );
+    for source_map in [false, true] {
+        let pairs = unpack_fixture_with_options("wp5-trailing-iife-min/bundle.js", source_map);
+        assert_eq!(pairs.len(), 4);
+        let entry = &pairs
+            .iter()
+            .find(|(name, _)| name == "entry.js")
+            .expect("entry")
+            .1;
+        for dependency in ["module-891.js", "module-878.js", "module-783.js"] {
+            assert!(
+                entry.contains(dependency),
+                "lost entry dependency {dependency}: {entry}"
+            );
+        }
+        assert!(
+            entry.contains("async"),
+            "fire-and-forget call must not become top-level await: {entry}"
+        );
+        assert!(entry.contains("document.body.innerHTML"), "{entry}");
+        assert_eq!(validate_output_modules(&pairs), vec![]);
+    }
+}

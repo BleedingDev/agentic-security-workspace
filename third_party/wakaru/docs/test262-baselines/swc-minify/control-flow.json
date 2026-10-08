@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "control-flow"
+    ],
+    "paths": [
+      "test/language/statements/if",
+      "test/language/statements/switch",
+      "test/language/statements/try",
+      "test/language/statements/return",
+      "test/language/statements/throw",
+      "test/language/statements/break",
+      "test/language/statements/continue",
+      "test/language/statements/labeled",
+      "test/language/statements/for",
+      "test/language/statements/for-in",
+      "test/language/statements/while",
+      "test/language/statements/do-while",
+      "test/language/expressions/conditional",
+      "test/language/expressions/logical-and",
+      "test/language/expressions/logical-or",
+      "test/language/expressions/comma"
+    ]
+  },
+  "totals": {
+    "discovered": 1117,
+    "runnable": 1117,
+    "skipped": 0,
+    "unsupported": 24,
+    "rejected": 14,
+    "passed": 1079,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/comma/tco-final.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-cond.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/conditional/tco-pos.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-and/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/expressions/logical-or/tco-right.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/do-while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for/dstr/const-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/for/dstr/let-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "bc97f4d34781ea6b0adcedc6175e49d660166bb026c094b816ba3f84b94c1744",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error but got a ReferenceError"
+    },
+    {
+      "path": "test/language/statements/for/dstr/var-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/for/tco-const-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-let-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-lhs-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/for/tco-var-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/tco-else-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/if/tco-if-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/labeled/value-await-non-module-escaped.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "60ffa12359e3e0832186eef4a9f126d2dee498b651304ca68ad8ae2e89239db4",
+      "summary": "Error:   x top level await is only allowed in module\n    ,-[15:1]\n 12 |   the StringValue of IdentifierName is \"await\"."
+    },
+    {
+      "path": "test/language/statements/labeled/value-await-non-module.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "72b903778f8e726dcca83371fabaf9647a3585459e3bf53087b1b701e6e5dbbf",
+      "summary": "Error:   x top level await is only allowed in module\n    ,-[14:1]\n 11 |   It is a Syntax Error if the goal symbol of the syntactic grammar is Module."
+    },
+    {
+      "path": "test/language/statements/labeled/value-yield-non-strict-escaped.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-label",
+      "fingerprint": "745d947eb5ced649c47a5f67d72533b9e57e095dc6ef212f9f1b7b60af102058",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (1..6, TS1109) }"
+    },
+    {
+      "path": "test/language/statements/labeled/value-yield-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-label",
+      "fingerprint": "745d947eb5ced649c47a5f67d72533b9e57e095dc6ef212f9f1b7b60af102058",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (1..6, TS1109) }"
+    },
+    {
+      "path": "test/language/statements/return/tco.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body-dflt.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-case-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/switch/tco-dftl-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/try/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/try/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "43eeaea751b6351dd94e091aca5bd964ff8805b01df111eba0bebac1c9408f10",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (32..37, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-catch.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/try/tco-finally.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/while/tco-body.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    }
+  ]
+}

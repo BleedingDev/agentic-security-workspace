@@ -1,0 +1,13 @@
+/*_extract/
+dist/
+build/
+*__pycache__*
+/target/
+*.egg-info/
+*.so
+.idea
+.cache
+.coverage*
+/.venv
+unblob.log
+/.direnv

@@ -1,0 +1,453 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "scope"
+    ],
+    "paths": [
+      "test/language/statements/block",
+      "test/language/statements/const",
+      "test/language/statements/function",
+      "test/language/expressions/function",
+      "test/language/expressions/arrow-function",
+      "test/language/statements/with"
+    ]
+  },
+  "totals": {
+    "discovered": 1396,
+    "runnable": 1396,
+    "skipped": 0,
+    "unsupported": 18,
+    "rejected": 33,
+    "passed": 1345,
+    "failed": 0
+  },
+  "outcomes": [
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/param-dflt-yield-id-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "da7bdce6df695f324204e0c129efa853192396b5e16ddd8c84c0c1ee5356c3a8",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (36..41, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/syntax/arrowparameters-bindingidentifier-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-arrow-parameter",
+      "fingerprint": "d27dc65d17ed203aa875a5fa4e518ab1e415eb1daec9a86cdb5ad6abef8c13c0",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (8..13, TS1109) }"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/syntax/arrowparameters-cover-formalparameters-yield.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-yield-arrow-parameter",
+      "fingerprint": "d27dc65d17ed203aa875a5fa4e518ab1e415eb1daec9a86cdb5ad6abef8c13c0",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (8..13, TS1109) }"
+    },
+    {
+      "path": "test/language/expressions/arrow-function/throw-new.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "5d7aa2736bcaac36c80e47212caf42dd3ade42843d5f404be232f83d64361c1e",
+      "summary": "Error: sloppy: expected success, got parse SyntaxError: Malformed arrow function parameter list"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/expressions/function/dstr/dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/expressions/function/param-dflt-yield-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "9cd910e8c18336673c2dddfa9b312ca040ba8a060fddc816395b532d5603666d",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (54..59, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/expressions/function/static-init-await-binding.js",
+      "variant": "case",
+      "status": "rejected",
+      "kind": "transform-reject",
+      "fingerprint": "7870cc68071d90e1c9211eb1b5dc61da4024250c0c28d0880b092046aa61fbbb",
+      "summary": "Error:   x Expected '(', got 'await'\n    ,-[16:1]\n 13 | "
+    },
+    {
+      "path": "test/language/expressions/function/static-init-await-reference.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5263aa4168fe6e9ff2197ed3bfc03df95058019a53398053c21b7453e1db8d54",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (5..10, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/block/tco-stmt-list.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/block/tco-stmt.js",
+      "variant": "strict",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "dab150e79c2be1e33d95d382a85804072f56202df86fa619447bccda631f5ab4",
+      "summary": "Error: strict: expected success, got runtime RangeError: Maximum call stack size exceeded"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/const/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/const/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "aa55b6b6a45d8caad0dee1eb5687a6824e77bfe6af56036705ebbdf427cac056",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (27..32, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/function/dstr/ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elem-ary-elision-init.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elision-step-err.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "e015f1b1050dc7a63fb2164bc535d7906cef61afcfda070e1ac44643b49f0c57",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/function/dstr/dflt-ary-ptrn-elision.js",
+      "variant": "sloppy,strict",
+      "status": "rejected",
+      "kind": "transform-runtime",
+      "fingerprint": "99d416608a93f6a41913a46933d5ec90d6cc3f8e48e5f58e5d82e08315e40925",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«0», «1») to be true"
+    },
+    {
+      "path": "test/language/statements/function/param-dflt-yield-non-strict.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "sloppy-only-strict-ident",
+      "fingerprint": "11dd05a945decadb0e7b8bd42151aa2b7e202895f30ff55bc83df0317a921fbb",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (55..60, TS1109) }; <stdin>:1:5: InvalidIdentInStrict(\"yield\")"
+    },
+    {
+      "path": "test/language/statements/function/static-init-await-binding-valid.js",
+      "variant": "case",
+      "status": "unsupported",
+      "kind": "swc-parse-async-ident",
+      "fingerprint": "5792da05bfa4c2f3cfee475e012f9dd6d97308a1b2171ce9d113fbb94425162a",
+      "summary": "Error: wakaru exited 1\nError: failed to parse <stdin>: Error { error: (30..35, InvalidIdentInAsync) }"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T3.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "64461133395424c30dec00fb2dea299983c35183d0d4c8b5c0335dfcbcf4e507",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #0: result === \"myObj_value\". Actual:  result ===undefined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.2_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "64461133395424c30dec00fb2dea299983c35183d0d4c8b5c0335dfcbcf4e507",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #0: result === \"myObj_value\". Actual:  result ===undefined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T1.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T2.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "f0b00a45ac0d27b805660f870e6ebfb412306e2288b9a7b6f68bfa5d78720f56",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #19: myObj.value === \"value\". Actual:  myObj.value ===myObj_value"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A1.3_T5.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "64461133395424c30dec00fb2dea299983c35183d0d4c8b5c0335dfcbcf4e507",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #0: result === \"myObj_value\". Actual:  result ===undefined"
+    },
+    {
+      "path": "test/language/statements/with/S12.10_A3.3_T4.js",
+      "variant": "sloppy",
+      "status": "rejected",
+      "kind": "transform-runtime-with-environment",
+      "fingerprint": "3dabf5ae37130e7df71cf0be333192603849149558b092524ae25e007722e560",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: #3: myObj.p1 === \"x1\". Actual:  myObj.p1 ===a"
+    },
+    {
+      "path": "test/language/statements/with/get-binding-value-call-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a7bd9e98726fab40a01940a073f1c030fb68151a4d93d8e64723fbcd7c44ede1",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:Object, get:Symbol(Symbol.unscopables), get:Object] and expected [has:Object, get:Symbol(Symbol.unscopables), has:Object, get:Object] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/get-binding-value-idref-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "a7bd9e98726fab40a01940a073f1c030fb68151a4d93d8e64723fbcd7c44ede1",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:Object, get:Symbol(Symbol.unscopables), get:Object] and expected [has:Object, get:Symbol(Symbol.unscopables), has:Object, get:Object] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/get-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "acac106221921667e68abe8a554ace60dfe055231b32544f53c4fc2b899ff1d9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-binding-deleted-in-get-unscopables-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "acac106221921667e68abe8a554ace60dfe055231b32544f53c4fc2b899ff1d9",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-binding-deleted-with-typed-array-in-proto-chain-strict-mode.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "15cb014fce15868785cccd51ff01f09a457e3dca5c501faba50bb90e23000b9e",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected a ReferenceError but got a TypeError"
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-idref-compound-assign-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c2111c92f68c10c69d18ccfd85132a2c26623b425df39cd0320bb4a6c9ea68f2",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), get:p, has:p, get:Symbol(Symbol.unscopables), set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, get:p, has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/set-mutable-binding-idref-with-proxy-env.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "486a3a37bf85e7e25e6d0855c4f72a63ca5b6d9637cb861646d2389bc6f8f674",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Actual [has:p, get:Symbol(Symbol.unscopables), set:p, getOwnPropertyDescriptor:p, defineProperty:p] and expected [has:p, get:Symbol(Symbol.unscopables), has:p, set:p, getOwnPropertyDescriptor:p, defineProperty:p] should have the same contents. "
+    },
+    {
+      "path": "test/language/statements/with/unscopables-inc-dec.js",
+      "variant": "sloppy",
+      "status": "unsupported",
+      "kind": "node-vm-baseline",
+      "fingerprint": "c41eb82fa6973cb6b6b2a0e425d8bdf0eca1bd9322c8aa4032b43060dd7b0fe4",
+      "summary": "Error: sloppy: expected success, got runtime Test262Error: Expected SameValue(«2», «1») to be true"
+    }
+  ]
+}

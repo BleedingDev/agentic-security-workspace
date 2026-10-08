@@ -1,0 +1,1 @@
+import{__extends}from"tslib";var Child=function(_super){function Child(){return null!==_super&&_super.apply(this,arguments)||this}return __extends(Child,_super),Child.prototype.value=function(){return _super.prototype.value.call(this)+1},Child}(Parent);export{Child};

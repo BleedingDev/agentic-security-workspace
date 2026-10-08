@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "swc-minify",
+    "version": "1.7.26",
+    "configHash": "845e39e180dd998ad60988ef83becf636083a7110da4e297c266d72a770ac7ad"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "keywords"
+    ],
+    "paths": [
+      "test/language/keywords"
+    ]
+  },
+  "totals": {
+    "discovered": 25,
+    "runnable": 25,
+    "skipped": 0,
+    "unsupported": 0,
+    "rejected": 0,
+    "passed": 25,
+    "failed": 0
+  },
+  "outcomes": []
+}

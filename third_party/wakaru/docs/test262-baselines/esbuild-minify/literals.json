@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 3,
+  "test262": {
+    "revision": "05bb032907160d66c212589d345fa0e335e2738c"
+  },
+  "harness": {
+    "version": 2
+  },
+  "environment": {
+    "nodeMajor": 24
+  },
+  "producer": {
+    "name": "esbuild-minify",
+    "version": "0.23.1",
+    "configHash": "5cc7678984b5d2f567c58fa41b6aef47740bd1d8d00a72443d6b759eeeaf1a6f"
+  },
+  "wakaru": {
+    "level": "minimal",
+    "caseTimeoutMs": 15000
+  },
+  "selection": {
+    "presets": [
+      "literals"
+    ],
+    "paths": [
+      "test/language/literals"
+    ]
+  },
+  "totals": {
+    "discovered": 534,
+    "runnable": 534,
+    "skipped": 0,
+    "unsupported": 0,
+    "rejected": 0,
+    "passed": 534,
+    "failed": 0
+  },
+  "outcomes": []
+}

@@ -1,0 +1,232 @@
+# Wakaru
+
+Wakaru is a JavaScript decompiler that transforms minified/bundled code back into readable, modern ESNext. It extracts Bun single-file executable containers and unpacks bundles (webpack4/5, including Vercel ncc; Browserify, including Cocos Creator 2.x; Closure ModuleManager; SystemJS; esbuild/Bun; Metro; AMD/UMD; plus heuristic scope-hoisted splitting), restores transpiler helpers (Babel, TypeScript), and applies an ordered pipeline of rewrite rules to recover idiomatic source (the registry in `crates/core/src/rules/pipeline.rs` is the authoritative list). It can also experimentally recover Vue 3 SFC-like artifacts from compiled render modules (`--vue-sfc`).
+
+Written in Rust using the SWC AST ecosystem. The workspace is split into five crates under `crates/`: `core` (internal engine), `wakaru` (the published Rust façade), `cli`, `formatter`, and `wasm`.
+
+## Understand the Project
+
+Read `docs/architecture.md` first — pipeline flow, components, design
+patterns. It is the universal entry point. Then read by task, instead of
+reading everything:
+
+| Task | Also read |
+|---|---|
+| Any code change | `docs/testing.md` — test patterns, helpers, required verification |
+| Finding source entry points | `docs/code-map.md` — file lookup by subsystem |
+| PR / branch review, handoff, or resuming research | `docs/reviewing.md` — scope, evidence, ownership transfer, and research resumption; `docs/testing.md#sharing-verification-results` — reuse and invalidation of test evidence |
+| Rule bugfix / snapshot regression | `docs/debugging.md` — rule tracing, snapshot layers, fixture workflow |
+| New rule, or moving a rule | `docs/rule-dependency-inventory.md` — ordering rationale, fragile edges; `docs/rewrite-assumptions.md` — level gating, named assumptions |
+| Transpiler helper work | `docs/helper-detection.md` — detection design and what was already rejected |
+| Detection, unpacking, or scope-hoisted splitting | `docs/unpacking.md` — format shapes, factory normalization, raw/multi-input behavior, and fallback boundaries |
+| Cross-module recovery | `docs/fact-system.md` — the two-phase barrier, module facts, and same-module proof boundaries |
+| Bun single-file executables | `docs/bun-standalone.md` — binary graph format, CLI flow, safety, and public API limits |
+| Public Rust API (`wakaru` crate) | `docs/public-api.md` — design decisions and boundaries; rustdoc (`cargo doc -p wakaru`) is the behavioral contract |
+| Vue SFC recovery (`--vue-sfc`) | `docs/vue-decompile.md` — the recovery path and CLI behavior; `docs/vue-sfc-recovery-status.md` — experimental status and known gaps |
+| Correctness / semantics questions | `docs/rewrite-assumptions.md`, `docs/test262-roundtrip.md` |
+| Before proposing a redesign | `docs/learnings/` — approaches already built, measured, and reverted |
+| Performance work | `docs/learnings/performance-round-2026-09.md` — what was measured, kept, and rejected; measurement rules |
+| Supported CLI flag or output changes | `docs/cli.md` — the CLI reference and source of truth for behavior detail; `skills/wakaru/SKILL.md` — the agent skill (carries only what changes the commands an agent runs or how it reads output); `docs-site/content/docs/reference/cli.mdx` — the user-facing docs page. Keep all three in sync in the same commit |
+| Debug / experimental CLI changes | `docs/cli-debug.md` — current commands, compatibility policy, and feedback path |
+| Agent / tool integration | `skills/wakaru/SKILL.md` — CLI-based agent surface |
+| Docs site content or deployment (`docs-site/`) | `docs/docs-site.md` — basePath gotchas, deploy pattern, sync obligations, content conventions |
+| Cutting a release | `docs/releasing.md` |
+
+`docs/README.md` carries this same map for agents and tools that do not
+auto-load this file.
+
+## Building and Running
+
+All `cargo` commands run from the repo root.
+
+```bash
+cargo build                                                 # debug build
+cargo run -p wakaru-cli -- input.js -o output.js            # decompile single file
+cargo run -p wakaru-cli -- --unpack bundle.js -o unpacked/  # unpack bundle
+cargo run -p wakaru-cli -- --unpack --raw bundle.js -o raw/ # raw extraction (no rules)
+cargo run -p wakaru-cli -- input.js -m input.js.map         # with source map
+cargo run -p wakaru-cli -- debug trace path/to/module.js    # debug: per-rule diffs
+```
+
+Branch worktrees live as sibling checkouts at `../wakaru-<branch-suffix>`
+(e.g. `../wakaru-repro-edge-cases` for branch `codex/repro-edge-cases`).
+Run `git worktree list` before creating one — it usually already exists.
+
+### Large inputs
+
+Peak memory follows the largest recovered module, not the input size: a
+bundle that unpacks into small modules is stable at any size, while an input
+that resists unpacking keeps one giant AST alive through the whole rule
+pipeline and can use tens of gigabytes. Until you know an input splits
+cleanly, run anything around 20 MB of JavaScript or larger (or of unknown
+shape) under `scripts/guard-rss.sh <limit-gb> -- <command>`, with a ceiling
+that leaves the machine usable (for example, half of physical RAM).
+
+## Testing
+
+```bash
+cargo nextest run -p wakaru-core               # full core suite
+cargo nextest run --workspace                  # everything
+cargo test -p wakaru-core --test my_rule_rule  # one test file
+cargo test -p wakaru-core --test smart_inline_rule -- inline_single_use  # one test
+cargo fmt --check                              # verify Rust formatting
+cargo clippy -p wakaru-core --all-targets -- -D warnings  # lint core changes
+```
+
+The full suite runs under [nextest](https://nexte.st), the same runner CI uses.
+Install once with `cargo install cargo-nextest --locked` (or `curl -LsSf https://get.nexte.st/latest/<os> | tar zxf - -C $HOME/.cargo/bin`).
+`cargo test` still works for everything; nextest does not run doctests (there
+are none today — use `cargo test --doc` if that changes).
+
+nextest starts one process per test. On machines where security software
+(antivirus, endpoint protection) inspects every process launch, that startup
+cost dominates: the run is slow while CPU use stays low. There,
+`cargo test -p wakaru-core --tests --no-fail-fast` runs the same tests in far
+fewer processes and can finish sooner.
+
+Snapshot drift **fails** the test and writes a `.snap.new` (via `INSTA_UPDATE=new`
+in `.cargo/config.toml`). Review the diff, then accept intentional changes with
+`cargo insta accept` (or `INSTA_UPDATE=always cargo test` for a one-off bulk accept).
+`cargo-insta` is optional: without it, `mv x.snap.new x.snap` accepts one file
+(see `docs/testing.md#snapshot-testing-workflow`).
+See `docs/testing.md` for test helpers, patterns, and organization.
+
+## Developing a Rule
+
+### Every change needs a unit test
+
+**No code change is committed without a corresponding unit test.** Pipeline snapshot updates alone are not sufficient — they test the whole pipeline, not the individual change.
+
+Extend the existing test file and use the existing harness where possible.
+This requirement does not mean adding a new test file or framework for every
+change. For non-core and documentation changes, use the applicable checks in
+`docs/testing.md`.
+
+Write tests before implementation when the input→output is known:
+1. Add failing cases to the existing rule test file (create one for a new rule)
+2. Implement `crates/core/src/rules/my_rule.rs` until tests pass
+3. Run pipeline tests to check for regressions
+
+For bugfixes to existing rules: add a regression test that reproduces the exact bug.
+
+### Adding a new rule
+
+1. Create `crates/core/tests/my_rule_rule.rs` with test cases (they will fail)
+2. Create `crates/core/src/rules/my_rule.rs` implementing SWC's `VisitMut` trait
+3. Add `mod my_rule;` and `pub use my_rule::MyRule;` in `crates/core/src/rules/mod.rs`
+4. Add a `RuleDescriptor` for the rule at the right position in `crates/core/src/rules/pipeline.rs`
+5. Run tests until all pass
+
+### Where to place it in the pipeline
+
+Rules run in a fixed order. Check `crates/core/src/rules/pipeline.rs` and place your rule where its dependencies are satisfied:
+- Needs `["default"]` normalized to `.default`? Place after `UnBracketNotation`
+- Needs `require()` calls present? Place before `UnEsm`
+- Creates new IIFEs? Place before the second `UnIife` pass
+- Needs alias var declarations intact? Place before `SmartInline` (it removes `var h = p`)
+- Needs export specifiers to reference real bindings? Place after `SmartInline`
+
+### Constructing declarations
+
+If your rule builds a `VarDecl` and runs before `VarDeclToLetConst`, carry the
+declaration kind of the statements you consumed (or `var`) — never hardcode
+`const`/`let`. `VarDeclToLetConst` decides mutability late with full write
+analysis, and it never widens an existing `const`, so a hardcoded `const` on a
+binding that is later reassigned becomes a runtime `TypeError`.
+
+### Hash tables
+
+Inside `wakaru-core`, import `crate::collections::{HashMap, HashSet}` (the
+standard types with `FxHasher`) instead of `std::collections`. Construct them
+with `HashMap::default()`; `HashMap::new()` does not exist for a non-default
+hasher. See `docs/architecture.md`.
+
+### Function bodies are not blocks
+
+Since swc_core 77, function/method/constructor/accessor bodies (and
+block-bodied arrow bodies) are `FunctionBody` nodes, not `BlockStmt` —
+`visit_mut_block_stmt` never fires for them. A visitor that must see both
+statement lists needs both overrides (`visit_mut_block_stmt` and
+`visit_mut_function_body`). Getter/setter props wrap a `Function`, so
+`visit_mut_function` overrides fire for accessor bodies too. Standalone
+blocks, `catch` clauses, and class static blocks remain `BlockStmt`.
+
+### Object keys are not identifiers
+
+`PropName::Ident` (and `MemberProp::Ident`) hold an `IdentName`, not an
+`Ident`, so `visit_ident` never fires for a plain object key and a visitor
+does not need to skip `PropName` to avoid counting keys as references. An
+empty `visit_prop_name` / `visit_mut_prop_name` override therefore skips only
+`PropName::Computed`, and the expression inside `{ [k]: v }` becomes invisible
+to that visitor. If a visitor overrides `visit_prop_name` at all, descend into
+the computed variant the same way it does for `MemberProp::Computed`.
+
+### Scope-aware identifier matching
+
+Identifier matching must use resolver identity. For a known global such as
+`Object` or `require`, check the name and `unresolved_mark`:
+
+```rust
+if id.ctxt.outer() != self.unresolved_mark {
+    return;
+}
+```
+
+Visitors that recognize globals must take `unresolved_mark: Mark` and gate on
+it. For a local helper, parameter, or alias, match its resolved binding ID
+`(sym, ctxt)` instead; local bindings do not carry `unresolved_mark`.
+Inserting or renaming a binding also needs emitted-name collision checks:
+`SyntaxContext` alone does not prevent capture in printed JavaScript.
+See `docs/architecture.md` for the matching and renaming responsibilities.
+Before adding a `with`, `eval`, or shadowing guard to a rule, read the
+dynamic-scope section of `docs/rewrite-assumptions.md` and reuse the helpers in
+`rules/eval_utils.rs`.
+
+### Renaming identifiers
+
+Always use `rename_utils::BindingRenamer` (via `rename_bindings_in_module` or `rename_bindings`). Never write a custom `VisitMut` that renames by `sym` alone — it will hit inner-scope locals and parameters with the same name.
+
+## Definition of Done
+
+Apply the checks for the changed surface in `docs/testing.md`. The full core
+suite is required for core/rule changes; non-core changes use their relevant
+package or tooling checks. Review-only work may reuse verification evidence
+under that document's handoff rules.
+
+1. Run the focused rule tests you touched
+2. Run the full core suite (covers all pipeline + unpack snapshot tests):
+   - `cargo nextest run -p wakaru-core`
+3. If you changed a rule that a reproduction matrix covers (see `scripts/repro/`), verify the recovery-rate baseline:
+   - `node scripts/repro/collect-stats.mjs --check`
+   - If rates deliberately moved, regenerate without `--check` and commit the `stats.json` diff with the change, plus the aggregate cited in `README.md` and `website/index.html` (the script fails until they match)
+   - The `commit`/`date` fields in `stats.json` are provenance from regeneration time (typically the parent of the commit carrying the diff); `--check` compares only the measured numbers
+4. If you changed rename, export/import handling, or any pipeline-visible rule behavior, run the private fixture suite (sibling checkout `../wakaru-fixtures`; skip only if it is absent and say so):
+   - `../wakaru-fixtures/run.sh --check`
+   - Per-rule tests can all pass while rules undo each other's work on real-world module shapes; this suite catches that class. Read the full diff report, not just the tail.
+   - Reference updates (`--update`) require reviewing every changed file: better, not just different.
+   - If the drift should be rename-only, prove it with `wakaru debug normalize --rename` before reading hunks (recipe in `docs/testing.md`).
+5. Run formatting and lint checks:
+   - `cargo fmt --check`
+   - `cargo clippy -p wakaru-core --all-targets -- -D warnings` for core/rule changes
+   - Use the relevant package or `cargo clippy --workspace --all-targets -- -D warnings` when touching other crates or shared workspace code
+6. If snapshots change, inspect the diff — confirm the output is semantically better, not just different
+7. If your change makes any statement in `docs/` (or this file) false, fix the doc in the same commit — agents trust the docs, so a wrong doc is worse than a missing one
+8. Re-read the commit message: mechanism and code shape only, nothing about where the bug was found (see rule 7 below)
+9. `git status --short` — no stale `.snap.new` files or unrelated changes
+
+## Important Rules
+
+1. **All changes must be tested** — no exceptions.
+2. **Use resolver identity** — globals require `unresolved_mark`; local bindings require `(sym, ctxt)`. Check emitted-name capture separately.
+3. **Use `BindingRenamer` for renames** — never rename by `sym` alone.
+4. **Formatting must pass, but don't format opportunistically** — run `cargo fmt --check`; if formatting is needed, keep it limited to files you intentionally changed and avoid unrelated rustfmt churn.
+5. **Inspect snapshot diffs** — "different" without "better" is a regression.
+6. **Be honest about what works** — never overstate what was accomplished.
+7. **Commit messages describe the mechanism and the code shape** — what the rule did wrong, the input shape that triggers it, and the fix. Leave out where the bug was found: no bundle or module names, no paths or ids, no counts of affected modules or references, no test-run tallies.
+
+## Code Review Self-Check
+
+- Before making a non-obvious choice, ask "why this and not the alternative?" Research until you can answer.
+- If neighboring code does something differently, find out _why_ before deviating — its choices are often load-bearing.
+- Don't take a bug report's suggested fix at face value; verify it's the right layer.
+- Use `render_pipeline_until()` or `debug trace` to verify the AST shape reaching your rule.

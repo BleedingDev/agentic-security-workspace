@@ -1,0 +1,9 @@
+---
+source: crates/core/tests/webpack4_unpack_raw.rs
+expression: code
+---
+"use strict";
+var o, i = require("./module-31.js");
+o = globalThis;
+var a = Object(i.a)(o);
+exports.a = a;

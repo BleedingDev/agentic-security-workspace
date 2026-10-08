@@ -1,0 +1,9 @@
+---
+source: crates/core/tests/webpack_fixtures.rs
+assertion_line: 434
+expression: code
+---
+import { greet } from "./greet.js";
+import { add } from "./utils.js";
+console.log(greet('world'));
+console.log(add(1, 2));

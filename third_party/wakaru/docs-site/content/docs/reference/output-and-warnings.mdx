@@ -1,0 +1,74 @@
+---
+title: Output & warnings
+description: How unpacked output is laid out, named, and reported.
+---
+
+## Layout
+
+`--unpack` writes one JavaScript file per recovered module into the output
+directory. The directory must be new or empty unless you pass `--force`.
+
+## Filenames
+
+- Modules with real path evidence keep readable relative filenames. Evidence
+  includes webpack string IDs, Browserify dependency maps, and original
+  input paths.
+- Everything else gets a stable generated name like `module-42.js`.
+- Names that collide receive numeric suffixes.
+- Emitted files always end in a JavaScript extension. A module recorded as
+  `src/style.less` becomes `src/style.less.js`.
+- For supported `@vercel/ncc` bundles, the bundle's inline startup code is
+  written as `entry.js`.
+
+## Warnings
+
+Wakaru prints human-readable summaries by default. `--json` puts the same
+information on stdout as structured output:
+
+- Every warning carries an `is_error` field. `false` means non-fatal. An
+  error-class warning fails the command, even when output files were
+  written.
+- In unpack mode, `total` counts modules and `failed` counts modules that
+  errored during decompilation. Treat `failed > 0` as a failed run.
+
+Check the command's exit status as well as the JSON. Files can be written
+even when the command fails:
+
+| Result | What to do |
+| --- | --- |
+| Exit status 0 | Read the output and any non-fatal warnings |
+| `failed > 0` | Some modules failed to decompile. Inspect the warnings before using the partial output |
+| `failed: 0`, but a warning has `is_error: true` | The command still failed. Check the warning for the cause |
+
+Add `--diagnostics` to check for conflicting declarations in the recovered code:
+
+```bash
+npx wakaru bundle.js --unpack --diagnostics --json -o out/
+```
+
+An error-class diagnostic can fail the command even when every module was
+decompiled. See [CLI diagnostics](/reference/cli#diagnostics) for the checks.
+
+## Validating an output tree
+
+`debug validate` is an internal debugging tool, built for Wakaru's own
+development. Use it when you suspect broken references or declarations in
+the recovered modules:
+
+```bash
+npx wakaru debug validate out/
+npx wakaru debug validate out/ --input bundle.js
+```
+
+It checks the emitted modules as one graph: dangling relative references,
+broken imports and exports, duplicate declarations, writes to imported or
+`const` bindings, and references to bindings left in another module.
+With `--input`, it also compares undeclared names against the original bundle
+to help distinguish missing bindings from globals the input already used.
+
+The command exits nonzero when it finds anything. A finding is a reason to
+inspect the code, not proof that Wakaru introduced a runtime failure. For
+example, a write to a `const` can be unreachable or already present in the input.
+`--input` compares undeclared names only, so it does not filter out those writes.
+
+Validate normal output only. Raw output has no module-graph contract.

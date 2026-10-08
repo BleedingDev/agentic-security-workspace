@@ -1,0 +1,3479 @@
+mod common;
+
+use common::{assert_eq_normalized, normalize, render_pipeline_between, render_rule};
+use wakaru_core::rules::{SmartRename, SmartRenameSecondPass};
+
+fn apply(input: &str) -> String {
+    render_rule(input, SmartRename::new)
+}
+
+// Module-level SmartRename collectors must never change a named export's
+// public binding. Each regression also keeps one private candidate to prove
+// the collector still provides useful names for non-exported bindings.
+
+#[test]
+fn react_hook_rename_aliases_specifier_export_to_keep_public_name() {
+    // Renaming a specifier-exported binding is safe: BindingRenamer inserts
+    // an alias so the public name `a` is unchanged.
+    let input = r#"
+const a = useRef();
+const b = useRef();
+export { a };
+use(a, b);
+"#;
+    let expected = r#"
+const aRef = useRef();
+const bRef = useRef();
+export { aRef as a };
+use(aRef, bRef);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn destructuring_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export const { publicValue: a } = source;
+const { privateValue: b } = source;
+use(a, b);
+"#;
+    let expected = r#"
+export const { publicValue: a } = source;
+const { privateValue } = source;
+use(a, privateValue);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn member_init_rename_aliases_specifier_export_to_keep_public_name() {
+    let input = r#"
+const a = runtime.publicValue;
+const b = runtime.privateValue;
+export { a };
+use(a, b);
+"#;
+    let expected = r#"
+const runtime_publicValue = runtime.publicValue;
+const runtime_privateValue = runtime.privateValue;
+export { runtime_publicValue as a };
+use(runtime_publicValue, runtime_privateValue);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn symbol_for_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export const a = Symbol.for("public.value");
+const b = Symbol.for("private.value");
+use(a, b);
+"#;
+    let expected = r#"
+export const a = Symbol.for("public.value");
+const SYMBOL_PRIVATE_VALUE = Symbol.for("private.value");
+use(a, SYMBOL_PRIVATE_VALUE);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export function a() {
+  return <div data-sentry-component="PublicCard" />;
+}
+function b() {
+  return <div data-sentry-component="PrivateCard" />;
+}
+use(a, b);
+"#;
+    let expected = r#"
+export function a() {
+  return <div />;
+}
+function PrivateCard() {
+  return <div />;
+}
+use(a, PrivateCard);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export function a() {
+  return <div />;
+}
+function b() {
+  return <span />;
+}
+use(a, b);
+"#;
+    let expected = r#"
+export function a() {
+  return <div />;
+}
+function BComponent() {
+  return <span />;
+}
+use(a, BComponent);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export const a = makePublic();
+const b = makePrivate();
+const values = { PublicValue: a, PrivateValue: b };
+"#;
+    let expected = r#"
+export const a = makePublic();
+const PrivateValue = makePrivate();
+const values = { PublicValue: a, PrivateValue };
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn jsx_alias_rename_skips_exported_binding_but_renames_private_binding() {
+    let input = r#"
+export const Tm = sideCar;
+const Dm = drawer;
+const view = <><Tm /><Dm /></>;
+"#;
+    let expected = r#"
+export const Tm = sideCar;
+const Drawer = drawer;
+const view = <><Tm /><Drawer /></>;
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn jsx_component_alias_uses_source_name() {
+    let input = r#"
+function render(U) {
+  const { sideCar } = U;
+  const Tm = sideCar;
+  return <Tm sideCar={medium} />;
+}
+"#;
+    let expected = r#"
+function render(U) {
+  const { sideCar } = U;
+  const SideCar = sideCar;
+  return <SideCar sideCar={medium} />;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn jsx_component_alias_keeps_other_uses() {
+    let input = r#"
+function render(U) {
+  const { sideCar } = U;
+  const Tm = sideCar;
+  use(Tm);
+  return <Tm sideCar={medium} />;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn jsx_component_alias_skips_ambiguous_shared_source_name() {
+    // Two JSX-only aliases of the same lowercase source would both choose `J`
+    // if the source-derived target were treated as unique.
+    let input = r#"
+const V = j;
+const W = j;
+function render() {
+  return <><V /><W /></>;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn object_destructuring_rename_shorthand() {
+    // { key: alias } where alias ≤2 chars → rename alias→key and convert to shorthand
+    let input = r#"
+const {
+  gql: t,
+  dispatchers: o,
+  listener: i,
+  sameName: sameName
+} = n;
+o.delete(t, i);
+"#;
+    let expected = r#"
+const {
+  gql,
+  dispatchers,
+  listener,
+  sameName
+} = n;
+dispatchers.delete(gql, listener);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_rename_numbered_minified_aliases() {
+    let input = r#"
+const {
+  alphaName: ab1,
+  betaName: cd1,
+  gammaName: ef1,
+  deltaName: ghi1,
+} = source;
+render(ab1, cd1, ef1, ghi1);
+"#;
+    let expected = r#"
+const {
+  alphaName,
+  betaName,
+  gammaName,
+  deltaName,
+} = source;
+render(alphaName, betaName, gammaName, deltaName);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_numbered_alias_avoids_existing_property_name() {
+    let input = r#"
+const alphaName = createValue();
+const { alphaName: ab1 } = source;
+render(alphaName, ab1);
+"#;
+    let expected = r#"
+const alphaName = createValue();
+const { alphaName: alphaName_1 } = source;
+render(alphaName, alphaName_1);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_keeps_reserved_key_placeholder() {
+    let input = r#"
+const { in: _in } = source;
+use(_in);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn object_destructuring_with_reserved_identifier() {
+    let input = r#"
+const {
+  static: t,
+  default: o,
+} = n;
+o.delete(t);
+"#;
+    let expected = r#"
+const {
+  static: _static,
+  default: _default,
+} = n;
+_default.delete(_static);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_in_function_parameter() {
+    let input = r#"
+function foo({
+  gql: t,
+  dispatchers: o,
+  listener: i
+}) {
+  o.delete(t, i);
+}
+"#;
+    let expected = r#"
+function foo({
+  gql,
+  dispatchers,
+  listener
+}) {
+  dispatchers.delete(gql, listener);
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_in_arrow_function_parameter() {
+    let input = r#"
+const foo2 = ({
+  gql: t,
+  dispatchers: o,
+  listener: i
+}) => {
+  t[o].delete(i);
+};
+"#;
+    let expected = r#"
+const foo2 = ({
+  gql,
+  dispatchers,
+  listener
+}) => {
+  gql[dispatchers].delete(listener);
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_param_rename_updates_computed_pattern_keys() {
+    let input = r#"
+const getSignal = ({ name: q }) => {
+  let { signals: { [q]: A } } = constants;
+  return A;
+};
+"#;
+    let expected = r#"
+const getSignal = ({ name }) => {
+  let { signals: { [name]: A } } = constants;
+  return A;
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_createcontext() {
+    let input = r#"
+const d = createContext(null);
+const ef = o.createContext('light');
+const ThemeContext = o.createContext('light');
+"#;
+    let expected = r#"
+const DContext = createContext(null);
+const EfContext = o.createContext('light');
+const ThemeContext = o.createContext('light');
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usestate() {
+    let input = r#"
+const [e, f] = useState();
+const [, g] = o.useState(0);
+"#;
+    let expected = r#"
+const [e, setE] = useState();
+const [, setG] = o.useState(0);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usestate_numbered_generated_setter() {
+    let input = r#"
+const [count, ab1] = useState(0);
+"#;
+    let expected = r#"
+const [count, setCount] = useState(0);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usestate_setter_alias_from_readable_state() {
+    let input = r#"
+const [isLoading, setN] = useState(false);
+const [defaultValue, setL] = useState(options.defaultValue);
+isLoading && setN(false);
+setL(defaultValue);
+"#;
+    let expected = r#"
+const [isLoading, setIsLoading] = useState(false);
+const [defaultValue, setDefaultValue] = useState(options.defaultValue);
+isLoading && setIsLoading(false);
+setDefaultValue(defaultValue);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usestate_setter_uses_pending_state_rename() {
+    let input = r#"
+function useManifest() {
+    const [n, i] = useState(false);
+    i(true);
+    return {
+        isLoading: n
+    };
+}
+"#;
+    let expected = r#"
+function useManifest() {
+    const [isLoading, setIsLoading] = useState(false);
+    setIsLoading(true);
+    return {
+        isLoading
+    };
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usestate_keeps_matching_minified_pair() {
+    let input = r#"
+const [c, setC] = useState(false);
+setC(!c);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn react_rename_usestate_in_arrow_body() {
+    let input = r#"
+const Component = ({ value }) => {
+    const [value_1, M] = l.useState(value);
+    M(value);
+    return value_1;
+};
+"#;
+    let expected = r#"
+const Component = ({ value }) => {
+    const [value_1, setValue] = l.useState(value);
+    setValue(value);
+    return value_1;
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usereducer() {
+    let input = r#"
+const [e, f] = useReducer(r, i);
+const [g, h] = o.useReducer(r, i, init);
+"#;
+    let expected = r#"
+const [eState, fDispatch] = useReducer(r, i);
+const [gState, hDispatch] = o.useReducer(r, i, init);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_usetransition() {
+    let input = r#"
+const [e, f] = useTransition();
+const [g, h] = o.useTransition();
+"#;
+    let expected = r#"
+const [isPending, startTransition] = useTransition();
+const [isPending_1, startTransition_1] = o.useTransition();
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_useoptimistic() {
+    let input = r#"
+const [e, f] = useOptimistic(currentName);
+const [g, h] = o.useOptimistic(messages, reducer);
+const [optimisticCount, i] = useOptimistic(count);
+"#;
+    let expected = r#"
+const [optimisticName, setOptimisticName] = useOptimistic(currentName);
+const [optimisticMessages, setOptimisticMessages] = o.useOptimistic(messages, reducer);
+const [optimisticCount, setOptimisticCount] = useOptimistic(count);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_useactionstate() {
+    let input = r#"
+const [e, f, g] = useActionState(submitForm, null);
+const [h, i, j] = o.useActionState(action, initialState);
+const [optimisticCount, k, l] = useActionState(reducer, count);
+const [m, n, p] = useActionState(action);
+"#;
+    let expected = r#"
+const [state, dispatchAction, isPending] = useActionState(submitForm, null);
+const [state_1, dispatchAction_1, isPending_1] = o.useActionState(action, initialState);
+const [optimisticCount, dispatchAction_2, isPending_2] = useActionState(reducer, count);
+const [m, n, p] = useActionState(action);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_useref() {
+    let input = r#"
+const d = useRef();
+const ef = o.useRef(null);
+const buttonRef = o.useRef(null);
+"#;
+    let expected = r#"
+const dRef = useRef();
+const efRef = o.useRef(null);
+const buttonRef = o.useRef(null);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn react_rename_skips_exported_createcontext_binding() {
+    let input = r#"
+export const l = o.createContext(null);
+use(l);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn react_rename_skips_exported_useref_binding() {
+    let input = r#"
+export const r = useRef(null);
+use(r);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn object_destructuring_in_function_body() {
+    let input = r#"
+function f() {
+    let { line: z, col: Y } = pos;
+    console.log(z, Y);
+}
+"#;
+    let expected = r#"
+function f() {
+    let { line, col } = pos;
+    console.log(line, col);
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_in_class_method_body() {
+    let input = r#"
+class Foo {
+    bar() {
+        let { task: _ } = result;
+        return _.id;
+    }
+}
+"#;
+    let expected = r#"
+class Foo {
+    bar() {
+        let { task } = result;
+        return task.id;
+    }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn object_destructuring_in_nested_blocks() {
+    let input = r#"
+function f(r, t) {
+    if (r) {
+        const { foo: o } = r;
+        use(o);
+    }
+    for (;;) {
+        let { bar: b } = t;
+        use(b);
+    }
+    try {
+        const { baz: z } = r;
+        use(z);
+    } catch (err) {
+        const { qux: q } = err;
+        use(q);
+    }
+    switch (t) {
+        case 1:
+            const { quux: x } = t;
+            use(x);
+    }
+}
+"#;
+    let expected = r#"
+function f(r, t) {
+    if (r) {
+        const { foo } = r;
+        use(foo);
+    }
+    for (;;) {
+        let { bar } = t;
+        use(bar);
+    }
+    try {
+        const { baz } = r;
+        use(baz);
+    } catch (err) {
+        const { qux } = err;
+        use(qux);
+    }
+    switch (t) {
+        case 1:
+            const { quux } = t;
+            use(quux);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_for_heads() {
+    let input = r#"
+function f(items, obj) {
+    for (const { id: i, name: n } of items) {
+        use(i, n);
+    }
+    for (let { length: l } = obj; l > 0; l--) {
+        use(l);
+    }
+}
+"#;
+    let expected = r#"
+function f(items, obj) {
+    for (const { id, name } of items) {
+        use(id, name);
+    }
+    for (let { length } = obj; length > 0; length--) {
+        use(length);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_arrow_nested_block() {
+    let input = r#"
+const f = (r) => {
+    if (r) {
+        const { foo: o } = r;
+        return o;
+    }
+};
+"#;
+    let expected = r#"
+const f = (r) => {
+    if (r) {
+        const { foo } = r;
+        return foo;
+    }
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_module_level_block() {
+    let input = r#"
+if (cond) {
+    const { foo: o } = obj;
+    use(o);
+}
+"#;
+    let expected = r#"
+if (cond) {
+    const { foo } = obj;
+    use(foo);
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_sibling_blocks_reuse_the_same_name() {
+    // Block-scoped bindings in disjoint blocks cannot capture each other.
+    let input = r#"
+function f(a, b) {
+    if (a) {
+        const { foo: o } = a;
+        use(o);
+    } else {
+        const { foo: i } = b;
+        use(i);
+    }
+}
+"#;
+    let expected = r#"
+function f(a, b) {
+    if (a) {
+        const { foo } = a;
+        use(foo);
+    } else {
+        const { foo } = b;
+        use(foo);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_block_does_not_capture_outer_reference() {
+    let input = r#"
+function f(r, foo) {
+    if (r) {
+        const { foo: o } = r;
+        use(o, foo);
+    }
+}
+"#;
+    let expected = r#"
+function f(r, foo) {
+    if (r) {
+        const { foo: foo_1 } = r;
+        use(foo_1, foo);
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_inner_block_does_not_shadow_outer_block_rename() {
+    let input = r#"
+function f(a, b) {
+    if (a) {
+        const { foo: o } = a;
+        if (b) {
+            const { foo: i } = b;
+            use(o, i);
+        }
+    }
+}
+"#;
+    let expected = r#"
+function f(a, b) {
+    if (a) {
+        const { foo } = a;
+        if (b) {
+            const { foo: foo_1 } = b;
+            use(foo, foo_1);
+        }
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_block_does_not_shadow_nested_var_rename() {
+    // `var` in a nested block is function-scoped: its new name is visible in
+    // every block, so a block-scoped rename that sees a reference to it must
+    // not take the same name, in either source order.
+    let input = r#"
+function f(a, b) {
+    if (a) {
+        var { foo: o } = a;
+    }
+    if (b) {
+        const { foo: i } = b;
+        use(i, o);
+    }
+}
+function g(a, b) {
+    if (b) {
+        const { foo: i } = b;
+        use(i, o);
+    }
+    if (a) {
+        var { foo: o } = a;
+    }
+}
+"#;
+    let expected = r#"
+function f(a, b) {
+    if (a) {
+        var { foo } = a;
+    }
+    if (b) {
+        const { foo: foo_1 } = b;
+        use(foo_1, foo);
+    }
+}
+function g(a, b) {
+    if (b) {
+        const { foo } = b;
+        use(foo, foo_1);
+    }
+    if (a) {
+        var { foo: foo_1 } = a;
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_param_with_default() {
+    let input = r#"
+function t({ left: o = 0, top: r = 0 } = {}) {
+    this.left = o;
+    this.top = r;
+}
+"#;
+    let expected = r#"
+function t({ left = 0, top = 0 } = {}) {
+    this.left = left;
+    this.top = top;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_nested_patterns() {
+    let input = r#"
+function f(points) {
+    const { options: { border: s, grid: n }, data: { sets: d } = {} } = this;
+    const [{ x: a, y: b }] = points;
+    use(s, n, d, a, b);
+}
+"#;
+    let expected = r#"
+function f(points) {
+    const { options: { border, grid }, data: { sets } = {} } = this;
+    const [{ x, y }] = points;
+    use(border, grid, sets, x, y);
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_nested_patterns_in_one_declaration_get_distinct_names() {
+    let input = r#"
+function f() {
+    const [{ x: t, y: n }, { x: r, y: i }] = this.getPoints();
+    use(t, n, r, i);
+}
+"#;
+    let expected = r#"
+function f() {
+    const [{ x, y }, { x: x_1, y: y_1 }] = this.getPoints();
+    use(x, y, x_1, y_1);
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn object_destructuring_in_constructor() {
+    let input = r#"
+class A {
+    constructor({ id: e, viewBox: n } = {}) {
+        this.id = e;
+        this.viewBox = n;
+        const { dispatch: u } = this;
+        if (e) {
+            const { commit: c } = this;
+            use(u, c);
+        }
+    }
+}
+"#;
+    let expected = r#"
+class A {
+    constructor({ id, viewBox } = {}) {
+        this.id = id;
+        this.viewBox = viewBox;
+        const { dispatch } = this;
+        if (id) {
+            const { commit } = this;
+            use(dispatch, commit);
+        }
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn member_init_rename_basic() {
+    // var w = zw.NOT_APPLICABLE → rename w to zw_NOT_APPLICABLE
+    let input = r#"
+let w = zw.NOT_APPLICABLE;
+console.log(w);
+"#;
+    let expected = r#"
+let zw_NOT_APPLICABLE = zw.NOT_APPLICABLE;
+console.log(zw_NOT_APPLICABLE);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn member_init_rename_numbered_generated_alias() {
+    let input = r#"
+const ab1 = source.readableName;
+render(ab1);
+"#;
+    let expected = r#"
+const source_readableName = source.readableName;
+render(source_readableName);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn member_init_keeps_normalized_property_placeholder() {
+    let input = r#"
+const _abc = this._abc;
+render(_abc);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn member_init_rename_short_obj() {
+    // var z = q.length → rename z to q_length
+    let input = r#"
+const z = q.length;
+while (z > 0) {}
+"#;
+    let expected = r#"
+const q_length = q.length;
+while (q_length > 0) {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn member_init_var_redeclaration_uses_first_name() {
+    // Function-scoped `var` redeclarations share the same BindingId. If the
+    // collector proposes multiple names for that binding, BindingRenamer must
+    // preserve the historical first-match behavior.
+    let input = r#"
+function visit(q) {
+    var z = q.length;
+    while (z--) {
+        use(q[z]);
+    }
+    var z = q.length;
+    while (z--) {
+        use(q[z]);
+    }
+}
+"#;
+    let expected = r#"
+function visit(q) {
+    var q_length = q.length;
+    while (q_length--) {
+        use(q[q_length]);
+    }
+    var q_length = q.length;
+    while (q_length--) {
+        use(q[q_length]);
+    }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn member_init_rename_skips_long_names() {
+    // Long variable names aren't minified, don't rename
+    let input = r#"
+const myVar = obj.prop;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn member_init_rename_skips_both_short() {
+    // Both obj and prop are short — combined name wouldn't help
+    let input = r#"
+const x = q.y;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn member_init_rename_in_function_body() {
+    let input = r#"
+function f() {
+    let _ = nodes.length;
+    while (_ > 0) {
+        _--;
+    }
+}
+"#;
+    let expected = r#"
+function f() {
+    let nodes_length = nodes.length;
+    while (nodes_length > 0) {
+        nodes_length--;
+    }
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn named_import_snapshot_alias_uses_readable_local_name() {
+    let input = r#"
+import { unstable_runWithPriority } from "./scheduler.js";
+const Wt = unstable_runWithPriority;
+use(Wt);
+"#;
+    let expected = r#"
+import { unstable_runWithPriority } from "./scheduler.js";
+const unstable_runWithPriority_1 = unstable_runWithPriority;
+use(unstable_runWithPriority_1);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_aliases_get_distinct_readable_names() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+const b = unstable_now;
+use(a, b);
+"#;
+    let expected = r#"
+import { unstable_now } from "./scheduler.js";
+const unstable_now_1 = unstable_now;
+const unstable_now_2 = unstable_now;
+use(unstable_now_1, unstable_now_2);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_alias_avoids_nested_name_capture() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+function read() {
+    const unstable_now_1 = localClock();
+    return a();
+}
+"#;
+    let expected = r#"
+import { unstable_now } from "./scheduler.js";
+const unstable_now_2 = unstable_now;
+function read() {
+    const unstable_now_1 = localClock();
+    return unstable_now_2();
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_rename_preserves_specifier_export_name() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+export { a };
+"#;
+    let expected = r#"
+import { unstable_now } from "./scheduler.js";
+const unstable_now_1 = unstable_now;
+export { unstable_now_1 as a };
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_rename_skips_export_declaration() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+export const a = unstable_now;
+const b = unstable_now;
+use(a, b);
+"#;
+    let expected = r#"
+import { unstable_now } from "./scheduler.js";
+export const a = unstable_now;
+const unstable_now_1 = unstable_now;
+use(a, unstable_now_1);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_rename_keeps_mutable_and_jsx_aliases() {
+    let input = r#"
+import { unstable_now, widget } from "./runtime.js";
+let a = unstable_now;
+const Wt = widget;
+use(a, <Wt />);
+"#;
+    let expected = r#"
+import { unstable_now, widget } from "./runtime.js";
+let a = unstable_now;
+const Widget = widget;
+use(a, <Widget />);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_rename_respects_known_direct_eval_names() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+const b = unstable_now;
+eval("a");
+use(a, b);
+"#;
+    let expected = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+const unstable_now_1 = unstable_now;
+eval("a");
+use(a, unstable_now_1);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn named_import_snapshot_rename_stops_for_unknown_direct_eval() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+eval(source);
+use(a);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn named_import_snapshot_rename_does_not_capture_known_eval_name() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+eval("unstable_now_1");
+use(a);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn named_import_snapshot_rename_stops_for_with_statement() {
+    let input = r#"
+import { unstable_now } from "./scheduler.js";
+const a = unstable_now;
+with (scope) {
+    use(a);
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+// --- semantic regressions ---
+
+#[test]
+fn react_rename_should_not_leave_stale_use_site() {
+    let input = r#"
+const d = useRef();
+use(d);
+"#;
+    let output = normalize(&apply(input));
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn destructuring_rename_should_not_touch_shadowed_param() {
+    let input = r#"
+const { gql: t } = n;
+function inner(t) {
+  return t;
+}
+use(t);
+"#;
+    let output = normalize(&apply(input));
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_rename_must_not_capture_param_referenced_in_body() {
+    // The body-level candidate `t` is hinted toward the name `count` by the
+    // value position, but the function body also references the param
+    // `count`. Since swc_ecma_ast 29 function bodies are a separate node from
+    // blocks, the capture index must still push a body frame so the param
+    // reference stays forbidden — otherwise this renames to
+    // `const count = count + 1`, a self-capture and a SyntaxError.
+    let input = r#"
+function make(count) {
+  const t = count + 1;
+  return { count: t };
+}
+use(make);
+"#;
+    let output = normalize(&apply(input));
+    assert!(
+        output.contains("const count_1 =") && !output.contains("const count ="),
+        "body candidate must not capture the `count` param: {output}"
+    );
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn react_rename_should_not_leak_into_shadowed_function_local() {
+    let input = r#"
+export const l = o.createContext(null);
+function createElement() {
+  let l = arguments.length - 2;
+  if (e && e.defaultProps) {
+    l = e.defaultProps;
+  }
+  return l;
+}
+use(l);
+"#;
+    let output = normalize(&apply(input));
+    insta::assert_snapshot!(output);
+}
+
+// ============================================================
+// Symbol.for renames
+// ============================================================
+
+#[test]
+fn symbol_for_renamed_to_upper_snake_case() {
+    let input = r#"
+const ul = Symbol.for("react.element");
+const At = Symbol.for("react.portal");
+console.log(ul, At);
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn symbol_for_renames_numbered_generated_alias() {
+    let input = r#"
+const ab1 = Symbol.for("example.key");
+console.log(ab1);
+"#;
+    let expected = r#"
+const SYMBOL_EXAMPLE_KEY = Symbol.for("example.key");
+console.log(SYMBOL_EXAMPLE_KEY);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn symbol_for_keeps_uppercase_acronym_key_together() {
+    let input = r#"
+const ab1 = Symbol.for("UPPERCASE");
+console.log(ab1);
+"#;
+    let expected = r#"
+const SYMBOL_UPPERCASE = Symbol.for("UPPERCASE");
+console.log(SYMBOL_UPPERCASE);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn symbol_for_camel_case_key() {
+    let input = r#"
+const Ac = Symbol.for("react.forward_ref");
+console.log(Ac);
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn symbol_for_skips_long_names() {
+    let input = r#"
+const reactElement = Symbol.for("react.element");
+console.log(reactElement);
+"#;
+    let result = apply(input);
+    assert_eq_normalized(&result, input);
+}
+
+#[test]
+fn symbol_for_inside_function_scope() {
+    let input = r#"
+function init() {
+    const ul = Symbol.for("react.element");
+    return ul;
+}
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+// ============================================================
+// Rest pattern renames
+// ============================================================
+
+#[test]
+fn rest_pattern_renamed_to_rest() {
+    let input = r#"
+const { foo, bar, ...d } = obj;
+console.log(d);
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn rest_pattern_skips_long_names() {
+    let input = r#"
+const { foo, ...remaining } = obj;
+console.log(remaining);
+"#;
+    let result = apply(input);
+    assert_eq_normalized(&result, input);
+}
+
+#[test]
+fn rest_pattern_avoids_collision() {
+    let input = r#"
+const rest = "taken";
+const { foo, ...d } = obj;
+console.log(rest, d);
+"#;
+    let result = apply(input);
+    // `rest` is taken, so ...d gets a suffixed name
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn rest_pattern_in_function_params() {
+    let input = r#"
+function foo({ name, ...r }) {
+    return r;
+}
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+#[test]
+fn rest_pattern_does_not_collide_with_other_params() {
+    // Arrow with existing `rest` param — renaming ...r to ...rest would be a duplicate
+    let input = r#"
+const fn2 = ({ name, ...r }, rest) => r;
+"#;
+    let result = apply(input);
+    insta::assert_snapshot!(result);
+}
+
+// ============================================================
+// Value-position renames: short binding used only as `{ Key: x }`
+// ============================================================
+
+#[test]
+fn value_position_rename_arrow_param_single_key() {
+    // `t` used only as value of `error:` — rename to `error`.
+    let input = r#"
+const f = (e, t) => ({
+    ...e,
+    isLoading: false,
+    error: t
+});
+"#;
+    let expected = r#"
+const f = (e, error) => ({
+    ...e,
+    isLoading: false,
+    error
+});
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_rename_default_import_used_once() {
+    let input = r#"
+import r from "./module-28.js";
+export default {
+    FrontPage: r
+};
+"#;
+    let expected = r#"
+import FrontPage from "./module-28.js";
+export default {
+    FrontPage
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_renames_numbered_generated_alias() {
+    let input = r#"
+const ab1 = sourceValue;
+export default {
+    RecoveredName: ab1
+};
+"#;
+    let expected = r#"
+const RecoveredName = sourceValue;
+export default {
+    RecoveredName
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_rename_multiple_params_each_unique_key() {
+    let input = r#"
+const f = (e, t) => ({
+    data: e,
+    error: t
+});
+"#;
+    let expected = r#"
+const f = (data, error) => ({
+    data,
+    error
+});
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_rename_does_not_capture_unresolved_reference_in_binding_scope() {
+    let input = r#"
+function initialize(source) {
+    Object.keys(source);
+    const v = makeSchema();
+    return { Object: v };
+}
+"#;
+    let expected = r#"
+function initialize(source) {
+    Object.keys(source);
+    const Object_1 = makeSchema();
+    return { Object: Object_1 };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_rename_allows_same_name_reference_outside_binding_scope() {
+    let input = r#"
+function inspect(source) {
+    return Object.keys(source);
+}
+function initialize() {
+    const v = makeSchema();
+    return { Object: v };
+}
+"#;
+    let expected = r#"
+function inspect(source) {
+    return Object.keys(source);
+}
+function initialize() {
+    const Object = makeSchema();
+    return { Object };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_var_rename_uses_function_scope_for_capture_check() {
+    let input = r#"
+function initialize(source, enabled) {
+    Object.keys(source);
+    if (enabled) {
+        var v = makeSchema();
+    }
+    return { Object: v };
+}
+"#;
+    let expected = r#"
+function initialize(source, enabled) {
+    Object.keys(source);
+    if (enabled) {
+        var Object_1 = makeSchema();
+    }
+    return { Object: Object_1 };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_lexical_rename_ignores_reference_outside_its_block() {
+    let input = r#"
+function initialize(source, enabled) {
+    Object.keys(source);
+    if (enabled) {
+        const v = makeSchema();
+        consume({ Object: v });
+    }
+}
+"#;
+    let expected = r#"
+function initialize(source, enabled) {
+    Object.keys(source);
+    if (enabled) {
+        const Object = makeSchema();
+        consume({ Object });
+    }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_rename_ignores_same_name_setter_param() {
+    let input = r#"
+function build(v) {
+    const facade = {
+        set current(value) {
+            consume(value);
+        }
+    };
+    return { value: v, facade };
+}
+"#;
+    let expected = r#"
+function build(value) {
+    const facade = {
+        set current(value) {
+            consume(value);
+        }
+    };
+    return { value, facade };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_var_rename_stays_inside_getter_scope() {
+    let input = r#"
+function build(source) {
+    value(source);
+    return {
+        get current() {
+            var v = makeValue();
+            return { value: v };
+        }
+    };
+}
+"#;
+    let expected = r#"
+function build(source) {
+    value(source);
+    return {
+        get current() {
+            var value = makeValue();
+            return { value };
+        }
+    };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_var_rename_stays_inside_constructor_scope() {
+    let input = r#"
+function build(source) {
+    value(source);
+    return class Box {
+        constructor() {
+            var v = makeValue();
+            consume({ value: v });
+        }
+    };
+}
+"#;
+    let expected = r#"
+function build(source) {
+    value(source);
+    return class Box {
+        constructor() {
+            var value = makeValue();
+            consume({ value });
+        }
+    };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_rename_preserves_outer_reference_in_parameter_default() {
+    let input = r#"
+function build() {
+    const v = makeValue();
+    function read(current = value) {
+        var value = fallback;
+        return current ?? value;
+    }
+    consume(read);
+    return { value: v };
+}
+"#;
+    let expected = r#"
+function build() {
+    const value_1 = makeValue();
+    function read(current = value) {
+        var value = fallback;
+        return current ?? value;
+    }
+    consume(read);
+    return { value: value_1 };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_renames_arguments_default_param_after_un_parameters() {
+    let input = r#"
+const f = "proc first argument must be an iterator";
+use(f);
+function L(e, s) {
+    var f = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : "";
+    var h = arguments[3];
+    if (sagaMonitor) {
+        sagaMonitor.effectTriggered({
+            effectId: v,
+            parentEffectId: s,
+            label: f,
+            effect: e
+        });
+    }
+    use(e, h);
+}
+"#;
+    let expected = r#"
+const f = "proc first argument must be an iterator";
+use(f);
+function L(effect, parentEffectId, label = "", h) {
+    if (sagaMonitor) {
+        sagaMonitor.effectTriggered({
+            effectId: v,
+            parentEffectId,
+            label,
+            effect
+        });
+    }
+    use(effect, h);
+}
+"#;
+    let output = render_pipeline_between(input, "UnParameters", "SmartRename");
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_skips_multiple_different_keys() {
+    // `e` appears as value for many different keys — must NOT rename.
+    let input = r#"
+function outer() {
+    function e() {}
+    function t() {}
+    const n = {
+        array: e,
+        bool: e,
+        number: e,
+        arrayOf: t,
+        shape: t,
+    };
+    return n;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn value_position_renames_binding_with_other_uses() {
+    let input = r#"
+import r from "./m.js";
+r();
+function g(e) {
+    const t = compute(e);
+    log(t);
+    return { total: t, Foo: r };
+}
+function h() {
+    function n() {}
+    n();
+    return { handler: n };
+}
+"#;
+    let expected = r#"
+import Foo from "./m.js";
+Foo();
+function g(e) {
+    const total = compute(e);
+    log(total);
+    return { total, Foo };
+}
+function h() {
+    function handler() {}
+    handler();
+    return { handler };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_sole_use_candidate_keeps_its_key_over_relaxed_candidate() {
+    // A binding with other uses must not take a key away from, or collide
+    // with, a binding whose only use is that value position.
+    let input = r#"
+function a(t) {
+    return { createHref: t };
+}
+function b(n) {
+    log(n);
+    return { createHref: n };
+}
+"#;
+    let expected = r#"
+function a(createHref) {
+    return { createHref };
+}
+function b(n) {
+    log(n);
+    return { createHref: n };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_generic_and_dollar_keys_need_a_sole_use() {
+    // A generic or `$`-prefixed key names the slot, not the value; it is
+    // only trusted when the value position is the binding's only use.
+    let input = r#"
+function f(e) {
+    const t = g(e);
+    log(t);
+    const n = h(e);
+    log(n);
+    const r = k(e);
+    return { type: t, $set: n, key: r };
+}
+"#;
+    let expected = r#"
+function f(e) {
+    const t = g(e);
+    log(t);
+    const n = h(e);
+    log(n);
+    const key = k(e);
+    return { type: t, $set: n, key };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_skips_destructured_and_class_bindings_with_other_uses() {
+    let input = r#"
+function f(e) {
+    const [t] = e;
+    log(t);
+    class n {}
+    log(new n());
+    return { total: t, widget: n };
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn value_position_skips_boolean_test_of_a_same_named_property() {
+    // `!!s.icon` is a flag about `icon`, not the icon itself.
+    let input = r#"
+function f(s) {
+    const t = !!s.icon;
+    const n = s.weight > 0;
+    const r = t && !!s.badge;
+    const i = !!s.flag;
+    use(t, n, r, i);
+    return { icon: t, weight: n, badge: r, visible: i };
+}
+"#;
+    let expected = r#"
+function f(s) {
+    const t = !!s.icon;
+    const n = s.weight > 0;
+    const r = t && !!s.badge;
+    const visible = !!s.flag;
+    use(t, n, r, visible);
+    return { icon: t, weight: n, badge: r, visible };
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_skips_long_names() {
+    let input = r#"
+import longName from "./m.js";
+export default { Foo: longName };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn value_position_uses_suffix_when_target_is_existing_binding() {
+    let input = r#"
+const error = "taken";
+const f = (t) => ({ error: t });
+use(error);
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_suffix_does_not_steal_natural_target() {
+    // `t` wants `error` (blocked by top-level) → fallback `error_1`.
+    // `n` wants `error_1` directly — the two-pass allocator must let `n`
+    // claim `error_1` first, then give `t` the next available suffix.
+    let input = r#"
+const error = "taken";
+const f = (t, n) => ({ error: t, error_1: n });
+use(error);
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_allows_target_name_in_unrelated_inner_scope() {
+    let input = r#"
+const tW = makeSideCar();
+const obj = { sideCar: tW };
+function render(U) {
+    const { sideCar } = U;
+    return sideCar;
+}
+"#;
+    let expected = r#"
+const sideCar = makeSideCar();
+const obj = { sideCar };
+function render(U) {
+    const { sideCar } = U;
+    return sideCar;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn value_position_uses_suffix_when_target_would_shadow_use() {
+    let input = r#"
+const tW = makeSideCar();
+function render(U) {
+    const { sideCar } = U;
+    return { sideCar: tW };
+}
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_skips_when_target_shared_by_multiple_bindings() {
+    // Both `s` and `f` would want to rename to `$$typeof` — the target is
+    // too generic to discriminate, so leave them alone.
+    let input = r#"
+const s = 1;
+const f = 2;
+use({ $$typeof: s });
+use({ $$typeof: f });
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn value_position_allows_original_name_in_sibling_scope() {
+    let input = r#"
+function h(e, t) {
+    const { initFoo } = t;
+    return initFoo;
+}
+const connect = (e, t) => {
+    const k = makeFoo(e, t);
+    return setup({ initFoo: k });
+};
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_allows_rename_when_key_is_only_property_name() {
+    // `payload` appears only as a property key, not as a binding — still rename.
+    let input = r#"
+const handler = (e) => ({
+    type: "X",
+    payload: e
+});
+use(handler);
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_rename_keeps_specifier_export_name() {
+    let input = r#"
+const r = makeThing();
+export { r };
+const obj = { Foo: r };
+"#;
+    let expected = r#"
+const Foo = makeThing();
+export { Foo as r };
+const obj = { Foo };
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_skips_exported_decl_binding() {
+    // Renaming an exported declaration changes the public export name.
+    let input = r#"
+export let Jn = "7.50.0";
+const metadata = {
+    version: Jn
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn value_position_does_not_rename_to_reserved_keyword() {
+    // Key `default` is reserved — should either skip or prefix with `_`.
+    let input = r#"
+import r from "./m.js";
+export default { default: r };
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_does_not_rename_to_strict_binding_name() {
+    let input = r#"
+const f = (e) => ({
+    arguments: e
+});
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn value_position_skips_computed_key() {
+    let input = r#"
+import r from "./m.js";
+const k = "Foo";
+export default { [k]: r };
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_skips_shadowed_use() {
+    // Outer `t` used once as value, but inner function has its own `t`.
+    // The outer rename should still apply; inner `t` must stay.
+    let input = r#"
+const t = 1;
+const obj = { count: t };
+function inner(t) { return t + 1; }
+use(obj, inner(2));
+"#;
+    let output = apply(input);
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn value_position_rename_from_jsx_attr() {
+    let input = r#"
+function render(c) {
+  return <EContext.Provider value={c}>{children}</EContext.Provider>;
+}
+"#;
+    let expected = r#"
+function render(value) {
+  return <EContext.Provider value={value}>{children}</EContext.Provider>;
+}
+"#;
+
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_does_not_rename_from_invalid_jsx_attr_name() {
+    let input = r#"
+function render(U) {
+  return <div data-state={U}>{children}</div>;
+}
+"#;
+
+    assert_eq_normalized(&apply(input), input);
+}
+
+// ============================================================
+// Getter return value rename hints
+// ============================================================
+
+#[test]
+fn value_position_rename_from_getter_return() {
+    let input = r#"
+function hD() {}
+function Dq() {}
+const ns = {
+  get isKmsi() { return hD; },
+  get getPayload() { return Dq; }
+};
+"#;
+    let expected = r#"
+function isKmsi() {}
+function getPayload() {}
+const ns = {
+  get isKmsi() { return isKmsi; },
+  get getPayload() { return getPayload; }
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn value_position_getter_skips_multi_statement_body() {
+    let input = r#"
+const ns = {
+  get foo() { console.log(); return hD; }
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn value_position_getter_skips_non_ident_return() {
+    let input = r#"
+const ns = {
+  get foo() { return a + b; }
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+// ============================================================
+// Sentry data-sentry-component renames
+// ============================================================
+
+#[test]
+fn sentry_component_renames_function_decl() {
+    let input = r#"
+function a() {
+  return <div data-sentry-component="MyComponent">Hello</div>;
+}
+"#;
+    let expected = r#"
+function MyComponent() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_renames_arrow_in_const() {
+    let input = r#"
+const a = () => <div data-sentry-component="MyComponent" />;
+"#;
+    let expected = r#"
+const MyComponent = () => <div />;
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_renames_fn_expr_in_const() {
+    let input = r#"
+const a = function() {
+  return <div data-sentry-component="MyComponent" />;
+};
+"#;
+    let expected = r#"
+const MyComponent = function() {
+  return <div />;
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_already_named() {
+    let input = r#"
+function MyComponent() {
+  return <div data-sentry-component="MyComponent">Hello</div>;
+}
+"#;
+    let expected = r#"
+function MyComponent() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_non_minified_name() {
+    let input = r#"
+function abc() {
+  return <div data-sentry-component="MyComponent">Hello</div>;
+}
+"#;
+    let expected = r#"
+function abc() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_conflict() {
+    let input = r#"
+const MyComponent = "taken";
+function a() {
+  return <div data-sentry-component="MyComponent">Hello</div>;
+}
+use(MyComponent);
+"#;
+    let expected = r#"
+const MyComponent = "taken";
+function AComponent() {
+  return <div>Hello</div>;
+}
+use(MyComponent);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_duplicate_target() {
+    let input = r#"
+function a() {
+  return <div data-sentry-component="Shared">Hello</div>;
+}
+function b() {
+  return <span data-sentry-component="Shared">World</span>;
+}
+"#;
+    let expected = r#"
+function Shared() {
+  return <div>Hello</div>;
+}
+function BComponent() {
+  return <span>World</span>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_camel_case_variant() {
+    let input = r#"
+const a = () => <div dataSentryComponent="NativeComponent" />;
+"#;
+    let expected = r#"
+const NativeComponent = () => <div />;
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_wins_over_element_and_keeps_source_file_metadata() {
+    let input = r#"
+function K() {
+  return <div data-sentry-component="UserCard" data-sentry-element="IgnoredElement" data-sentry-source-file="UserCard.tsx" />;
+}
+"#;
+    let expected = r#"
+function UserCard() {
+  return <div data-sentry-source-file="UserCard.tsx" />;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_element_renames_function_when_component_absent() {
+    let input = r#"
+function a() {
+  return <div data-sentry-element="Sidebar" />;
+}
+"#;
+    let expected = r#"
+function Sidebar() {
+  return <div />;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_element_skips_child_name_when_source_file_differs() {
+    let input = r#"
+const l = header;
+function a() {
+  return <><l data-sentry-element="Header" data-sentry-source-file="Sidebar.tsx" /></>;
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn sentry_element_camel_case_variant() {
+    let input = r#"
+const a = () => <div dataSentryElement="Sidebar" />;
+"#;
+    let expected = r#"
+const Sidebar = () => <div />;
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_element_skips_lowercase_name_without_react_shape_fallback() {
+    let input = r#"
+function K() {
+  return <div data-sentry-element="div">Hello</div>;
+}
+"#;
+    let expected = r#"
+function KComponent() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_element_skips_conflict_without_react_shape_fallback() {
+    let input = r#"
+const Sidebar = "taken";
+function K() {
+  return <div data-sentry-element="Sidebar">Hello</div>;
+}
+use(Sidebar);
+"#;
+    let expected = r#"
+const Sidebar = "taken";
+function KComponent() {
+  return <div>Hello</div>;
+}
+use(Sidebar);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_nested_components() {
+    let input = r#"
+function a() {
+  function b() {
+    return <span data-sentry-component="Inner">nested</span>;
+  }
+  return <div data-sentry-component="Outer">{b()}</div>;
+}
+"#;
+    let expected = r#"
+function Outer() {
+  function Inner() {
+    return <span>nested</span>;
+  }
+  return <div>{Inner()}</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_export_default_named() {
+    let input = r#"
+export default function a() {
+  return <div data-sentry-component="MyPage" />;
+}
+"#;
+    let expected = r#"
+export default function MyPage() {
+  return <div />;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_lowercase_name() {
+    let input = r#"
+function a() {
+  return <div data-sentry-component="div">Hello</div>;
+}
+"#;
+    let expected = r#"
+function AComponent() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_component_skips_invalid_ident() {
+    let input = r#"
+function a() {
+  return <div data-sentry-component="my-component">Hello</div>;
+}
+"#;
+    let expected = r#"
+function AComponent() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// React function shape renames
+// ============================================================
+
+#[test]
+fn react_shape_renames_jsx_function_decl_component() {
+    let input = r#"
+function K() {
+  return <div>Hello</div>;
+}
+use(K);
+"#;
+    let expected = r#"
+function KComponent() {
+  return <div>Hello</div>;
+}
+use(KComponent);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_renames_jsx_arrow_component() {
+    let input = r#"
+const K = ({ children }) => <section>{children}</section>;
+render(<K />);
+"#;
+    let expected = r#"
+const KComponent = ({ children }) => <section>{children}</section>;
+render(<KComponent />);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_renames_create_element_component() {
+    let input = r#"
+function K(props) {
+  const [value] = React.useState(props.value);
+  return value;
+}
+const node = React.createElement(K, { value: 1 });
+"#;
+    let expected = r#"
+function KComponent(props) {
+  const [value] = React.useState(props.value);
+  return value;
+}
+const node = React.createElement(KComponent, { value: 1 });
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_uses_plain_component_for_symbol_alias() {
+    let input = r#"
+const $ = ({ children }) => <section>{children}</section>;
+render(<$ />);
+"#;
+    let expected = r#"
+const Component = ({ children }) => <section>{children}</section>;
+render(<Component />);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_renames_hook_like_function_decl() {
+    let input = r#"
+function K() {
+  const [value, setValue] = React.useState(0);
+  React.useEffect(() => setValue(value + 1), [value]);
+  return value;
+}
+use(K);
+"#;
+    let expected = r#"
+function useK() {
+  const [value, setValue] = React.useState(0);
+  React.useEffect(() => setValue(value + 1), [value]);
+  return value;
+}
+use(useK);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_renames_hook_like_function_with_direct_react_hook() {
+    let input = r#"
+function K() {
+  const [value, setValue] = useState(0);
+  return [value, setValue];
+}
+use(K);
+"#;
+    let expected = r#"
+function useK() {
+  const [value, setValue] = useState(0);
+  return [value, setValue];
+}
+use(useK);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_renames_react_dom_form_status_hook() {
+    let input = r#"
+function K() {
+  const status = ReactDOM.useFormStatus();
+  return status.pending;
+}
+use(K);
+"#;
+    let expected = r#"
+function useK() {
+  const status = ReactDOM.useFormStatus();
+  return status.pending;
+}
+use(useK);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_does_not_treat_arbitrary_use_call_as_hook() {
+    let input = r#"
+function K(value) {
+  return usePattern(value);
+}
+use(K);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn react_shape_does_not_rename_async_endpoint_resolver_as_hook() {
+    let input = r#"
+const Pz3 = async (config) => {
+  const endpoint = await config.endpoint();
+  return {
+    endpoint: () => Pz3(config),
+    useDualstackEndpoint: config.useDualstackEndpoint,
+    value: endpoint
+  };
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn react_shape_ignores_hooks_inside_nested_arrow_callbacks() {
+    let input = r#"
+const Gn = (render) => React.forwardRef((props, ref) => {
+  const context = React.useContext(ThemeContext);
+  return render(props, context, ref);
+});
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn react_shape_treats_hook_candidate_used_as_jsx_tag_as_component() {
+    let input = r#"
+function Rt(props) {
+  const theme = React.useContext(ThemeContext);
+  return props.children(theme);
+}
+const node = <Rt>{children}</Rt>;
+"#;
+    let expected = r#"
+function RtComponent(props) {
+  const theme = React.useContext(ThemeContext);
+  return props.children(theme);
+}
+const node = <RtComponent>{children}</RtComponent>;
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_component_wins_over_hook_call() {
+    let input = r#"
+function K() {
+  const [open, setOpen] = useState(false);
+  return <button onClick={() => setOpen(!open)}>{open}</button>;
+}
+"#;
+    let expected = r#"
+function KComponent() {
+  const [open, setOpen] = useState(false);
+  return <button onClick={() => setOpen(!open)}>{open}</button>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_sentry_annotation_takes_precedence() {
+    let input = r#"
+function K() {
+  return <div data-sentry-component="Toaster">Hello</div>;
+}
+"#;
+    let expected = r#"
+function Toaster() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn react_shape_skips_non_minified_component_name() {
+    let input = r#"
+function abc() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn react_shape_skips_named_export() {
+    let input = r#"
+export function K() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn react_shape_skips_component_name_conflict() {
+    let input = r#"
+const KComponent = "taken";
+function K() {
+  return <div>Hello</div>;
+}
+use(KComponent, K);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn body_destructuring_does_not_shadow_renamed_param() {
+    // Param rename: A → signal.  Body rename for `w` must not also pick
+    // `signal` — that would create `let { signal } = Ty(signal, ...)` which
+    // is a TDZ violation (the new `signal` shadows the parameter).
+    let input = r#"
+async function rhY({ signal: A }) {
+    let O = 1;
+    let { signal: w, cleanup: j } = Ty(A, { timeoutMs: O });
+    console.log(w, j);
+}
+"#;
+    let output = apply(input);
+    // `w` should NOT become `signal` — must get a suffixed name or stay aliased
+    assert!(
+        !output.contains("let { signal, cleanup }"),
+        "body destructuring should not shadow renamed param: {output}"
+    );
+}
+
+// ============================================================
+// Call-site parameter renames
+// ============================================================
+
+#[test]
+fn call_site_renames_param_when_every_call_passes_the_same_name() {
+    let input = r#"
+function f(e) {
+    return e.trim();
+}
+f(input.text);
+f(text);
+"#;
+    let expected = r#"
+function f(text) {
+    return text.trim();
+}
+f(input.text);
+f(text);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_renames_arrow_and_function_expression_params() {
+    let input = r#"
+const f = (e, t) => e.get(t);
+const g = function(e) { return e + 1; };
+f(state.cache, key);
+g(config.retryCount);
+"#;
+    let expected = r#"
+const f = (cache, key) => cache.get(key);
+const g = function(retryCount) { return retryCount + 1; };
+f(state.cache, key);
+g(config.retryCount);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_skips_when_callers_disagree_or_pass_no_name() {
+    let input = r#"
+function f(e) { return e.trim(); }
+function g(e) { return e.trim(); }
+f(input.text);
+f(input.label);
+g(input.text);
+g("literal");
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_skips_functions_used_other_than_as_direct_callee() {
+    let input = r#"
+function f(e) { return e.trim(); }
+function g(e) { return e.trim(); }
+const h = (e) => e.trim();
+f(text);
+list.map(f);
+g(text);
+g = null;
+h(text);
+h?.(text);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_skips_exported_functions() {
+    let input = r#"
+export function f(e) { return e.trim(); }
+f(text);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_strips_wakaru_numeric_suffix_from_argument_name() {
+    let input = r#"
+function f(e) { return e.getBoundingClientRect(); }
+f(anchorNode_1);
+"#;
+    let expected = r#"
+function f(anchorNode) { return anchorNode.getBoundingClientRect(); }
+f(anchorNode_1);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_skips_names_that_carry_no_meaning() {
+    // Mangled module-level names, React ref `.current`, keywords, reserved
+    // property names, and Wakaru-synthesized `t_x` names.
+    let input = r#"
+function a(e) { return e.x; }
+function b(e) { return e.x; }
+function c(e) { return e.x; }
+function d(e) { return e.x; }
+function g(e) { return e.x; }
+function h(e) { return e.x; }
+a(kQz);
+b(J99);
+c(xRef.current);
+d(step.return);
+g(list.length);
+h(t_nextValue);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_skips_names_already_present_in_the_function() {
+    let input = r#"
+function f(e) {
+    const text = e.trim();
+    return text;
+}
+function g(e) {
+    return e + text;
+}
+f(input.text);
+g(input.text);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_skips_unused_params_and_spread_calls() {
+    let input = r#"
+function f(e) { return 1; }
+function g(e, t) { return t + e; }
+f(input.text);
+g(input.size, ...rest);
+g(input.size, input.count);
+"#;
+    // A spread at or before the parameter's position hides what that call
+    // passes, so `t` keeps its name; `e` still sees `size` at both calls.
+    let expected = r#"
+function f(e) { return 1; }
+function g(size, t) { return t + size; }
+f(input.text);
+g(input.size, ...rest);
+g(input.size, input.count);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_gives_a_name_to_one_of_two_nested_functions_only() {
+    // Renaming both params to `node` would let the inner one capture the
+    // outer reference.
+    let input = r#"
+function outer(e) {
+    function inner(t) {
+        return t.parent === e;
+    }
+    return inner(tree.node);
+}
+outer(tree.node);
+"#;
+    let output = apply(input);
+    assert_eq!(
+        output.matches("(node)").count(),
+        1,
+        "exactly one param may take `node`: {output}"
+    );
+}
+
+#[test]
+fn call_site_skips_module_with_direct_eval() {
+    let input = r#"
+function f(e) { return eval("e"); }
+f(input.text);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn call_site_leaves_value_position_names_first() {
+    // The object key names the value itself; the call-site name is weaker.
+    let input = r#"
+function f(e) {
+    return { total: e };
+}
+f(order.amount);
+"#;
+    let expected = r#"
+function f(total) {
+    return { total };
+}
+f(order.amount);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_keeps_short_value_position_name() {
+    // `fn` is short enough to look generated, but value position just
+    // chose it and is the stronger evidence.
+    let input = r#"
+const f = (e) => ({ fn: e });
+f(task.handler);
+"#;
+    let expected = r#"
+const f = (fn) => ({ fn });
+f(task.handler);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_skips_params_reused_as_scratch_variables() {
+    let input = r#"
+function f(e, t) {
+    for (t = 0; t < e.length; t++) use(e[t]);
+}
+function g(e) {
+    e++;
+    return e;
+}
+function h(e) {
+    [e] = e.items;
+    return e;
+}
+f(batch.entries, cursor.position);
+g(state.count);
+h(state.list);
+"#;
+    let expected = r#"
+function f(entries, t) {
+    for (t = 0; t < entries.length; t++) use(entries[t]);
+}
+function g(e) {
+    e++;
+    return e;
+}
+function h(e) {
+    [e] = e.items;
+    return e;
+}
+f(batch.entries, cursor.position);
+g(state.count);
+h(state.list);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn call_site_keeps_param_backed_by_shorthand_property() {
+    let input = r#"
+const f = (fn) => ({ fn });
+f(task.handler);
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+// ============================================================
+// Structural-role renames
+// ============================================================
+
+#[test]
+fn role_renames_used_catch_parameter_to_error() {
+    let input = r#"
+try { run(); } catch (e) { report(e.message); }
+try { run(); } catch (t) { }
+try { run(); } catch (failure) { report(failure); }
+"#;
+    let expected = r#"
+try { run(); } catch (error) { report(error.message); }
+try { run(); } catch (t) { }
+try { run(); } catch (failure) { report(failure); }
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_catch_falls_back_to_err_when_error_is_taken_and_skips_written() {
+    let input = r#"
+const error = 1;
+try { run(); } catch (e) { report(e, error); }
+function f() {
+    try { run(); } catch (e) { e = wrap(e); throw e; }
+}
+"#;
+    let expected = r#"
+const error = 1;
+try { run(); } catch (err) { report(err, error); }
+function f() {
+    try { run(); } catch (e) { e = wrap(e); throw e; }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_nested_catch_takes_err_instead_of_shadowing_error() {
+    let input = r#"
+try { run(); } catch (e) {
+    try { retry(); } catch (t) { report(e, t); }
+}
+try { run(); } catch (e) {
+    report(e);
+    try { retry(); } catch (t) { report(t); }
+}
+"#;
+    let expected = r#"
+try { run(); } catch (error) {
+    try { retry(); } catch (err) { report(error, err); }
+}
+try { run(); } catch (error) {
+    report(error);
+    try { retry(); } catch (err) { report(err); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_uses_alternatives_instead_of_shadowing_an_outer_binding() {
+    let input = r#"
+import { resolve } from "path";
+const base = resolve(dir);
+const load = () => new Promise((e, t) => fetchFile(base, e, t));
+const read = () => new Promise((e) => fetchFile(resolve(dir), e));
+function f() {
+    let { error } = state;
+    try { run(error); } catch (e) { report(e); }
+}
+"#;
+    let expected = r#"
+import { resolve } from "path";
+const base = resolve(dir);
+const load = () => new Promise((resolvePromise, rejectPromise) => fetchFile(base, resolvePromise, rejectPromise));
+const read = () => new Promise((resolvePromise) => fetchFile(resolve(dir), resolvePromise));
+function f() {
+    let { error } = state;
+    try { run(error); } catch (err) { report(err); }
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_executor_falls_back_to_promise_suffixed_pair_then_numeric_suffix() {
+    let input = r#"
+import { resolve, resolvePromise } from "path";
+import { reject } from "policy";
+const a = new Promise((e) => e(1));
+const b = new Promise((e, t) => fetchFile(e, t));
+"#;
+    let expected = r#"
+import { resolve, resolvePromise } from "path";
+import { reject } from "policy";
+const a = new Promise((resolve_1) => resolve_1(1));
+const b = new Promise((resolve_1, rejectPromise) => fetchFile(resolve_1, rejectPromise));
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_renames_promise_executor_parameters() {
+    let input = r#"
+const a = new Promise((e, t) => {
+    load(e, t);
+});
+const b = new Promise(function (e, t) {
+    e(1);
+});
+"#;
+    let expected = r#"
+const a = new Promise((resolve, reject) => {
+    load(resolve, reject);
+});
+const b = new Promise(function (resolve, reject) {
+    resolve(1);
+});
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_skips_local_promise_and_uses_alternatives_for_taken_names() {
+    let input = r#"
+function f(Promise) {
+    return new Promise((e, t) => e(t));
+}
+const b = new Promise((e, t) => {
+    const resolve = 1;
+    e(resolve, t);
+});
+"#;
+    let expected = r#"
+function f(Promise) {
+    return new Promise((e, t) => e(t));
+}
+const b = new Promise((resolvePromise, rejectPromise) => {
+    const resolve = 1;
+    resolvePromise(resolve, rejectPromise);
+});
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_skips_module_with_direct_eval() {
+    let input = r#"
+try { run(); } catch (e) { eval("report(e)"); }
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn role_renames_reduce_callback_parameters() {
+    let input = r#"
+const a = list.reduce((e, t, n) => e + t * n, 0);
+const b = Object.keys(map).reduce((e, t) => {
+    e[t] = 1;
+    return e;
+}, {});
+const c = state.orders.reduceRight(function (e, t) {
+    return e.concat(t.lines);
+}, []);
+const d = Object.keys(map).sort().reduce((e, t) => e + t, "");
+const f = Object.entries(map).reduce((e, t) => e + t[0], "");
+"#;
+    let expected = r#"
+const a = list.reduce((acc, item, index) => acc + item * index, 0);
+const b = Object.keys(map).reduce((acc, key) => {
+    acc[key] = 1;
+    return acc;
+}, {});
+const c = state.orders.reduceRight(function (acc, order) {
+    return acc.concat(order.lines);
+}, []);
+const d = Object.keys(map).sort().reduce((acc, key) => acc + key, "");
+const f = Object.entries(map).reduce((acc, entry) => acc + entry[0], "");
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_singularizes_only_unambiguous_plurals() {
+    let input = r#"
+a.entries.reduce((e, t) => e + t, 0);
+a.batches.reduce((e, t) => e + t, 0);
+a.nodeIndices.reduce((e, t) => e + t, 0);
+a.children.reduce((e, t) => e + t, 0);
+a.e_textures.reduce((e, t) => e + t, 0);
+a.statuses.reduce((e, t) => e + t, 0);
+a.axes.reduce((e, t) => e + t, 0);
+a.status.reduce((e, t) => e + t, 0);
+a.data.reduce((e, t) => e + t, 0);
+"#;
+    let expected = r#"
+a.entries.reduce((acc, entry) => acc + entry, 0);
+a.batches.reduce((acc, batch) => acc + batch, 0);
+a.nodeIndices.reduce((acc, nodeIndex) => acc + nodeIndex, 0);
+a.children.reduce((acc, child) => acc + child, 0);
+a.e_textures.reduce((acc, texture) => acc + texture, 0);
+a.statuses.reduce((acc, item) => acc + item, 0);
+a.axes.reduce((acc, item) => acc + item, 0);
+a.status.reduce((acc, item) => acc + item, 0);
+a.data.reduce((acc, item) => acc + item, 0);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_reduce_skips_taken_names_and_written_elements_and_suffixes_nested_acc() {
+    let input = r#"
+const a = list.reduce((e, t) => e + t + item, 0);
+const b = list.reduce((e, t) => {
+    t = t || 0;
+    return e + t;
+}, 0);
+const c = rows.reduce((e, t) => e + t.reduce((n, r) => n + r + e, 0), 0);
+"#;
+    let expected = r#"
+const a = list.reduce((acc, t) => acc + t + item, 0);
+const b = list.reduce((acc, t) => {
+    t = t || 0;
+    return acc + t;
+}, 0);
+const c = rows.reduce((acc, row) => acc + row.reduce((acc_1, item) => acc_1 + item + acc, 0), 0);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn role_names_loop_element_after_the_array() {
+    let input = r#"
+for (let t = 0; t < e.rows.length; t++) {
+    const n = e.rows[t];
+    draw(n);
+}
+for (let t = 0, r = cells.length; t < r; t++) {
+    const n = cells[t];
+    paint(n, t);
+}
+for (let t = 0; t < arguments.length; t++) {
+    const n = arguments[t];
+    use(n);
+}
+for (let t = 0; t < items.length; t++) {
+    const n = items[t];
+    use(n, item);
+}
+"#;
+    let expected = r#"
+for (let t = 0; t < e.rows.length; t++) {
+    const row = e.rows[t];
+    draw(row);
+}
+for (let t = 0, r = cells.length; t < r; t++) {
+    const cell = cells[t];
+    paint(cell, t);
+}
+for (let t = 0; t < arguments.length; t++) {
+    const n = arguments[t];
+    use(n);
+}
+for (let t = 0; t < items.length; t++) {
+    const n = items[t];
+    use(n, item);
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ============================================================
+// SmartRenameSecondPass tests
+// ============================================================
+
+fn apply_second_pass(input: &str) -> String {
+    render_rule(input, SmartRenameSecondPass::new)
+}
+
+#[test]
+fn jsx_only_renames_component_alias() {
+    let input = r#"
+const Xx = sideCar;
+export default function() {
+  return <Xx />;
+}
+"#;
+    let expected = r#"
+const SideCar = sideCar;
+export default function() {
+  return <SideCar />;
+}
+"#;
+    assert_eq_normalized(&apply_second_pass(input), expected);
+}
+
+#[test]
+fn jsx_only_renames_value_position_from_jsx_attr() {
+    let input = r#"
+function render(e) {
+  return <Foo error={e} />;
+}
+"#;
+    let expected = r#"
+function render(error) {
+  return <Foo error={error} />;
+}
+"#;
+    assert_eq_normalized(&apply_second_pass(input), expected);
+}
+
+#[test]
+fn second_pass_skips_module_level_destructuring() {
+    // Module-level destructuring renames are skipped (handled by first pass),
+    // but function-level destructuring still works.
+    let input = r#"
+const { error: e } = obj;
+console.log(e);
+"#;
+    let output = apply_second_pass(input);
+    assert!(
+        output.contains("error: e"),
+        "SmartRenameSecondPass should not apply module-level destructuring renames: {output}"
+    );
+}
+
+#[test]
+fn second_pass_skips_module_level_react_renames() {
+    // Module-level React hook renames are skipped (handled by first pass).
+    let input = r#"
+const [x, s] = useState(0);
+"#;
+    let output = apply_second_pass(input);
+    assert!(
+        !output.contains("setX"),
+        "SmartRenameSecondPass should not apply module-level React hook renames: {output}"
+    );
+}
+
+#[test]
+fn second_pass_applies_function_level_react_renames() {
+    let input = r#"
+function App() {
+    const [x, s] = useState(0);
+    return s(x + 1);
+}
+"#;
+    let output = apply_second_pass(input);
+    assert!(
+        output.contains("setX"),
+        "SmartRenameSecondPass should apply function-level React hook renames: {output}"
+    );
+}
+
+#[test]
+fn second_pass_applies_arrow_body_react_renames() {
+    let input = r#"
+const App = () => {
+    const [x, s] = useState(0);
+    return s(x + 1);
+};
+"#;
+    let output = apply_second_pass(input);
+    assert!(
+        output.contains("setX"),
+        "SmartRenameSecondPass should apply arrow-body React hook renames: {output}"
+    );
+}
+
+#[test]
+fn second_pass_skips_module_level_member_init() {
+    let input = r#"
+var x = obj.longPropertyName;
+console.log(x);
+"#;
+    let output = apply_second_pass(input);
+    assert!(
+        !output.contains("obj_longPropertyName"),
+        "SmartRenameSecondPass should not apply module-level member-init renames: {output}"
+    );
+}
+
+#[test]
+fn cross_pass_rename_does_not_collide() {
+    let input = r#"
+import { useState } from "react";
+const [e, t] = useState();
+const { setE: a } = props;
+console.log(t, a);
+"#;
+    let expected = r#"
+import { useState } from "react";
+const [e, setE] = useState();
+const { setE: setE_1 } = props;
+console.log(setE, setE_1);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+// ── Sentry marker stripping ────────────────────────────────────────────────
+
+#[test]
+fn sentry_component_and_element_attrs_stripped_after_rename() {
+    let input = r#"
+function K() {
+  return <div data-sentry-component="UserCard" data-sentry-element="UserCard" data-sentry-source-file="UserCard.tsx">Hello</div>;
+}
+"#;
+    let expected = r#"
+function UserCard() {
+  return <div data-sentry-source-file="UserCard.tsx">Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_camel_case_attrs_also_stripped() {
+    let input = r#"
+function K() {
+  return <div dataSentryComponent="Card" dataSentryElement="Card">Hello</div>;
+}
+"#;
+    let expected = r#"
+function Card() {
+  return <div>Hello</div>;
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn sentry_source_file_stripped_when_matches_filename() {
+    use swc_core::common::GLOBALS;
+    use wakaru_core::rules::strip_redundant_sentry_source_file;
+
+    GLOBALS.set(&Default::default(), || {
+        let source = r#"
+function UserCard() {
+  return <div data-sentry-source-file="UserCard.tsx">Hello</div>;
+}
+"#;
+        let cm: swc_core::common::sync::Lrc<swc_core::common::SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            swc_core::common::FileName::Custom("test.js".to_string()).into(),
+            source.to_string(),
+        );
+        let lexer = swc_core::ecma::parser::lexer::Lexer::new(
+            swc_core::ecma::parser::Syntax::Es(swc_core::ecma::parser::EsSyntax {
+                jsx: true,
+                ..Default::default()
+            }),
+            Default::default(),
+            swc_core::ecma::parser::StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = swc_core::ecma::parser::Parser::new_from(lexer);
+        let mut module = parser.parse_module().expect("parse");
+
+        strip_redundant_sentry_source_file(&mut module, "UserCard.tsx");
+
+        let mut output = Vec::new();
+        {
+            let mut emitter = swc_core::ecma::codegen::Emitter {
+                cfg: swc_core::ecma::codegen::Config::default().with_minify(false),
+                cm: cm.clone(),
+                comments: None,
+                wr: swc_core::ecma::codegen::text_writer::JsWriter::new(
+                    cm,
+                    "\n",
+                    &mut output,
+                    None,
+                ),
+            };
+            emitter.emit_module(&module).expect("emit");
+        }
+        let result = String::from_utf8(output).expect("utf8");
+        assert!(
+            !result.contains("data-sentry-source-file"),
+            "source-file attr should be stripped when it matches the module filename:\n{result}"
+        );
+    });
+}
+
+#[test]
+fn sentry_source_file_kept_when_values_differ() {
+    use swc_core::common::GLOBALS;
+    use wakaru_core::rules::strip_redundant_sentry_source_file;
+
+    GLOBALS.set(&Default::default(), || {
+        let source = r#"
+function Header() {
+  return <div data-sentry-source-file="Header.tsx">H</div>;
+}
+function Footer() {
+  return <div data-sentry-source-file="Footer.tsx">F</div>;
+}
+"#;
+        let cm: swc_core::common::sync::Lrc<swc_core::common::SourceMap> = Default::default();
+        let fm = cm.new_source_file(
+            swc_core::common::FileName::Custom("test.js".to_string()).into(),
+            source.to_string(),
+        );
+        let lexer = swc_core::ecma::parser::lexer::Lexer::new(
+            swc_core::ecma::parser::Syntax::Es(swc_core::ecma::parser::EsSyntax {
+                jsx: true,
+                ..Default::default()
+            }),
+            Default::default(),
+            swc_core::ecma::parser::StringInput::from(&*fm),
+            None,
+        );
+        let mut parser = swc_core::ecma::parser::Parser::new_from(lexer);
+        let mut module = parser.parse_module().expect("parse");
+
+        strip_redundant_sentry_source_file(&mut module, "Header.tsx");
+
+        let mut output = Vec::new();
+        {
+            let mut emitter = swc_core::ecma::codegen::Emitter {
+                cfg: swc_core::ecma::codegen::Config::default().with_minify(false),
+                cm: cm.clone(),
+                comments: None,
+                wr: swc_core::ecma::codegen::text_writer::JsWriter::new(
+                    cm, "\n", &mut output, None,
+                ),
+            };
+            emitter.emit_module(&module).expect("emit");
+        }
+        let result = String::from_utf8(output).expect("utf8");
+        assert!(
+            result.contains("Header.tsx") && result.contains("Footer.tsx"),
+            "source-file attrs should be kept when values differ (scope-concatenated module):\n{result}"
+        );
+    });
+}

@@ -1,0 +1,34 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { a, b, c, e, f, g, h, j, k, l, m, n, o as o_1, p, q, r, s, t } from "./module-2.js";
+import * as o from "./module-10.js";
+import { d } from "./module-10.js";
+export function takeEvery(e, t, ...i) {
+    return k(o.b, e, t, ...i);
+}
+export function takeLatest(e, t, ...i) {
+    return k(d, e, t, ...i);
+}
+export function throttle(e, t, n, ...a) {
+    return k(o.f, e, t, n, ...a);
+}
+export const take = s;
+export const takem = t;
+export const put = n;
+export const all = b;
+export const race = o_1;
+export const call = e;
+export const apply = c;
+export const cps = h;
+export const fork = k;
+export const spawn = r;
+export const join = m;
+export const cancel = f;
+export const select = p;
+export const actionChannel = a;
+export const cancelled = g;
+export const flush = j;
+export const getContext = l;
+export const setContext = q;

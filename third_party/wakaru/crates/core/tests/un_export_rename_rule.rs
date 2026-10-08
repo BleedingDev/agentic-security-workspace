@@ -1,0 +1,935 @@
+mod common;
+
+use common::{assert_eq_normalized, render_rule};
+use wakaru_core::rules::UnExportRename;
+
+fn apply(input: &str) -> String {
+    render_rule(input, UnExportRename::new)
+}
+
+#[test]
+fn export_const_inlines_var_declaration() {
+    let input = r#"
+const a = 1;
+export const App = a;
+"#;
+    let expected = r#"
+export const App = 1;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn mutable_export_alias_stays_distinct_from_source_binding() {
+    let input = r#"
+const initial = new Set();
+export let active = initial;
+export function replace(next) {
+    active = next;
+}
+export function readInitial() {
+    return initial;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn export_const_inlines_function_declaration() {
+    let input = r#"
+function a() {}
+export const App = a;
+"#;
+    let expected = r#"
+export function App() {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn export_const_inlines_class_declaration() {
+    let input = r#"
+class o {}
+export const App = o;
+"#;
+    let expected = r#"
+export class App {}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn export_specifier_inlines_var_declaration() {
+    let input = r#"
+const o = { a: 1 };
+export { o as Game };
+"#;
+    let expected = r#"
+export const Game = { a: 1 };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn export_specifier_inlines_function_declaration() {
+    let input = r#"
+function o() { return 1; }
+export { o as compute };
+"#;
+    let expected = r#"
+export function compute() { return 1; }
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn skips_when_new_name_already_declared() {
+    // 'App' is already declared — skip the rename
+    let input = r#"
+const o = 1;
+const App = 2;
+export { o as App };
+"#;
+    let expected = r#"
+const o = 1;
+const App = 2;
+export { o as App };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn renames_all_usages() {
+    let input = r#"
+const a = 1;
+export const Counter = a;
+console.log(a);
+"#;
+    let expected = r#"
+export const Counter = 1;
+console.log(Counter);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn export_rename_does_not_touch_shadowed_local() {
+    let input = r#"
+const l = 1;
+export const StrictMode = l;
+function createElement() {
+  let l = 2;
+  return l;
+}
+console.log(l);
+"#;
+    let expected = r#"
+export const StrictMode = 1;
+function createElement() {
+  let l = 2;
+  return l;
+}
+console.log(StrictMode);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn skips_rename_when_new_name_shadows_original_in_inner_scope() {
+    // module-0 pattern: `exports.e = a` wants to rename `a → e`, but the function
+    // that uses `a` also declares a local `e`. Without the shadowing check the
+    // Renamer would produce `e[e]` — wrong — because both the module-level
+    // renamed `a` and the local `e` print as `e` after SyntaxContext is erased.
+    let input = r#"
+const a = "TASK";
+export const e = a;
+function j() {
+    let e;
+    e = {};
+    e[a] = true;
+    return e;
+}
+"#;
+    // Rename is skipped; the export alias is preserved.
+    let expected = r#"
+const a = "TASK";
+export const e = a;
+function j() {
+    let e;
+    e = {};
+    e[a] = true;
+    return e;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn skips_alias_chain_rename_when_new_name_shadows_alias_use() {
+    let input = r#"
+const core = makeLogger();
+const relay = core;
+function report() {
+  relay.error("failed");
+  const logger = makeLocal();
+  return logger;
+}
+export { relay as logger };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn rename_proceeds_when_inner_scope_declares_new_name_but_not_uses_old() {
+    // An inner function declares `e` but never uses `a`.
+    // No shadowing conflict → rename should proceed.
+    let input = r#"
+const a = "TASK";
+export const e = a;
+function unrelated() {
+    let e = 42;
+    return e;
+}
+console.log(a);
+"#;
+    let expected = r#"
+export const e = "TASK";
+function unrelated() {
+    let e = 42;
+    return e;
+}
+console.log(e);
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn splits_multi_declarator_var_decl() {
+    let input = r#"
+const a = 1, b = 2;
+export { a as A };
+"#;
+    let expected = r#"
+export const A = 1;
+const b = 2;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn keeps_unrelated_named_export_specifiers() {
+    let input = r#"
+const a = 1;
+const b = 2;
+const Bee = 3;
+export { a as A, b as Bee };
+"#;
+    let expected = r#"
+export const A = 1;
+const b = 2;
+const Bee = 3;
+export { b as Bee };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn preserves_other_aliases_for_same_binding() {
+    let input = r#"
+const a = 1;
+export { a as A, a as B };
+"#;
+    let expected = r#"
+export const A = 1;
+export { A as B };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn renames_into_name_freed_by_export_plan() {
+    let input = r#"
+const A = (e) => new Error(e);
+const I = (e) => e;
+export { A as p };
+export { I as A };
+"#;
+    let expected = r#"
+export const p = (e) => new Error(e);
+export const A = (e) => e;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn renames_into_name_freed_by_later_export_plan() {
+    let input = r#"
+const g = {
+    value() {
+        return 1;
+    }
+};
+function T() {
+    return 2;
+}
+export { T as g };
+export { g as q };
+"#;
+    let expected = r#"
+export const q = {
+    value() {
+        return 1;
+    }
+};
+export function g() {
+    return 2;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn resolves_export_alias_chains_to_real_binding() {
+    let input = r#"
+class N {}
+N.propTypes = {};
+const M = N;
+const A = M;
+export { A as Route };
+"#;
+    let expected = r#"
+export class Route {}
+Route.propTypes = {};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn chained_rename_through_occupied_names() {
+    // i→x is blocked because x exists, but x→f resolves to a free name (no binding `f`).
+    // The chain i→x→f should allow both renames.
+    let input = r#"
+export { i as x };
+export { x as f };
+const i = 1;
+const x = 2;
+"#;
+    let expected = r#"
+export const x = 1;
+export const f = 2;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn ineligible_edge_does_not_mark_name_as_freed() {
+    // `longer→x` is ineligible (shorter name), so `longer` is NOT freed.
+    // `i→longer` must not proceed — it would create a duplicate `longer`.
+    // Both renames are blocked; output stays unchanged.
+    let input = r#"
+export { i as longer };
+export { longer as x };
+const i = 1;
+const longer = 2;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn alias_resolved_ineligible_edge_does_not_mark_name_as_freed() {
+    // `z → C` resolves through `z = HComponent`. Renaming the real binding
+    // `HComponent → C` is ineligible because it shortens the name, so `z`
+    // remains occupied and `F → z` must not create a duplicate declaration.
+    let input = r#"
+const F = () => 1;
+const HComponent = () => 2;
+const z = HComponent;
+export { F as z };
+export { z as C };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn losing_alias_edge_for_shared_real_binding_does_not_free_name() {
+    // Both aliases resolve to `A`, but only the first rename can win. The
+    // rejected `y → Other` edge must not mark `y` as free for `F → y`.
+    let input = r#"
+const A = () => 1;
+const x = A;
+const y = A;
+const F = () => 2;
+export { x as LongName };
+export { y as Other };
+export { F as y };
+"#;
+    let expected = r#"
+export const LongName = () => 1;
+const y = LongName;
+const F = () => 2;
+export { y as Other };
+export { F as y };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn export_const_alias_claim_does_not_free_specifier_edge() {
+    // The Pattern A plan `z → LongerName` wins the real binding `z`, so the
+    // planner rejects the alias edge `h → Other` that resolves to `z`. The
+    // prepass must not predict `h` as freed, or `F → h` duplicates `h`.
+    let input = r#"
+const z = () => 1;
+const h = z;
+const F = () => 2;
+export const LongerName = z;
+export { h as Other };
+export { F as h };
+"#;
+    let expected = r#"
+export const LongerName = () => 1;
+const h = LongerName;
+const F = () => 2;
+export { h as Other };
+export { F as h };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn getter_namespace_claim_does_not_free_specifier_edge() {
+    // The Pattern C getter plan `z → tlong` claims the target name `tlong`,
+    // so the planner rejects the specifier edge `nnn → tlong`. The prepass
+    // must not predict `nnn` as freed, or `F → nnn` duplicates `nnn`.
+    let input = r#"
+const z = () => 1;
+const w = () => 2;
+const nnn = () => 3;
+const F = () => 4;
+export const ns = { get tlong() { return z; }, get wlong() { return w; } };
+export { nnn as tlong };
+export { F as nnn };
+"#;
+    let expected = r#"
+const tlong = () => 1;
+const wlong = () => 2;
+const nnn = () => 3;
+const F = () => 4;
+export const ns = { get tlong() { return tlong; }, get wlong() { return wlong; } };
+export { nnn as tlong };
+export { F as nnn };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn shadowed_edge_does_not_mark_name_as_freed() {
+    // `x→longName` is ineligible (shadowing), so `x` is NOT freed.
+    // `i→x` must not proceed — it would create a duplicate `x`.
+    let input = r#"
+export { i as x };
+export { x as longName };
+const i = 1;
+const x = 2;
+function f() {
+    let longName = 3;
+    return x + longName;
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn duplicate_target_does_not_falsely_free_name() {
+    // Both `y→Long` and `x→Long` target the same name. Only one can win,
+    // so `x` must NOT be marked as freed. `i→x` must be blocked.
+    let input = r#"
+export { y as Long };
+export { i as x };
+export { x as Long };
+const i = 1;
+const x = 2;
+const y = 3;
+"#;
+    let expected = r#"
+export { i as x };
+export { x as Long };
+const i = 1;
+const x = 2;
+export const Long = 3;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn swap_cycle_leaves_output_unchanged() {
+    // `a→b` and `b→a` form a cycle. Neither name can be freed.
+    let input = r#"
+export { a as b };
+export { b as a };
+const a = 1;
+const b = 2;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn keeps_object_shorthand_after_export_rename() {
+    let input = r#"
+const w = makeAction("push");
+const S = {
+    push: w
+};
+export { w as push };
+export { S as routerActions };
+"#;
+    let expected = r#"
+export const push = makeAction("push");
+export const routerActions = {
+    push
+};
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn skips_rename_when_target_conflicts_with_import() {
+    // `export { eX as ee }` wants to rename `eX` → `ee`, but `ee` is already
+    // imported.  The rename must be blocked to avoid a duplicate declaration.
+    let input = r#"
+import ee from "./module.js";
+const eX = 42;
+console.log(ee);
+export { eX as ee };
+"#;
+    let expected = r#"
+import ee from "./module.js";
+const eX = 42;
+console.log(ee);
+export { eX as ee };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, expected);
+}
+
+#[test]
+fn import_blocked_edge_does_not_falsely_free_name() {
+    // `x → ee` is blocked because `ee` is imported, so `x` is NOT freed.
+    // `i → x` must not proceed — `x` is still occupied.
+    let input = r#"
+import ee from "./module.js";
+export { i as x };
+export { x as ee };
+const i = 1;
+const x = 2;
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn skips_rename_to_await() {
+    let input = r#"
+const x = 1;
+export { x as await };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn skips_rename_to_eval() {
+    let input = r#"
+const x = 1;
+export { x as eval };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn skips_rename_to_arguments() {
+    let input = r#"
+const x = 1;
+export { x as arguments };
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn renames_non_exported_binding_from_getter_namespace() {
+    let input = r#"
+function Ym() { return 1; }
+function n2z(q) { return q; }
+export const ns = {
+  get subprocessEnv() { return Ym; },
+  get registerFn() { return n2z; }
+};
+"#;
+    let expected = r#"
+function subprocessEnv() { return 1; }
+function registerFn(q) { return q; }
+export const ns = {
+  get subprocessEnv() { return subprocessEnv; },
+  get registerFn() { return registerFn; }
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn getter_namespace_multi_target_first_wins() {
+    let input = r#"
+function Ym() {}
+export const ns = {
+  get alpha() { return Ym; },
+  get beta() { return Ym; }
+};
+"#;
+    let expected = r#"
+function alpha() {}
+export const ns = {
+  get alpha() { return alpha; },
+  get beta() { return alpha; }
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn getter_namespace_renames_specifier_exported_single_target() {
+    let input = r#"
+const Mh = "user:inference";
+const rM = "oauth-2025-04-20";
+export { Mh, rM };
+export const ns = {
+  get INFERENCE_SCOPE() { return Mh; },
+  get OAUTH_HEADER() { return rM; }
+};
+"#;
+    let expected = r#"
+const INFERENCE_SCOPE = "user:inference";
+const OAUTH_HEADER = "oauth-2025-04-20";
+export { INFERENCE_SCOPE as Mh, OAUTH_HEADER as rM };
+export const ns = {
+  get INFERENCE_SCOPE() { return INFERENCE_SCOPE; },
+  get OAUTH_HEADER() { return OAUTH_HEADER; }
+};
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn getter_namespace_skips_exported_bindings() {
+    let input = r#"
+export function Ym() { return 1; }
+export function n2z(q) { return q; }
+export const ns = {
+  get subprocessEnv() { return Ym; },
+  get registerFn() { return n2z; }
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn getter_namespace_skips_non_exported_object() {
+    let input = r#"
+function Ym() { return 1; }
+const ns = {
+  get subprocessEnv() { return Ym; }
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn getter_namespace_skips_single_getter() {
+    let input = r#"
+function Ym() { return 1; }
+export const ns = {
+  get subprocessEnv() { return Ym; }
+};
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn keeps_capitalized_jsx_component_through_export_specifier() {
+    // Renaming `Kb` to the lowercase export alias would turn the JSX element
+    // into an intrinsic-tag string reference (`<mb/>` means the tag "mb",
+    // not the component binding). The capitalized binding must survive.
+    let input = r#"
+const Kb = makePanel();
+export { Kb as mb };
+export const view = <Kb/>;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn keeps_capitalized_jsx_component_through_export_const_alias() {
+    let input = r#"
+const Kb = makePanel();
+export const mb = Kb;
+export const view = <Kb/>;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn keeps_capitalized_jsx_component_through_getter_namespace() {
+    let input = r#"
+const Ym = makeEnv();
+export const ns = {
+  get subprocessEnv() { return Ym; },
+  get otherEnv() { return Ym; }
+};
+export const view = <Ym/>;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn keeps_capitalized_jsx_alias_through_export_specifier() {
+    // The specifier resolves through the var alias to the real binding; the
+    // alias itself is the JSX tag, so the rename must be rejected too.
+    let input = r#"
+const Kb = makePanel();
+var Alias = Kb;
+export { Alias as mb };
+export const view = <Alias/>;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn jsx_guarded_edge_does_not_free_its_name() {
+    // `Kb -> mb` is rejected by the JSX guard, so the name `Kb` is NOT freed;
+    // planning `i -> Kb` anyway would duplicate the still-live `Kb` binding.
+    let input = r#"
+const Kb = makePanel();
+const i = 1;
+export { Kb as mb };
+export { i as Kb };
+export const view = <Kb/>;
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn still_renames_lowercase_export_not_used_as_jsx_tag() {
+    let input = r#"
+const Kb = makePanel();
+export { Kb as mb };
+export const view = render(Kb);
+"#;
+    let expected = r#"
+export const mb = makePanel();
+export const view = render(mb);
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn specifier_alias_never_shadows_a_global_the_module_references() {
+    // Renaming `A` to `Error` would turn `new Error(...)` into a call of the
+    // module's own export after printing; the plan must be rejected.
+    let input = r#"
+const A = f("MyError");
+function g(t) {
+    if (t == null) {
+        throw new Error("bad value");
+    }
+    return A;
+}
+export { A as Error, g };
+"#;
+    assert_eq_normalized(&apply(input), input);
+}
+
+#[test]
+fn specifier_alias_renames_when_the_module_has_no_free_reference_to_the_name() {
+    // Positive control for the test above: without a free `Error` reference
+    // the rename is still applied.
+    let input = r#"
+const A = f("MyError");
+function g() {
+    return A;
+}
+export { A as Error, g };
+"#;
+    let output = apply(input);
+    assert!(
+        output.contains("Error = f("),
+        "expected rename to Error, got:\n{output}"
+    );
+    assert!(
+        !output.contains("const A"),
+        "expected A to be renamed, got:\n{output}"
+    );
+}
+
+#[test]
+fn getter_namespace_hint_never_shadows_a_global_the_module_references() {
+    // Pattern C with two getters: `p` → `post` is a normal rename, but
+    // `k` → `fetch` would capture the module's own `fetch(...)` call and must
+    // be rejected while the other getter still renames.
+    let input = r#"
+const k = w.fetch;
+const p = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return p;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
+"#;
+    let expected = r#"
+const k = w.fetch;
+const post = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return post;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn getter_namespace_hint_renames_when_the_module_has_no_free_reference_to_the_name() {
+    // Positive control: without a free `fetch` reference both getters rename.
+    let input = r#"
+const k = w.fetch;
+const p = w.post;
+export const http = {
+    get fetch () {
+        return k;
+    },
+    get post () {
+        return p;
+    }
+};
+export function go() {
+    return k("/status");
+}
+"#;
+    let expected = r#"
+const fetch = w.fetch;
+const post = w.post;
+export const http = {
+    get fetch () {
+        return fetch;
+    },
+    get post () {
+        return post;
+    }
+};
+export function go() {
+    return fetch("/status");
+}
+"#;
+    assert_eq_normalized(&apply(input), expected);
+}
+
+#[test]
+fn export_rename_is_blocked_by_a_computed_key_reference_in_a_shadowing_scope() {
+    // Like the inner-scope case above, but the only read of `a` inside the
+    // scope that declares `e` sits in a computed object key.
+    let input = r#"
+const a = "TASK";
+export const e = a;
+function j() {
+    let e;
+    return { [a]: e };
+}
+"#;
+    let output = apply(input);
+    assert_eq_normalized(&output, input);
+}
+
+#[test]
+fn written_export_specifier_alias_stays_distinct_from_source() {
+    for write in [
+        "active = next;",
+        "active++;",
+        "({ value: active } = next);",
+        "for (active of next) {}",
+    ] {
+        let input = format!(
+            "const initial = 1; let active = initial; \
+             function replace(next) {{ {write} }} \
+             use(initial, active, replace); export {{ active as Current }};"
+        );
+        let expected = format!(
+            "const initial = 1; export let Current = initial; \
+             function replace(next) {{ {} }} \
+             use(initial, Current, replace);",
+            write.replace("active", "Current")
+        );
+        assert_eq_normalized(&apply(&input), &expected);
+    }
+}
+
+#[test]
+fn export_alias_keeps_snapshot_when_source_is_written() {
+    for export in [
+        "const snapshot = initial; export { snapshot as Snapshot };",
+        "export const Snapshot = initial;",
+    ] {
+        let input = format!(
+            "let initial = 1; {export} function replace(next) {{ initial = next; }} use(initial, replace);"
+        );
+        let output = apply(&input);
+        assert!(output.contains("let initial = 1;"), "{output}");
+        assert!(output.contains("const Snapshot = initial;"), "{output}");
+    }
+}
+
+#[test]
+fn shadowed_alias_write_does_not_block_export_recovery() {
+    let input = "const initial = 1; const alias = initial; function update(alias) { alias++; } use(update); export { alias as Current };";
+    let expected = "export const Current = 1; function update(alias) { alias++; } use(update);";
+    assert_eq_normalized(&apply(input), expected);
+}

@@ -1,0 +1,778 @@
+---
+source: crates/core/tests/webpack4_unpack.rs
+expression: code
+---
+import { a as a_1 } from "./module-7.js";
+function o(e) {
+    return e.charAt(0) === "/";
+}
+function i(e, t) {
+    let n = t;
+    for(let r = n + 1, o = e.length; r < o; n += 1, r += 1){
+        e[n] = e[r];
+    }
+    e.pop();
+}
+const a = (pathname, t = "")=>{
+    let n;
+    const r = pathname && pathname.split("/") || [];
+    let a = t && t.split("/") || [];
+    const u = pathname && o(pathname);
+    const l = t && o(t);
+    const c = u || l;
+    if (pathname && o(pathname)) {
+        a = r;
+    } else if (r.length) {
+        a.pop();
+        a = a.concat(r);
+    }
+    if (!a.length) {
+        return "/";
+    }
+    if (a.length) {
+        const s = a[a.length - 1];
+        n = s === "." || s === ".." || s === "";
+    } else {
+        n = false;
+    }
+    let f = 0;
+    for(let d = a.length; d >= 0; d--){
+        const p = a[d];
+        switch(p){
+            case ".":
+                i(a, d);
+                break;
+            case "..":
+                i(a, d);
+                f++;
+                break;
+            default:
+                if (f) {
+                    i(a, d);
+                    f--;
+                }
+        }
+    }
+    if (!c) {
+        for(; f--; f){
+            a.unshift("..");
+        }
+    }
+    if (!(!c || a[0] === "" || a[0] && o(a[0]))) {
+        a.unshift("");
+    }
+    let h = a.join("/");
+    if (n && h.substr(-1) !== "/") {
+        h += "/";
+    }
+    return h;
+};
+function u(e) {
+    if (e.valueOf) {
+        return e.valueOf();
+    }
+    return Object.prototype.valueOf.call(e);
+}
+const l = function e(state, n) {
+    if (state === n) {
+        return true;
+    }
+    if (state == null || n == null) {
+        return false;
+    }
+    if (Array.isArray(state)) {
+        return Array.isArray(n) && state.length === n.length && state.every((t, r)=>e(t, n[r]));
+    }
+    if (typeof state === "object" || typeof n === "object") {
+        const r = u(state);
+        const o = u(n);
+        if (r !== state || o !== n) {
+            return e(r, o);
+        }
+        return Object.keys({
+            ...state,
+            ...n
+        }).every((r)=>e(state[r], n[r]));
+    }
+    return false;
+};
+const c = true;
+const s = "Invariant failed";
+function f(e, t) {
+    if (!e) {
+        if (c) {
+            throw new Error(s);
+        }
+        const n = typeof t === "function" ? t() : t;
+        const r = n ? `${s}: ${n}` : s;
+        throw new Error(r);
+    }
+}
+function d(e) {
+    if (e.charAt(0) === "/") {
+        return e;
+    }
+    return `/${e}`;
+}
+function encodePath(e) {
+    if (e.charAt(0) === "/") {
+        return e.substr(1);
+    }
+    return e;
+}
+function h(e, t) {
+    if (((e, t)=>e.toLowerCase().indexOf(t.toLowerCase()) === 0 && -1 !== "/?#".indexOf(e.charAt(t.length)))(e, t)) {
+        return e.substr(t.length);
+    }
+    return e;
+}
+function m(e) {
+    if (e.charAt(e.length - 1) === "/") {
+        return e.slice(0, -1);
+    }
+    return e;
+}
+export function parsePath(e) {
+    let pathname = e || "/";
+    let n = "";
+    let r = "";
+    const o = pathname.indexOf("#");
+    if (-1 !== o) {
+        r = pathname.substr(o);
+        pathname = pathname.substr(0, o);
+    }
+    const i = pathname.indexOf("?");
+    if (-1 !== i) {
+        n = pathname.substr(i);
+        pathname = pathname.substr(0, i);
+    }
+    return {
+        pathname,
+        search: n === "?" ? "" : n,
+        hash: r === "#" ? "" : r
+    };
+}
+export function createPath({ pathname, search, hash }) {
+    let o = pathname || "/";
+    if (search && search !== "?") {
+        o += search.charAt(0) === "?" ? search : `?${search}`;
+    }
+    if (hash && hash !== "#") {
+        o += hash.charAt(0) === "#" ? hash : `#${hash}`;
+    }
+    return o;
+}
+export function createLocation(e, t, n, o) {
+    let i;
+    if (typeof e === "string") {
+        i = parsePath(e);
+        i.state = t;
+    } else {
+        if ((i = {
+            ...e
+        }).pathname === undefined) {
+            i.pathname = "";
+        }
+        if (i.search) {
+            if (i.search.charAt(0) !== "?") {
+                i.search = `?${i.search}`;
+            }
+        } else {
+            i.search = "";
+        }
+        if (i.hash) {
+            if (i.hash.charAt(0) !== "#") {
+                i.hash = `#${i.hash}`;
+            }
+        } else {
+            i.hash = "";
+        }
+        if (t !== undefined && i.state === undefined) {
+            i.state = t;
+        }
+    }
+    try {
+        i.pathname = decodeURI(i.pathname);
+    } catch (error) {
+        throw error instanceof URIError ? new URIError(`Pathname "${i.pathname}" could not be decoded. This is likely caused by an invalid percent-encoding.`) : error;
+    }
+    if (n) {
+        i.key = n;
+    }
+    o ? i.pathname ? i.pathname.charAt(0) !== "/" && (i.pathname = a(i.pathname, o.pathname)) : i.pathname = o.pathname : i.pathname || (i.pathname = "/");
+    return i;
+}
+export function locationsAreEqual(e, t) {
+    return e.pathname === t.pathname && e.search === t.search && e.hash === t.hash && e.key === t.key && l(e.state, t.state);
+}
+function w() {
+    let e = null;
+    let t = [];
+    return {
+        setPrompt (t) {
+            e = t;
+            return ()=>{
+                if (e === t) {
+                    e = null;
+                }
+            };
+        },
+        confirmTransitionTo (t, n, r, o) {
+            if (e != null) {
+                const i = typeof e === "function" ? e(t, n) : e;
+                if (typeof i === "string") {
+                    if (typeof r === "function") {
+                        r(i, o);
+                    } else {
+                        o(true);
+                    }
+                } else {
+                    o(i !== false);
+                }
+            } else {
+                o(true);
+            }
+        },
+        appendListener (e) {
+            let n = true;
+            function r() {
+                if (n) {
+                    e(...arguments);
+                }
+            }
+            t.push(r);
+            return ()=>{
+                n = false;
+                t = t.filter((e)=>e !== r);
+            };
+        },
+        notifyListeners (...n) {
+            t.forEach((e)=>e(...n));
+        }
+    };
+}
+const E = !(typeof window === "undefined" || !window.document || !window.document.createElement);
+function x(e, t) {
+    t(window.confirm(e));
+}
+const k = "popstate";
+const T = "hashchange";
+function S() {
+    try {
+        return window.history.state || {};
+    } catch (e) {
+        return {};
+    }
+}
+export function createBrowserHistory(e = {}) {
+    if (!E) {
+        f(false);
+    }
+    const window_history = window.history;
+    const n = (()=>{
+        const userAgent = window.navigator.userAgent;
+        return (-1 === userAgent.indexOf("Android 2.") && -1 === userAgent.indexOf("Android 4.0") || -1 === userAgent.indexOf("Mobile Safari") || -1 !== userAgent.indexOf("Chrome") || -1 !== userAgent.indexOf("Windows Phone")) && window.history && "pushState" in window.history;
+    })();
+    const o = !(-1 === window.navigator.userAgent.indexOf("Trident"));
+    const { forceRefresh = false, getUserConfirmation = x, keyLength = 6 } = e;
+    const y = e.basename ? m(d(e.basename)) : "";
+    function g(e) {
+        const t = e || {};
+        const { key, state } = t;
+        const window_location = window.location;
+        let i = window_location.pathname + window_location.search + window_location.hash;
+        if (y) {
+            i = h(i, y);
+        }
+        return createLocation(i, state, key);
+    }
+    function O() {
+        return Math.random().toString(36).substr(2, keyLength);
+    }
+    const C = w();
+    function P(e) {
+        a_1(q, e);
+        q.length = window_history.length;
+        C.notifyListeners(q.location, q.action);
+    }
+    function _(e) {
+        if (!((e)=>e.state === undefined && -1 === navigator.userAgent.indexOf("CriOS"))(e)) {
+            N(g(e.state));
+        }
+    }
+    function j() {
+        N(g(S()));
+    }
+    let R = false;
+    function N(e) {
+        if (R) {
+            R = false;
+            P();
+        } else {
+            C.confirmTransitionTo(e, "POP", getUserConfirmation, (t)=>{
+                if (t) {
+                    P({
+                        action: "POP",
+                        location: e
+                    });
+                } else {
+                    ((e)=>{
+                        const q_location = q.location;
+                        let n = A.indexOf(q_location.key);
+                        if (-1 === n) {
+                            n = 0;
+                        }
+                        let r = A.indexOf(e.key);
+                        if (-1 === r) {
+                            r = 0;
+                        }
+                        const o = n - r;
+                        if (o) {
+                            R = true;
+                            I(o);
+                        }
+                    })(e);
+                }
+            });
+        }
+    }
+    const M = g(S());
+    var A = [
+        M.key
+    ];
+    function createHref(e) {
+        return y + createPath(e);
+    }
+    function I(e) {
+        window_history.go(e);
+    }
+    let D = 0;
+    function F(e) {
+        if ((D += e) === 1 && e === 1) {
+            window.addEventListener(k, _);
+            if (o) {
+                window.addEventListener(T, j);
+            }
+        } else if (D === 0) {
+            window.removeEventListener(k, _);
+            if (o) {
+                window.removeEventListener(T, j);
+            }
+        }
+    }
+    let z = false;
+    var q = {
+        length: window_history.length,
+        action: "POP",
+        location: M,
+        createHref,
+        push (e, r) {
+            const o = createLocation(e, r, O(), q.location);
+            C.confirmTransitionTo(o, "PUSH", getUserConfirmation, (e)=>{
+                if (e) {
+                    const r = createHref(o);
+                    const { key, state } = o;
+                    if (n) {
+                        window_history.pushState({
+                            key,
+                            state
+                        }, null, r);
+                        if (forceRefresh) {
+                            window.location.href = r;
+                        } else {
+                            const l = A.indexOf(q.location.key);
+                            const c = A.slice(0, l + 1);
+                            c.push(o.key);
+                            A = c;
+                            P({
+                                action: "PUSH",
+                                location: o
+                            });
+                        }
+                    } else {
+                        window.location.href = r;
+                    }
+                }
+            });
+        },
+        replace (e, r) {
+            const o = createLocation(e, r, O(), q.location);
+            C.confirmTransitionTo(o, "REPLACE", getUserConfirmation, (e)=>{
+                if (e) {
+                    const r = createHref(o);
+                    const { key, state } = o;
+                    if (n) {
+                        window_history.replaceState({
+                            key,
+                            state
+                        }, null, r);
+                        if (forceRefresh) {
+                            window.location.replace(r);
+                        } else {
+                            const l = A.indexOf(q.location.key);
+                            if (-1 !== l) {
+                                A[l] = o.key;
+                            }
+                            P({
+                                action: "REPLACE",
+                                location: o
+                            });
+                        }
+                    } else {
+                        window.location.replace(r);
+                    }
+                }
+            });
+        },
+        go: I,
+        goBack () {
+            I(-1);
+        },
+        goForward () {
+            I(1);
+        },
+        block (e = false) {
+            const t = C.setPrompt(e);
+            if (!z) {
+                F(1);
+                z = true;
+            }
+            return ()=>{
+                if (z) {
+                    z = false;
+                    F(-1);
+                }
+                return t();
+            };
+        },
+        listen (e) {
+            const t = C.appendListener(e);
+            F(1);
+            return ()=>{
+                F(-1);
+                t();
+            };
+        }
+    };
+    return q;
+}
+const C = "hashchange";
+const P = {
+    hashbang: {
+        encodePath (e) {
+            if (e.charAt(0) === "!") {
+                return e;
+            }
+            return `!/${encodePath(e)}`;
+        },
+        decodePath (e) {
+            if (e.charAt(0) === "!") {
+                return e.substr(1);
+            }
+            return e;
+        }
+    },
+    noslash: {
+        encodePath,
+        decodePath: d
+    },
+    slash: {
+        encodePath: d,
+        decodePath: d
+    }
+};
+function _(href) {
+    const t = href.indexOf("#");
+    if (-1 === t) {
+        return href;
+    }
+    return href.slice(0, t);
+}
+function j() {
+    const href = window.location.href;
+    const t = href.indexOf("#");
+    if (-1 === t) {
+        return "";
+    }
+    return href.substring(t + 1);
+}
+function R(e) {
+    window.location.replace(`${_(window.location.href)}#${e}`);
+}
+export function createHashHistory(e = {}) {
+    if (!E) {
+        f(false);
+    }
+    const window_history = window.history;
+    window.navigator.userAgent.indexOf("Firefox");
+    const { getUserConfirmation = x, hashType = "slash" } = e;
+    const l = e.basename ? m(d(e.basename)) : "";
+    const c = P[hashType];
+    const { encodePath, decodePath } = c;
+    function y() {
+        let e = decodePath(j());
+        if (l) {
+            e = h(e, l);
+        }
+        return createLocation(e);
+    }
+    const g = w();
+    function k(e) {
+        a_1(q, e);
+        q.length = window_history.length;
+        g.notifyListeners(q.location, q.action);
+    }
+    let T = false;
+    let S = null;
+    function O() {
+        const e = j();
+        const t = encodePath(e);
+        if (e !== t) {
+            R(t);
+        } else {
+            const n = y();
+            const r = q.location;
+            if (!T && ((e, t)=>e.pathname === t.pathname && e.search === t.search && e.hash === t.hash)(r, n)) {
+                return;
+            }
+            if (S === createPath(n)) {
+                return;
+            }
+            S = null;
+            ((e)=>{
+                if (T) {
+                    T = false;
+                    k();
+                } else {
+                    g.confirmTransitionTo(e, "POP", getUserConfirmation, (t)=>{
+                        if (t) {
+                            k({
+                                action: "POP",
+                                location: e
+                            });
+                        } else {
+                            ((e)=>{
+                                const q_location = q.location;
+                                let n = L.lastIndexOf(createPath(q_location));
+                                if (-1 === n) {
+                                    n = 0;
+                                }
+                                let r = L.lastIndexOf(createPath(e));
+                                if (-1 === r) {
+                                    r = 0;
+                                }
+                                const o = n - r;
+                                if (o) {
+                                    T = true;
+                                    I(o);
+                                }
+                            })(e);
+                        }
+                    });
+                }
+            })(n);
+        }
+    }
+    const N = j();
+    const M = encodePath(N);
+    if (N !== M) {
+        R(M);
+    }
+    const A = y();
+    var L = [
+        createPath(A)
+    ];
+    function I(e) {
+        window_history.go(e);
+    }
+    let D = 0;
+    function F(e) {
+        if ((D += e) === 1 && e === 1) {
+            window.addEventListener(C, O);
+        } else if (D === 0) {
+            window.removeEventListener(C, O);
+        }
+    }
+    let z = false;
+    var q = {
+        length: window_history.length,
+        action: "POP",
+        location: A,
+        createHref (e) {
+            const t = document.querySelector("base");
+            let n = "";
+            if (t && t.getAttribute("href")) {
+                n = _(window.location.href);
+            }
+            return `${n}#${encodePath(l + createPath(e))}`;
+        },
+        push (e, t) {
+            const n = createLocation(e, undefined, undefined, q.location);
+            g.confirmTransitionTo(n, "PUSH", getUserConfirmation, (e)=>{
+                if (e) {
+                    const t = createPath(n);
+                    const r = encodePath(l + t);
+                    if (j() !== r) {
+                        S = t;
+                        ((e)=>{
+                            window.location.hash = e;
+                        })(r);
+                        const o = L.lastIndexOf(createPath(q.location));
+                        const i = L.slice(0, o + 1);
+                        i.push(t);
+                        L = i;
+                        k({
+                            action: "PUSH",
+                            location: n
+                        });
+                    } else {
+                        k();
+                    }
+                }
+            });
+        },
+        replace (e, t) {
+            const n = createLocation(e, undefined, undefined, q.location);
+            g.confirmTransitionTo(n, "REPLACE", getUserConfirmation, (e)=>{
+                if (e) {
+                    const t = createPath(n);
+                    const r = encodePath(l + t);
+                    if (j() !== r) {
+                        S = t;
+                        R(r);
+                    }
+                    const o = L.indexOf(createPath(q.location));
+                    if (-1 !== o) {
+                        L[o] = t;
+                    }
+                    k({
+                        action: "REPLACE",
+                        location: n
+                    });
+                }
+            });
+        },
+        go: I,
+        goBack () {
+            I(-1);
+        },
+        goForward () {
+            I(1);
+        },
+        block (e = false) {
+            const t = g.setPrompt(e);
+            if (!z) {
+                F(1);
+                z = true;
+            }
+            return ()=>{
+                if (z) {
+                    z = false;
+                    F(-1);
+                }
+                return t();
+            };
+        },
+        listen (e) {
+            const t = g.appendListener(e);
+            F(1);
+            return ()=>{
+                F(-1);
+                t();
+            };
+        }
+    };
+    return q;
+}
+function M(e, t, n) {
+    return Math.min(Math.max(e, t), n);
+}
+export function createMemoryHistory({ getUserConfirmation, initialEntries = [
+    "/"
+], initialIndex = 0, keyLength = 6 } = {}) {
+    const s = w();
+    function f(e) {
+        a_1(g, e);
+        g.length = g.entries.length;
+        s.notifyListeners(g.location, g.action);
+    }
+    function d() {
+        return Math.random().toString(36).substr(2, keyLength);
+    }
+    const p = M(initialIndex, 0, initialEntries.length - 1);
+    const h = initialEntries.map((e)=>createLocation(e, undefined, typeof e === "string" ? d() : e.key || d()));
+    const createHref = createPath;
+    function y(e) {
+        const t = M(g.index + e, 0, g.entries.length - 1);
+        const r = g.entries[t];
+        s.confirmTransitionTo(r, "POP", getUserConfirmation, (e)=>{
+            if (e) {
+                f({
+                    action: "POP",
+                    location: r,
+                    index: t
+                });
+            } else {
+                f();
+            }
+        });
+    }
+    var g = {
+        length: h.length,
+        action: "POP",
+        location: h[p],
+        index: p,
+        entries: h,
+        createHref,
+        push (e, t) {
+            const r = createLocation(e, t, d(), g.location);
+            s.confirmTransitionTo(r, "PUSH", getUserConfirmation, (e)=>{
+                if (e) {
+                    const t = g.index + 1;
+                    const n = g.entries.slice(0);
+                    if (n.length > t) {
+                        n.splice(t, n.length - t, r);
+                    } else {
+                        n.push(r);
+                    }
+                    f({
+                        action: "PUSH",
+                        location: r,
+                        index: t,
+                        entries: n
+                    });
+                }
+            });
+        },
+        replace (e, t) {
+            const r = createLocation(e, t, d(), g.location);
+            s.confirmTransitionTo(r, "REPLACE", getUserConfirmation, (e)=>{
+                if (e) {
+                    g.entries[g.index] = r;
+                    f({
+                        action: "REPLACE",
+                        location: r
+                    });
+                }
+            });
+        },
+        go: y,
+        goBack () {
+            y(-1);
+        },
+        goForward () {
+            y(1);
+        },
+        canGo (e) {
+            const t = g.index + e;
+            return t >= 0 && t < g.entries.length;
+        },
+        block (e = false) {
+            return s.setPrompt(e);
+        },
+        listen (e) {
+            return s.appendListener(e);
+        }
+    };
+    return g;
+}
