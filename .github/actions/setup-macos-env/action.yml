@@ -1,0 +1,94 @@
+name: Set up macOS environment
+description: Set up everything needed to build and release things on macOS
+inputs:
+  certificates-p12:
+    required: true
+    description: The certificates to use for codesigning, as a base64-encoded .p12
+  certificates-password:
+    required: true
+    description: The password for the .p12
+  keychain-password:
+    required: true
+    description: The keychain password to use
+  aws-access-key-id:
+    required: true
+    description: The aws-access-key-id used to authenticate with AWS
+  aws-secret-access-key:
+    required: true
+    description: The aws-secret-access-key used to authenticate with AWS
+  cloudflare-email:
+    required: true
+    description: The email used to authenticate with Cloudflare
+  cloudflare-token:
+    required: true
+    description: The token used to authenticate with Cloudflare
+runs:
+  using: composite
+  steps:
+    - name: Install the Apple certificates
+      env:
+        CERTIFICATES_P12: ${{ inputs.certificates-p12 }}
+        CERTIFICATES_PASSWORD: ${{ inputs.certificates-password }}
+        KEYCHAIN_PASSWORD: ${{ inputs.keychain-password }}
+      run: |
+        CERTIFICATE_PATH=$RUNNER_TEMP/apple-certificates.p12
+        KEYCHAIN_PATH=$RUNNER_TEMP/frida-signing.keychain-db
+        echo -n "$CERTIFICATES_P12" | base64 --decode --output $CERTIFICATE_PATH
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security import $CERTIFICATE_PATH -P "$CERTIFICATES_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+        rm $CERTIFICATE_PATH
+        (
+          MACOS_CERTID=$(security find-identity -v -p codesigning | grep "Developer ID Application: " | awk '{ print $2 }')
+          IOS_CERTID=$(security find-identity -v -p codesigning | grep "Apple Development: " | awk '{ print $2 }')
+          echo MACOS_CERTID=$MACOS_CERTID
+          echo IOS_CERTID=$IOS_CERTID
+          echo WATCHOS_CERTID=$IOS_CERTID
+          echo TVOS_CERTID=$IOS_CERTID
+        ) >> $GITHUB_ENV
+      shell: bash
+    - name: Configure git
+      run: |
+        git config --global user.name "Frida Developers"
+        git config --global user.email "oleavr@frida.re"
+      shell: bash
+    - name: Check out releng
+      run: |
+        git submodule update --init --depth 1 releng
+        cd releng
+        git submodule update --init --depth 1
+      shell: bash
+    - name: Add convenience environment variables
+      run: |
+        (
+          echo "FRIDA_PREFIX=$RUNNER_WORKSPACE/dist"
+          echo "FRIDA_VERSION=$(releng/frida_version.py)"
+        ) >> $GITHUB_ENV
+      shell: bash
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: us-east-1
+    - name: Configure Cloudflare credentials
+      run: |
+        (
+          echo "defaults:"
+          echo "    domain: frida.re"
+          echo "    email: ${{ inputs.cloudflare-email }}"
+          echo "    token: ${{ inputs.cloudflare-token }}"
+        ) > ~/.cfcli.yml
+      shell: bash
+    - name: Install Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install setuptools
+      run: pip install setuptools
+      shell: bash
+    - name: Install cloudflare-cli
+      run: npm install -g cloudflare-cli@5.0.5
+      shell: bash

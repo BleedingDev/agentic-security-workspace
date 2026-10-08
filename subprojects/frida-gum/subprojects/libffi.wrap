@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/frida/libffi.git
+revision = 3fe3257235cc9ffd192e1cd567f1bdfff751fa3e
+depth = 1
+
+[provide]
+dependency_names = libffi
+

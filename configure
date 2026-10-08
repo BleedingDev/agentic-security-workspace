@@ -1,0 +1,13 @@
+#!/bin/sh
+
+[ -z "$PYTHON" ] && PYTHON=$(which python3 >/dev/null && echo python3 || echo python)
+
+cd $(dirname $0)
+srcroot=$(pwd)
+[ ! -f releng/meson/meson.py ] && "$PYTHON" tools/ensure-submodules.py
+cd - >/dev/null
+
+exec "$PYTHON" \
+    -c "import sys; sys.path.insert(0, sys.argv[1]); from releng.meson_configure import main; main()" \
+    "$srcroot" \
+    "$@"

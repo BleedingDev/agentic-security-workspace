@@ -1,0 +1,83 @@
+name: Publish .deb packages
+description: Publishes already packaged debs
+inputs:
+  site:
+    required: true
+    path: Where to publish; set to either “production” or “development”
+runs:
+  using: composite
+  steps:
+    - name: Create repo metadata
+      run: |
+        archs="iphoneos-arm iphoneos-arm64 appletvos-arm64"
+        cd build
+        rm -rf deb-repo-config
+        mkdir deb-repo-config
+        (
+          echo "Origin: Cydia/Frida"
+          echo "Label: frida"
+          echo "Suite: stable"
+          echo "Version: 1.0"
+          echo "Codename: stable"
+          echo "Architectures: $archs"
+          echo "Components: main"
+          echo "Description: Frida for iOS/tvOS"
+        ) > deb-repo-config/distributions
+        rm -rf deb-repo
+        mkdir -p deb-repo/debs
+        cd deb-repo
+        (
+          echo "Origin: Frida"
+          echo "Label: Frida"
+          echo "Suite: stable"
+          echo "Version: 1.0"
+          echo "Codename: ios"
+          echo "Architectures: $archs"
+          echo "Components: main"
+          echo "Description: Official Frida Repo"
+        ) > Release
+        for arch in $archs; do
+          file=frida_${FRIDA_VERSION}_$arch.deb
+          cp $GITHUB_WORKSPACE/build/release-assets/$file debs/
+          reprepro \
+              -Vb . \
+              --confdir $GITHUB_WORKSPACE/build/deb-repo-config \
+              --ignore=forbiddenchar \
+              includedeb \
+              stable \
+              debs/$file
+        done
+        (
+          for arch in $archs; do
+            zcat < dists/stable/main/binary-$arch/Packages.gz
+          done
+        ) > Packages
+        gzip -9k Packages
+      shell: bash
+    - name: Upload package and repo metadata
+      run: |
+        cd build/deb-repo
+        case ${{ inputs.site }} in
+          production)
+            prefix=
+            ;;
+          development)
+            prefix=/dev
+           ;;
+          *)
+            echo "Invalid repo specified" > /dev/stderr
+            exit 1
+        esac
+        aws s3 sync --delete pool/ s3://build.frida.re${prefix}/pool/
+        for file in Release Packages Packages.gz; do
+          aws s3 cp $file s3://build.frida.re${prefix}/
+        done
+        for file in Release Packages Packages.gz; do
+          aws s3 cp $file s3://build.frida.re${prefix}/./
+        done
+        urls_to_invalidate=()
+        for file in Release Packages Packages.gz ./Release ./Packages ./Packages.gz; do
+          urls_to_invalidate+=("https://build.frida.re${prefix}/${file}")
+        done
+        cfcli purge ${urls_to_invalidate[@]}
+      shell: bash
