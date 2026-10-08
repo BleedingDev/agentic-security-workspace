@@ -1,0 +1,12 @@
+{
+  "address": "10001000",
+  "fully_documented": true,
+  "is_code_address": true,
+  "is_function_entry": true,
+  "issues": [],
+  "length": 4,
+  "name": "calc_crc16",
+  "plate_comment": "",
+  "type": "int",
+  "xref_count": 4
+}

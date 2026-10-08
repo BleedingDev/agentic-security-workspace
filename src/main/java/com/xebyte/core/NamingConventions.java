@@ -1,0 +1,1490 @@
+package com.xebyte.core;
+
+import java.util.*;
+import java.util.regex.Pattern;
+
+/**
+ * Centralized naming convention validation for Ghidra MCP tools.
+ * All methods return warnings (empty list = valid). Tools apply changes and include warnings in response.
+ */
+public final class NamingConventions {
+
+    private NamingConventions() {}
+
+    // -----------------------------------------------------------------------
+    // Function name validation
+    // -----------------------------------------------------------------------
+
+    private static final Set<String> ALLOWED_VERBS = Set.of(
+            "Get", "Set", "Is", "Has", "Can", "Find", "Create", "Initialize", "Process",
+            "Validate", "Calculate", "Build", "Parse", "Update", "Check", "Handle",
+            "Load", "Save", "Free", "Allocate", "Deallocate", "Register", "Unregister",
+            "Clear", "Reset", "Resolve", "Lookup", "Dispatch", "Invoke", "Apply",
+            "Add", "Remove", "Delete", "Insert", "Append", "Prepend",
+            "Open", "Close", "Start", "Stop", "Enable", "Disable",
+            "Read", "Write", "Send", "Receive", "Connect", "Disconnect",
+            "Lock", "Unlock", "Acquire", "Release",
+            "Compute", "Convert", "Format", "Encode", "Decode", "Compress", "Decompress",
+            "Sort", "Filter", "Search", "Count", "Measure",
+            "Draw", "Render", "Paint", "Blit", "Fill",
+            "Notify", "Signal", "Trigger", "Fire", "Emit",
+            "Mark", "Flag", "Tag", "Log", "Report", "Dump",
+            "Test", "Verify", "Assert", "Compare", "Match",
+            "Spawn", "Kill", "Destroy", "Cleanup", "Shutdown", "Abort",
+            "Compile", "Link", "Bind", "Map", "Unmap",
+            "Push", "Pop", "Enqueue", "Dequeue", "Peek",
+            "Increment", "Decrement", "Adjust", "Clamp", "Scale",
+            "Iterate", "Traverse", "Walk", "Scan", "Enumerate",
+            "Assign", "Copy", "Clone", "Move", "Swap", "Merge",
+            "Show", "Hide", "Toggle", "Select", "Deselect",
+            "Attach", "Detach", "Mount", "Unmount",
+            "Accept", "Reject", "Cancel", "Retry", "Skip"
+    );
+
+    private static final Pattern PASCAL_CASE = Pattern.compile("^[A-Z][a-zA-Z0-9]+$");
+    // Digits are allowed after the first letter so prefixes containing digits
+    // are actually recognised. The original `^[A-Z]+_[A-Z].*` could not match
+    // `X64_`, `D3D9_` or `WIN32_`: `[A-Z]+` stops at the digit, so the whole name
+    // was treated as having NO module prefix -- which then failed the
+    // PascalCase check on the full string and emitted "contains underscores.
+    // Use PascalCase after the module prefix" for names that were already
+    // correct. Every function with a digit-bearing module prefix was affected.
+    private static final Pattern MODULE_PREFIX = Pattern.compile("^[A-Z][A-Z0-9]*_[A-Z].*");
+    // Built-in minimum function-name length; the active value flows through
+    // ConventionConfig.FunctionNamingRules.minLength() so projects can override.
+
+    // ---- Verb specificity tiers (Q2 design) -------------------------------
+    // Tier 1: highly specific verbs — a single specifier token is enough
+    //         (e.g., AllocateBuffer, ParseHeader, DecodePacket).
+    // Tier 2: medium-specificity verbs — need ≥1 specifier (e.g., GetSize).
+    // Tier 3: vague verbs — require ≥2 specifier tokens after the verb
+    //         (e.g., ProcessNetworkPacket OK, ProcessData NOT OK).
+    // Verbs not in any tier are accepted on the legacy ALLOWED_VERBS path
+    // but treated as Tier 2 for specificity purposes (one-specifier baseline).
+
+    private static final Set<String> VERBS_TIER1 = Set.of(
+            "Allocate", "Append", "Apply", "Calculate", "Compress", "Compile",
+            "Connect", "Decompress", "Decode", "Destroy", "Detect", "Encode",
+            "Encrypt", "Decrypt", "Free", "Generate", "Initialize", "Insert",
+            "Iterate", "Lookup", "Match", "Merge", "Parse", "Render", "Resolve",
+            "Schedule", "Serialize", "Sort", "Subscribe", "Truncate", "Validate"
+    );
+
+    private static final Set<String> VERBS_TIER2 = Set.of(
+            "Add", "Build", "Check", "Clear", "Close", "Compare", "Copy",
+            "Count", "Create", "Delete", "Find", "Format", "Get", "Has", "Is",
+            "Load", "Move", "Open", "Print", "Push", "Pop", "Read", "Receive",
+            "Remove", "Reset", "Save", "Search", "Send", "Set", "Show",
+            "Start", "Stop", "Update", "Write"
+    );
+
+    private static final Set<String> VERBS_TIER3 = Set.of(
+            "Do", "Handle", "Make", "Manage", "Process", "Run", "Use"
+    );
+
+    // ---- Weak-noun denylist (Q2: specifiers must be informative) ----------
+    // These nouns add no semantic information after a verb. "ProcessData"
+    // counts as Tier 3 + 0 specifiers because Data is on this list.
+    private static final Set<String> WEAK_NOUNS = Set.of(
+            "Data", "Info", "Stuff", "Thing", "Item", "Object", "Value",
+            "Result", "State", "Func", "Method", "Action", "Helper", "Util"
+    );
+
+    /**
+     * Whether {@code verb} is on the effective verb whitelist: built-in
+     * {@link #ALLOWED_VERBS} plus {@code verbs_add} minus {@code verbs_remove}
+     * from the per-project config. Also accepts any verb explicitly placed
+     * into a tier override (a project that tiers a verb has effectively
+     * whitelisted it). */
+    private static boolean isAllowedVerb(String verb, ConventionConfig.FunctionNamingRules rules) {
+        if (verb == null) return false;
+        if (rules.verbsRemove().contains(verb)) return false;
+        if (rules.verbsAdd().contains(verb)) return true;
+        if (rules.verbTierOverrides().containsKey(verb)) return true;
+        return ALLOWED_VERBS.contains(verb);
+    }
+
+    /**
+     * Validate a function name against conventions. Returns list of warnings (empty = valid).
+     * Thunks/imports with underscores are exempt.
+     */
+    public static List<String> validateFunctionName(String name, boolean isThunk) {
+        if (name == null || name.isEmpty()) return List.of();
+        // Thunks/imports are exempt (e.g., _DllMain@12, Ordinal_10024)
+        if (isThunk) return List.of();
+        // Auto-generated names are not validated (they'll get the auto_name deduction)
+        if (ServiceUtils.isAutoGeneratedName(name)) return List.of();
+
+        List<String> warnings = new ArrayList<>();
+
+        // Strip UPPERCASE_ module prefix if present (e.g., DATATBLS_CompileTxtDataTable -> CompileTxtDataTable)
+        // Module prefixes are valid and match original source code conventions.
+        String mainName = name;
+        if (MODULE_PREFIX.matcher(name).matches()) {
+            int underscoreIdx = name.indexOf('_');
+            mainName = name.substring(underscoreIdx + 1);
+        }
+
+        if (!PASCAL_CASE.matcher(mainName).matches()) {
+            warnings.add("Function name '" + name + "' — main part '" + mainName + "' is not PascalCase. Expected: " + toPascalCase(mainName));
+        }
+
+        // Check for non-prefix underscores in the main part
+        if (mainName.contains("_")) {
+            warnings.add("Function name '" + name + "' — main part '" + mainName + "' contains underscores. Use PascalCase after the module prefix.");
+        }
+
+        ConventionConfig.FunctionNamingRules fnRules =
+                NamingPolicy.getInstance().getConfig().functionNaming();
+        int minLength = fnRules.minLength();
+        if (mainName.length() < minLength) {
+            warnings.add("Function name '" + name + "' is too short (main part '" + mainName + "' is " + mainName.length() + " chars, minimum " + minLength + ").");
+        }
+
+        // Extract first word (verb) from PascalCase main part
+        String firstWord = extractFirstPascalWord(mainName);
+        if (firstWord != null && !isAllowedVerb(firstWord, fnRules)) {
+            warnings.add("Function name '" + name + "' does not start with a recognized verb. First word '" + firstWord + "' not in allowed list. Common verbs: Get, Set, Initialize, Process, Calculate, Find, Check, Handle");
+        }
+
+        return warnings;
+    }
+
+    // -----------------------------------------------------------------------
+    // Function-name quality check (Q2 verb-tier rule, Q4 hard-reject path)
+    // -----------------------------------------------------------------------
+
+    /**
+     * A structured rejection from {@link #checkFunctionNameQuality(String)}.
+     * Null fields signal "no problem found at this layer." Returned to callers
+     * as JSON via the rename endpoint so the model can act on the feedback
+     * (Q5: reactive rich-feedback).
+     */
+    public static final class NameQualityResult {
+        public final boolean ok;
+        public final String issue;       // short machine-friendly id e.g. "vague_verb"
+        public final String message;     // human-readable explanation
+        public final String suggestion;  // optional concrete fix hint
+
+        private NameQualityResult(boolean ok, String issue, String message, String suggestion) {
+            this.ok = ok;
+            this.issue = issue;
+            this.message = message;
+            this.suggestion = suggestion;
+        }
+
+        public static NameQualityResult ok() {
+            return new NameQualityResult(true, null, null, null);
+        }
+
+        public static NameQualityResult reject(String issue, String message, String suggestion) {
+            return new NameQualityResult(false, issue, message, suggestion);
+        }
+    }
+
+    /** Tier of the given verb (1/2/3); 0 = unknown verb (treated as Tier 2).
+     *
+     * <p>Per-project overrides via {@code .ghidra-mcp/conventions.json}
+     * (`function_naming.verb_tier_overrides`) take precedence over the
+     * built-in tier tables. */
+    public static int getVerbTier(String verb) {
+        if (verb == null) return 0;
+        Integer override = NamingPolicy.getInstance().getConfig()
+                .functionNaming().verbTierOverrides().get(verb);
+        if (override != null) return override;
+        if (VERBS_TIER1.contains(verb)) return 1;
+        if (VERBS_TIER2.contains(verb)) return 2;
+        if (VERBS_TIER3.contains(verb)) return 3;
+        return 0;
+    }
+
+    /** Whether a token is a "weak noun" that contributes no specificity.
+     *
+     * <p>The built-in {@link #WEAK_NOUNS} set is the floor; a project's
+     * {@code function_naming.weak_nouns_add} extends it and
+     * {@code function_naming.weak_nouns_remove} subtracts. */
+    public static boolean isWeakNoun(String token) {
+        if (token == null) return false;
+        ConventionConfig.FunctionNamingRules rules =
+                NamingPolicy.getInstance().getConfig().functionNaming();
+        if (rules.weakNounsRemove().contains(token)) return false;
+        if (rules.weakNounsAdd().contains(token)) return true;
+        return WEAK_NOUNS.contains(token);
+    }
+
+    /**
+     * Tokenize a PascalCase name into its component words.
+     * "GetPlayerHealth" -> [Get, Player, Health].
+     * "DATATBLS_CompileTxtDataTable" -> [Compile, Txt, Data, Table] (prefix stripped).
+     * Returns an empty list for non-PascalCase, null, or empty inputs. The
+     * main part (after stripping any UPPERCASE_ prefix) must match the
+     * {@link #PASCAL_CASE} pattern — names with internal underscores or
+     * lowercase starts after the prefix would otherwise be mis-tokenized.
+     */
+    public static List<String> tokenizeFunctionName(String name) {
+        if (name == null || name.isEmpty()) return List.of();
+        // Strip module prefix if present.
+        String mainName = name;
+        if (MODULE_PREFIX.matcher(name).matches()) {
+            mainName = name.substring(name.indexOf('_') + 1);
+        }
+        if (mainName.isEmpty() || !PASCAL_CASE.matcher(mainName).matches()) return List.of();
+        List<String> tokens = new ArrayList<>();
+        int start = 0;
+        for (int i = 1; i < mainName.length(); i++) {
+            // New token starts at every uppercase char. Embedded digit
+            // runs (e.g., "UTF8") stay attached to the preceding word.
+            if (Character.isUpperCase(mainName.charAt(i))) {
+                tokens.add(mainName.substring(start, i));
+                start = i;
+            }
+        }
+        tokens.add(mainName.substring(start));
+        return tokens;
+    }
+
+    /**
+     * Count specifier tokens AFTER the verb. A token is a specifier if it is
+     * NOT in the {@link #WEAK_NOUNS} set. Empty/single-token names count as 0.
+     */
+    public static int countSpecifierTokens(String name) {
+        List<String> tokens = tokenizeFunctionName(name);
+        if (tokens.size() < 2) return 0;
+        int count = 0;
+        // Use the config-aware view so project-specific weak-noun add/remove
+        // overrides flow through the specifier counter the same way they
+        // flow through isWeakNoun().
+        for (int i = 1; i < tokens.size(); i++) {
+            if (!isWeakNoun(tokens.get(i))) count++;
+        }
+        return count;
+    }
+
+    /**
+     * Check if a function name meets the Q2 verb-tier specificity rule.
+     * Returns ok() when the name passes; reject() with an actionable
+     * message + suggestion when it doesn't. Thunks/auto-generated names
+     * are exempt (callers should screen those before invoking).
+     */
+    public static NameQualityResult checkFunctionNameQuality(String name) {
+        if (name == null || name.isEmpty()) return NameQualityResult.ok();
+        if (ServiceUtils.isAutoGeneratedName(name)) return NameQualityResult.ok();
+
+        List<String> tokens = tokenizeFunctionName(name);
+        if (tokens.isEmpty()) return NameQualityResult.ok();  // not PascalCase — handled by validateFunctionName
+
+        String verb = tokens.get(0);
+        int tier = getVerbTier(verb);
+        int specifiers = countSpecifierTokens(name);
+
+        if (tier == 3 && specifiers < 2) {
+            return NameQualityResult.reject(
+                    "vague_verb",
+                    "Verb '" + verb + "' is Tier 3 (vague). Function names starting with " +
+                    "Tier 3 verbs require at least 2 specifier tokens after the verb. " +
+                    "Got " + specifiers + " specifier(s) in '" + name + "'.",
+                    "Replace '" + verb + "' with a more specific verb (Calculate, Validate, Initialize, Decode, …) " +
+                    "or add 2 concrete specifier tokens describing what is being processed (e.g., 'ProcessNetworkPacket' instead of 'ProcessData')."
+            );
+        }
+        if (specifiers == 0 && tokens.size() < 2) {
+            return NameQualityResult.reject(
+                    "missing_specifier",
+                    "Name '" + name + "' has only one token. Function names need at least one specifier after the verb.",
+                    "Add a specifier describing what the function operates on (e.g., 'Get' alone is not enough — try 'GetSize', 'GetPlayerHealth')."
+            );
+        }
+        // Tier 1/2/0 with weak-only specifiers (e.g., "GetData", "FrobnicateData")
+        // — mid-strength rejection. Tier 0 (unknown verbs) follow Tier 2
+        // semantics per the class comment, so they share this rule.
+        if (tier != 3 && specifiers == 0 && tokens.size() >= 2) {
+            return NameQualityResult.reject(
+                    "weak_noun_only",
+                    "Name '" + name + "' uses only weak nouns (Data, Info, Stuff, ...) after the verb. " +
+                    "These add no semantic information.",
+                    "Replace the weak noun with a concrete domain term (e.g., 'GetItemAttributes' instead of 'GetData')."
+            );
+        }
+        return NameQualityResult.ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // Token-subset near-duplicate detection (Q3, Q4)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Detect whether {@code candidate} is a token-subset near-duplicate of
+     * any existing function name. Returns the conflicting existing name, or
+     * null if no near-duplicate found.
+     *
+     * "Token-subset" means tokenize both names (after stripping module
+     * prefixes); flag when one name's tokens are a strict subset of the
+     * other's. Same module prefix is required — names with different
+     * prefixes are independent namespaces.
+     *
+     * Example: candidate="SendStateUpdate" vs existing="SendStateUpdateCommand"
+     *   tokens(candidate) = {Send, State, Update}
+     *   tokens(existing)  = {Send, State, Update, Command}
+     *   candidate ⊂ existing — flag.
+     */
+    public static String findTokenSubsetCollision(String candidate, Iterable<String> existingNames) {
+        if (candidate == null || candidate.isEmpty()) return null;
+        List<String> candTokens = tokenizeFunctionName(candidate);
+        if (candTokens.isEmpty()) return null;
+        Set<String> candSet = new HashSet<>(candTokens);
+        String candPrefix = extractModulePrefix(candidate);
+
+        for (String existing : existingNames) {
+            if (existing == null || existing.isEmpty() || existing.equals(candidate)) continue;
+            // Different module prefixes operate in separate namespaces.
+            String existingPrefix = extractModulePrefix(existing);
+            if (!Objects.equals(candPrefix, existingPrefix)) continue;
+
+            List<String> exTokens = tokenizeFunctionName(existing);
+            if (exTokens.isEmpty()) continue;
+            Set<String> exSet = new HashSet<>(exTokens);
+
+            // Strict subset in either direction: candidate ⊂ existing or existing ⊂ candidate.
+            if (candSet.size() != exSet.size()) {
+                if (exSet.containsAll(candSet) || candSet.containsAll(exSet)) {
+                    return existing;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Bookmark category written by Ghidra's Function ID analyzer on a match.
+     * Note it is "Function ID Analyzer", not "Function ID" — filtering on the
+     * shorter string silently matches nothing.
+     */
+    public static final String FID_BOOKMARK_CATEGORY = "Function ID Analyzer";
+
+    /**
+     * Pull the library function name out of a Function ID bookmark comment.
+     *
+     * Comments look like {@code "Library Function - Single Match,  _qsort"} or
+     * {@code "Library Function - Multiple Matches, Different  _printf"}; the
+     * name is always the final whitespace-delimited token.
+     *
+     * @return the matched library name, or null if the comment carries none.
+     */
+    public static String extractFidName(String bookmarkComment) {
+        if (bookmarkComment == null) return null;
+        String trimmed = bookmarkComment.trim();
+        if (trimmed.isEmpty()) return null;
+        String[] parts = trimmed.split("\\s+");
+        String last = parts[parts.length - 1];
+        return last.isEmpty() ? null : last;
+    }
+
+    /** Compare names ignoring the leading-underscore decoration FID carries. */
+    private static String canonicalName(String name) {
+        if (name == null) return "";
+        int i = 0;
+        while (i < name.length() && name.charAt(i) == '_') i++;
+        return name.substring(i).toLowerCase();
+    }
+
+    /**
+     * Whether {@code newName} would bury a Function ID identification under a
+     * module prefix.
+     *
+     * Function ID recognises statically-linked library code and records what it
+     * actually is. Layering a subsystem prefix on top of that asserts something
+     * the evidence contradicts, and because cross-version hash propagation
+     * copies names to every binary sharing a function hash — and CRT is
+     * byte-identical everywhere — one such name spreads corpus-wide. Measured
+     * before this gate existed: 143 FID-identified functions had been renamed
+     * this way, including {@code ___acrt_locale_free_numeric} to
+     * {@code DATATBLS_FreeUnitResourceArray}, a name asserting game units and
+     * resource arrays that appear nowhere in that function.
+     *
+     * Demangling a mangled FID name is an improvement, not an override, so a
+     * FID name starting with '?' never triggers this.
+     */
+    public static boolean overridesFidName(String newName, String fidName) {
+        if (newName == null || fidName == null || fidName.isEmpty()) return false;
+        if (fidName.startsWith("?")) return false;           // mangled -> demangled
+        if (extractModulePrefix(newName) == null) return false;
+        return !canonicalName(newName).equals(canonicalName(fidName));
+    }
+
+    /** Extract the UPPERCASE_ module prefix, or null if the name has none. */
+    public static String extractModulePrefix(String name) {
+        if (name == null || !MODULE_PREFIX.matcher(name).matches()) return null;
+        return name.substring(0, name.indexOf('_'));
+    }
+
+    /**
+     * A function name plus its precomputed tokens and module prefix.
+     * Built once per program-scan via {@link #precomputeTokenized(Iterable)};
+     * lets the per-function collision check avoid re-tokenizing every name
+     * in the program on every scoring call (the O(n²) pattern Copilot flagged
+     * on PR #168).
+     */
+    public static final class TokenizedName {
+        public final String name;
+        public final String modulePrefix; // null if none
+        public final Set<String> tokens;
+
+        public TokenizedName(String name) {
+            this.name = name;
+            this.modulePrefix = extractModulePrefix(name);
+            this.tokens = new HashSet<>(tokenizeFunctionName(name));
+        }
+    }
+
+    /** Tokenize a collection of names once for repeated collision checks. */
+    public static List<TokenizedName> precomputeTokenized(Iterable<String> names) {
+        List<TokenizedName> out = new ArrayList<>();
+        if (names == null) return out;
+        for (String n : names) {
+            if (n != null && !n.isEmpty()) out.add(new TokenizedName(n));
+        }
+        return out;
+    }
+
+    /**
+     * Same semantics as {@link #findTokenSubsetCollision} but skips
+     * re-tokenizing each existing name. Use this in hot paths (per-function
+     * scoring) where the precomputed list can be reused across many calls.
+     */
+    public static String findTokenSubsetCollisionPrecomputed(
+            String candidate, List<TokenizedName> precomputed) {
+        if (candidate == null || candidate.isEmpty()) return null;
+        if (precomputed == null || precomputed.isEmpty()) return null;
+        List<String> candTokens = tokenizeFunctionName(candidate);
+        if (candTokens.isEmpty()) return null;
+        Set<String> candSet = new HashSet<>(candTokens);
+        String candPrefix = extractModulePrefix(candidate);
+
+        for (TokenizedName entry : precomputed) {
+            if (entry.name.equals(candidate)) continue;
+            if (!Objects.equals(candPrefix, entry.modulePrefix)) continue;
+            if (entry.tokens.isEmpty()) continue;
+            if (candSet.size() != entry.tokens.size()) {
+                if (entry.tokens.containsAll(candSet) || candSet.containsAll(entry.tokens)) {
+                    return entry.name;
+                }
+            }
+        }
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Variable Hungarian notation validation
+    // -----------------------------------------------------------------------
+
+    /** Map of Hungarian prefix -> required type patterns */
+    private static final Map<String, Set<String>> PREFIX_TO_TYPES = Map.ofEntries(
+            Map.entry("b", Set.of("byte", "bool", "uchar", "undefined1")),
+            Map.entry("c", Set.of("char", "byte", "uchar")),
+            Map.entry("f", Set.of("bool", "byte", "BOOL")),
+            Map.entry("n", Set.of("int", "short", "long", "undefined2", "undefined4")),
+            Map.entry("dw", Set.of("uint", "dword", "ulong", "DWORD", "undefined4")),
+            Map.entry("w", Set.of("ushort", "word", "WORD", "undefined2")),
+            Map.entry("l", Set.of("long", "int")),
+            Map.entry("fl", Set.of("float", "undefined4")),
+            Map.entry("d", Set.of("double", "undefined8")),
+            Map.entry("ll", Set.of("longlong", "undefined8")),
+            Map.entry("qw", Set.of("ulonglong", "undefined8")),
+            Map.entry("h", Set.of("HANDLE", "void *", "uint", "dword")),
+            Map.entry("sz", Set.of("char *", "char[", "string")),
+            Map.entry("lpsz", Set.of("char *", "char[", "string")),
+            Map.entry("lpcsz", Set.of("char *", "char[", "string")),
+            Map.entry("wsz", Set.of("wchar_t *", "wchar_t[", "wchar16 *"))
+    );
+
+    /**
+     * Validate that a variable name's Hungarian prefix matches its type.
+     * Returns a warning string if mismatched, null if OK.
+     */
+    public static String validateHungarianPrefix(String name, String typeName) {
+        if (name == null || typeName == null) return null;
+        // Skip auto-generated names (local_*, param_*, *Var*)
+        if (name.startsWith("local_") || name.startsWith("param_") || name.matches(".*Var\\d+")) return null;
+        // Skip phantom/artifact names
+        if (name.startsWith("extraout_") || name.startsWith("in_")) return null;
+
+        boolean isPointer = typeName.contains("*") || typeName.contains("[");
+        String prefix = extractHungarianPrefix(name);
+        if (prefix == null) return null; // No recognizable prefix
+
+        // Pointer prefixes
+        if (prefix.equals("p") || prefix.equals("pp") || prefix.startsWith("p") && Character.isUpperCase(name.charAt(prefix.length()))) {
+            if (prefix.equals("pp")) {
+                if (!typeName.contains("**")) {
+                    return "Variable '" + name + "' has pp prefix (double pointer) but type is '" + typeName + "'";
+                }
+                return null;
+            }
+            // Single pointer prefix (p, pb, pw, pdw, pn)
+            if (!isPointer) {
+                return "Variable '" + name + "' has pointer prefix '" + prefix + "' but type is '" + typeName + "' (not a pointer)";
+            }
+            return null;
+        }
+
+        // Scalar prefixes
+        Set<String> allowedTypes = PREFIX_TO_TYPES.get(prefix);
+        if (allowedTypes != null) {
+            boolean matches = false;
+            for (String allowed : allowedTypes) {
+                if (typeName.startsWith(allowed) || typeName.equals(allowed)) {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches && !isPointer) {
+                return "Variable '" + name + "' has prefix '" + prefix + "' which requires type in " + allowedTypes + " but actual type is '" + typeName + "'";
+            }
+        }
+
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Global naming validation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Validate a global name has g_ prefix with Hungarian notation.
+     */
+    public static List<String> validateGlobalName(String name) {
+        List<String> warnings = new ArrayList<>();
+        if (name == null || name.isEmpty()) return warnings;
+        if (name.startsWith("DAT_") || name.startsWith("s_")) return warnings; // Auto-generated, not validated
+
+        if (!name.startsWith("g_")) {
+            warnings.add("Global '" + name + "' missing g_ prefix. Expected: g_" + name);
+        }
+        return warnings;
+    }
+
+    // -----------------------------------------------------------------------
+    // Label naming validation
+    // -----------------------------------------------------------------------
+
+    private static final Pattern SNAKE_CASE = Pattern.compile("^[a-z][a-z0-9]*(_[a-z0-9]+)*$");
+
+    /**
+     * Validate a label name uses snake_case.
+     */
+    public static List<String> validateLabelName(String name) {
+        List<String> warnings = new ArrayList<>();
+        if (name == null || name.isEmpty()) return warnings;
+        if (name.startsWith("LAB_")) return warnings; // Auto-generated, not validated
+
+        if (!SNAKE_CASE.matcher(name).matches()) {
+            warnings.add("Label '" + name + "' is not snake_case. Expected format: loop_process_items, err_null_pointer");
+        }
+        return warnings;
+    }
+
+    // -----------------------------------------------------------------------
+    // Plate comment structure validation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Validate plate comment has the required sections. Returns list of
+     * warnings (empty = valid).
+     *
+     * <p>Required-section list is driven by the active
+     * {@link ConventionConfig#plateComments()} so a project can replace
+     * the default (Algorithm / Parameters / Returns) with its own format
+     * — or set {@code plate_comments.validate = false} to skip the check
+     * entirely.
+     */
+    public static List<String> validatePlateCommentStructure(String plateComment) {
+        List<String> warnings = new ArrayList<>();
+        if (plateComment == null || plateComment.isEmpty()) return warnings;
+
+        ConventionConfig.PlateCommentRules rules =
+                NamingPolicy.getInstance().getConfig().plateComments();
+        if (!rules.validate()) return warnings;
+
+        String[] lines = plateComment.split("\n");
+        Set<String> present = new java.util.HashSet<>();
+        for (String line : lines) {
+            String trimmed = line.trim();
+            for (String section : rules.requiredSections()) {
+                if (trimmed.equals(section) || trimmed.startsWith(section + ":")) {
+                    present.add(section);
+                }
+            }
+        }
+        for (String section : rules.requiredSections()) {
+            if (!present.contains(section)) {
+                warnings.add("Plate comment missing " + section + " section");
+            }
+        }
+        return warnings;
+    }
+
+    // -----------------------------------------------------------------------
+    // Enum member validation
+    // -----------------------------------------------------------------------
+
+    private static final Pattern UPPER_SNAKE_CASE = Pattern.compile("^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$");
+
+    /**
+     * Validate an enum member name uses UPPERCASE_SNAKE_CASE.
+     */
+    public static List<String> validateEnumMemberName(String name) {
+        List<String> warnings = new ArrayList<>();
+        if (name == null || name.isEmpty()) return warnings;
+
+        if (!UPPER_SNAKE_CASE.matcher(name).matches()) {
+            warnings.add("Enum member '" + name + "' is not UPPERCASE_SNAKE_CASE. Expected format: PLAYER_TYPE, MAX_COUNT");
+        }
+        return warnings;
+    }
+
+    // -----------------------------------------------------------------------
+    // Struct field auto-prefix
+    // -----------------------------------------------------------------------
+
+    /** Type name -> required Hungarian prefix mapping for auto-fix */
+    private static final Map<String, String> TYPE_TO_PREFIX = Map.ofEntries(
+            Map.entry("byte", "b"), Map.entry("uchar", "b"), Map.entry("bool", "f"), Map.entry("BOOL", "f"),
+            Map.entry("char", "c"),
+            Map.entry("int", "n"), Map.entry("short", "n"), Map.entry("long", "n"),
+            Map.entry("uint", "dw"), Map.entry("dword", "dw"), Map.entry("ulong", "dw"), Map.entry("DWORD", "dw"),
+            Map.entry("ushort", "w"), Map.entry("word", "w"), Map.entry("WORD", "w"),
+            Map.entry("float", "fl"),
+            Map.entry("double", "d"),
+            Map.entry("longlong", "ll"),
+            Map.entry("ulonglong", "qw")
+    );
+
+    /**
+     * Auto-fix a struct field name to include the correct Hungarian prefix based on its type.
+     * If the name already has the correct prefix, returns it unchanged.
+     * If the name has no prefix or the wrong prefix, prepends the correct one.
+     *
+     * Examples:
+     *   ("count", "uint") -> "dwCount"
+     *   ("dwCount", "uint") -> "dwCount" (already correct)
+     *   ("next", "void *") -> "pNext"
+     *   ("pNext", "void *") -> "pNext" (already correct)
+     *   ("Field04", "undefined4") -> "dwField04" (undefined4 defaults to dw)
+     */
+    public static String autoFixFieldPrefix(String fieldName, String typeName) {
+        if (fieldName == null || fieldName.isEmpty() || typeName == null) return fieldName;
+
+        // Determine the correct prefix for this type.
+        // Order matters: check the more-specific pointer shapes first so that
+        // a caller-supplied pp/pfn/a prefix is never degraded to bare 'p'.
+        String correctPrefix;
+        boolean isFnPtr = typeName.contains("(*") || typeName.contains("(__");
+        boolean isArray = typeName.contains("[") && !isFnPtr;
+        int ptrDepth = (int) typeName.chars().filter(ch -> ch == '*').count();
+        boolean isPointer = ptrDepth > 0 || isFnPtr || isArray;
+        if (isFnPtr) {
+            correctPrefix = "pfn";
+        } else if (isArray) {
+            correctPrefix = "a";
+        } else if (ptrDepth >= 2) {
+            correctPrefix = "pp";
+        } else if (ptrDepth == 1) {
+            correctPrefix = "p";
+        } else {
+            correctPrefix = TYPE_TO_PREFIX.get(typeName);
+            if (correctPrefix == null) {
+                // undefined4 -> dw, undefined2 -> w, undefined1 -> b
+                if (typeName.equals("undefined4")) correctPrefix = "dw";
+                else if (typeName.equals("undefined2")) correctPrefix = "w";
+                else if (typeName.equals("undefined1")) correctPrefix = "b";
+                else if (typeName.equals("undefined8")) correctPrefix = "qw";
+                else return fieldName; // Unknown type, don't modify
+            }
+        }
+
+        // Early exit: name already starts with the correct prefix followed by uppercase.
+        // This handles prefixes like 'a' that extractHungarianPrefix may not recognize.
+        if (fieldName.startsWith(correctPrefix)
+                && fieldName.length() > correctPrefix.length()
+                && Character.isUpperCase(fieldName.charAt(correctPrefix.length()))) {
+            return fieldName; // Already correct
+        }
+
+        // Check if the field already has the correct prefix (via the extractor)
+        String existingPrefix = extractHungarianPrefix(fieldName);
+        if (existingPrefix != null && existingPrefix.equals(correctPrefix)) {
+            return fieldName; // Already correct
+        }
+
+        // If the caller already supplied a pointer-family prefix that is at least
+        // as specific as what we would derive (e.g. pfnCallback for a function pointer,
+        // ppNext for a double pointer, aItems for an array), keep it unchanged.
+        // We only override when the existing prefix is the generic bare 'p' and the
+        // type warrants something more specific, or when the prefix is genuinely wrong.
+        if (isPointer && existingPrefix != null) {
+            java.util.Set<String> ptrFamily = java.util.Set.of("p", "pp", "pfn", "lp", "ap", "a");
+            if (ptrFamily.contains(existingPrefix) && ptrFamily.contains(correctPrefix)
+                    && !existingPrefix.equals("p")) {
+                // Caller supplied a more-specific pointer-family prefix — don't downgrade it
+                return fieldName;
+            }
+        }
+
+        // Check if field already starts with a different known prefix — strip it first
+        if (existingPrefix != null) {
+            // Wrong prefix — strip it and re-prefix
+            String baseName = fieldName.substring(existingPrefix.length());
+            return correctPrefix + baseName;
+        }
+
+        // No prefix — add one. Capitalize first letter of the name.
+        if (Character.isUpperCase(fieldName.charAt(0))) {
+            return correctPrefix + fieldName;
+        } else {
+            return correctPrefix + Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+        }
+    }
+
+    /**
+     * Apply struct-field naming policy for write endpoints.
+     *
+     * <p>When strict naming enforcement is enabled, preserve the historical
+     * Hungarian auto-prefix behavior. When it is disabled, return the field
+     * name exactly as supplied so non-Hungarian projects can keep their local
+     * convention.
+     */
+    public static String applyStructFieldNamingPolicy(String fieldName, String typeName) {
+        if (!NamingPolicy.getInstance().shouldAutoFixStructFieldPrefixes()) {
+            return fieldName;
+        }
+        return autoFixFieldPrefix(fieldName, typeName);
+    }
+
+    // -----------------------------------------------------------------------
+    // Type validation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Check if a type change is from undefined to undefined (no improvement).
+     */
+    public static boolean isUndefinedToUndefined(String oldType, String newType) {
+        return oldType != null && newType != null
+                && oldType.startsWith("undefined") && newType.startsWith("undefined");
+    }
+
+    /**
+     * Is this Ghidra type name a PLACEHOLDER — a data type that occupies the
+     * address without saying anything about what lives there?
+     *
+     * Two families, not one:
+     *   - {@code undefined}, {@code undefined1/2/4/8} — Ghidra's "some bytes"
+     *   - {@code pointer}, {@code pointer32}, {@code pointer64} — "four bytes
+     *     that are an address", with the pointee left untyped
+     *
+     * The second family was missing until 2026-08-03 and the omission was not
+     * cosmetic. {@code audit_global} reported ZERO issues and
+     * {@code fully_documented: true} for a bare {@code pointer *}, so the
+     * globals worker filed it as `already_clean` and wrote it into the clean
+     * cache — while an external type validator's PLACEHOLDERS set counted the
+     * same global as untyped on a dashboard's types bar. The bar
+     * therefore demanded an action that structurally could not change its own
+     * count: measured on one mod DLL (2 of the 5 it flagged) and ~180 globals
+     * corpus-wide. Two oracles for one question is the bug; this method is the
+     * single Java-side answer; any external validator that mirrors it must keep
+     * the two sets in step.
+     *
+     * Decoration is stripped first: {@code getName()} on a pointer-to-pointer
+     * returns {@code "pointer *"}, and an array of placeholders returns
+     * {@code "undefined4[8]"} — both are still placeholders.
+     */
+    /**
+     * May a data-type application silently clear the symbol named {@code name}
+     * out of existence?
+     *
+     * Applying a type has to clear the bytes it covers, and clearing over
+     * Ghidra's own auto-generated labels (DAT_*, LAB_*, s_*, ...) is normal and
+     * necessary — you cannot lay down a 256-byte array without clearing the
+     * undefined bytes underneath it. Clearing over a global a HUMAN or a worker
+     * named is different: that is documentation being destroyed, and it must be
+     * refused rather than performed quietly.
+     *
+     * The distinction earned its keep on 2026-08-03. {@code set_global} cleared
+     * its whole extent with the exception swallowed, so in one pass over a mod DLL:
+     * a `float10` at 0x10012e18 swallowed `g_dwPosInfBits` at 0x10012e20; a
+     * `byte[256]` at 0x10015179 swallowed `g_abUppercaseCharTbl2_end`; and three
+     * 4-byte slot writes destroyed the 32-slot `g_apfnApiSlots` array they sat
+     * inside. All three had been reported `completed` moments earlier, all three
+     * were cached clean for 7 days, and `/list_globals` reported the SURVIVING
+     * neighbour's type at the dead address — so nothing anywhere showed a loss.
+     */
+    /**
+     * Is this Ghidra's placeholder name for an export that carries no name of
+     * its own — the ordinal-only case?
+     *
+     * The distinction decides whether an exported symbol's NAME is protected.
+     * An export that arrived with a real name in the export name table is a
+     * public ABI contract: `GetFileVersionInfoA`, `NvOptimusEnablement`. The
+     * consuming loader resolves against that exact string, so renaming it to
+     * `g_` + Hungarian form destroys the symbol's identity — measured on
+     * a mod DLL (a `version.dll` proxy) where a globals pass renamed all 12
+     * forwarder exports, one of them to a name for the wrong export entirely.
+     *
+     * An ordinal-only export is the opposite: `Ordinal_10001` carries no
+     * identity worth keeping, and renaming it is a core RE workflow, since many
+     * DLLs export almost everything by ordinal. A
+     * blanket "exports are untouchable" rule would break that outright.
+     */
+    public static boolean isOrdinalExportName(String name) {
+        return name != null && ORDINAL_EXPORT_NAME.matcher(name).matches();
+    }
+
+    private static final java.util.regex.Pattern ORDINAL_EXPORT_NAME =
+            java.util.regex.Pattern.compile("Ordinal_\\d+");
+
+    public static boolean isEvictableSymbolName(String name) {
+        if (name == null || name.isEmpty()) return true;   // unnamed bytes: fine to clear
+        return isAutoGeneratedGlobalName(name);
+    }
+
+    /**
+     * The `type_would_evict` rejection text.
+     *
+     * Deliberately does NOT mention the override parameter. The first version
+     * ended with "re-send with allow_evict=true", and on 2026-08-03 a worker
+     * did exactly that within one turn: `set_global` rejected, the model read
+     * the suggestion, re-sent with the override, and destroyed `g_ldHalf` —
+     * the guard talked the caller through defeating it. An escape hatch is for
+     * a human who has decided the overlap is wrong; it is not a hint to hand
+     * the agent the guard is constraining. The override still exists and still
+     * works; it is simply no longer advertised at the point of refusal.
+     *
+     * `containsCount` / `insideCount` split the advice because the two shapes
+     * need opposite fixes: something covering you means re-type the container,
+     * something inside you means your extent is too long.
+     */
+    public static String evictionSuggestion(int containsCount, int insideCount, int bytesAvailable) {
+        StringBuilder sb = new StringBuilder();
+        if (insideCount > 0) {
+            sb.append("This extent runs over ").append(insideCount)
+              .append(" named global(s) that start inside it");
+            if (bytesAvailable > 0) {
+                sb.append(" — only ").append(bytesAvailable)
+                  .append(" byte(s) are free before the first one");
+            }
+            sb.append(". ");
+        }
+        if (containsCount > 0) {
+            sb.append("This address sits inside an existing named global, and clearing works on "
+                    + "whole code units, so writing here destroys the whole container. Re-type the "
+                    + "container itself instead of a byte range within it. ");
+        }
+        sb.append("If the neighbours are genuinely wrong, fix them explicitly first — do not size "
+                + "a type to whatever gap happens to be free, since that records an extent the "
+                + "data does not support.");
+        return sb.toString();
+    }
+
+    /**
+     * The single explicit element/byte count a plate comment claims, or -1 when
+     * it makes no countable claim (or makes more than one, which is ambiguous).
+     *
+     * This exists to catch a type that records an extent the data does not
+     * support. When `set_global` refuses to evict a neighbour, the easy way out
+     * is to shrink the type until it fits the gap — and on 2026-08-03 that
+     * produced `g_apfnApiSlots : FARPROC[3]`, `issues: []`,
+     * `fully_documented: true`, sitting under a plate that says "Array of 32
+     * FARPROC slots". Three is where the next label happened to sit; it is not
+     * a fact about the binary. The old failure mode destroyed neighbours, the
+     * new one invents boundaries, and both certify clean.
+     *
+     * GUARD-FIRST, like every other contradiction check in this project: a
+     * plate with no count, or with several different counts, yields NO finding.
+     * A false accusation here blocks `fully_documented` on a global that is
+     * fine, which is worse than missing one that is not.
+     */
+    public static long plateStatedCount(String plateComment) {
+        if (plateComment == null || plateComment.isEmpty()) return -1;
+        java.util.LinkedHashSet<Long> found = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher m = PLATE_COUNT.matcher(plateComment);
+        while (m.find()) {
+            String digits = m.group(1) != null ? m.group(1)
+                          : m.group(2) != null ? m.group(2) : m.group(3);
+            if (digits == null) continue;
+            // STRIDE, not extent. "DosmaperrMapEntry[45] (8 bytes each)" and
+            // "uint16[86] (10 rows x 7 cols, 2 bytes each)" both state an
+            // ELEMENT SIZE, and reading it as the array's length produced the
+            // largest remaining false-positive class in calibration (8 vs 45
+            // elements, 2 vs 86). Look just past the match for "each"/"per",
+            // and just before it for "each ... is".
+            String after = plateComment.substring(m.end(),
+                    Math.min(plateComment.length(), m.end() + 12)).toLowerCase().trim();
+            if (after.startsWith("each") || after.startsWith("per")) continue;
+            // Backward look must stay inside the SAME clause. Scanning a flat
+            // 28-char window made "Array of 32 slots, each a 4-byte pointer, 16
+            // entries used" drop the "16 entries" — the "each" belonged to the
+            // previous clause, and suppressing the second count turned an
+            // ambiguous plate (two counts, abstain) into a confident wrong one.
+            String before = plateComment.substring(
+                    Math.max(0, m.start() - 28), m.start()).toLowerCase();
+            int kw = Math.max(before.lastIndexOf("each"), before.lastIndexOf("stride"));
+            if (kw >= 0) {
+                String between = before.substring(kw);
+                if (between.indexOf(',') < 0 && between.indexOf('.') < 0
+                        && between.indexOf(';') < 0 && between.indexOf('\n') < 0) {
+                    continue;
+                }
+            }
+            try {
+                long v = Long.parseLong(digits);
+                if (v > 1) found.add(v);          // "1 entry" carries no information
+            } catch (NumberFormatException ignored) {
+                // not a count we can use
+            }
+        }
+        return found.size() == 1 ? found.iterator().next() : -1;
+    }
+
+    /**
+     * Countable claims: "array of 32", "32 bytes", "32 slots/entries/elements/
+     * items". Deliberately narrow, and the nouns are PLURAL ONLY.
+     *
+     * The singular forms were dropped after calibration: "Part of the Roll 2
+     * entry stride 0x10" parsed as a claim of 2 elements on
+     * `g_dwRoll2AddH`, where the 2 belongs to the proper noun "Roll 2". A
+     * number followed by a singular noun is almost never an extent in English,
+     * and it was a pure false-positive source.
+     */
+    private static final java.util.regex.Pattern PLATE_COUNT = java.util.regex.Pattern.compile(
+            "(?:array\\s+of\\s+(\\d+))"
+          + "|(?:\\b(\\d+)\\s*(?:-|\\s)\\s*bytes?\\b)"
+          + "|(?:\\b(\\d+)\\s+(?:slots|entries|elements|items)\\b)",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Does a plate's stated count contradict the applied type's real extent?
+     *
+     * CALIBRATED against 6,434 live globals across four production DLLs,
+     * because this is a MEDIUM issue — it blocks
+     * `fully_documented` and pulls the worker back to the global, so the
+     * project's guard-first rule applies: a false accusation costs more than a
+     * miss. The first cut fired on 153 globals and hand-review put roughly 40%
+     * of them wrong. Every abstention below removes a measured class:
+     *
+     *   POINTER   `g_pInterpTable : double *` under "128 entries, 0x400 bytes".
+     *             The plate describes the POINTEE. A pointer is 4 bytes and
+     *             always will be; comparing it to the table's extent is a
+     *             category error.
+     *   SENTINEL  `g_awSuperUniquesHcIdxLookupEnd : ushort` under "Loop walks
+     *             66 slots starting from g_awSuperUniquesHcIdxLookup". The
+     *             count describes the array this marks the END of, not this.
+     *   MULTIPLE  `g_dwItemClassBucketCodes : dword[510]` under "Max 255
+     *             entries ... each bucket has 2 DWORDs". 255 x 2 = 510 — the
+     *             plate and the type agree, in different units. Only abstain
+     *             when BOTH sides exceed 1, so an 8-element array still gets
+     *             caught when it is typed as a single byte (length 1 would
+     *             otherwise divide everything).
+     *
+     * What survives is the case this was built for: `g_apfnApiSlots :
+     * FARPROC[3]` under "Array of 32 FARPROC slots" — an extent sized to
+     * whatever gap the eviction guard left free, recorded as fact.
+     */
+    public static boolean plateExtentContradicts(String plateComment, String typeName,
+                                                 String globalName, long elements, long lengthBytes) {
+        long stated = plateStatedCount(plateComment);
+        if (stated <= 0) return false;
+        if (typeName != null && typeName.contains("*")) return false;          // POINTER
+        if (globalName != null) {
+            String n = globalName.toLowerCase();
+            if (n.endsWith("end") || n.endsWith("_end") || n.endsWith("terminator")
+                    || n.endsWith("sentinel")) {
+                return false;                                                  // SENTINEL
+            }
+        }
+        if (stated == elements || stated == lengthBytes) return false;
+        for (long actual : new long[]{elements, lengthBytes}) {                // MULTIPLE
+            if (actual <= 1 || stated <= 1) continue;
+            long hi = Math.max(actual, stated), lo = Math.min(actual, stated);
+            if (hi % lo == 0 && hi / lo <= 16) return false;
+        }
+        return true;
+    }
+
+    public static boolean isPlaceholderTypeName(String typeName) {
+        if (typeName == null) return false;
+        String base = typeName.trim();
+        int cut = base.length();
+        // Strip trailing pointer stars and array dimensions: "pointer *",
+        // "undefined4[8]", "pointer *[4]" all reduce to their base name.
+        for (int i = 0; i < base.length(); i++) {
+            char c = base.charAt(i);
+            if (c == '*' || c == '[' || c == ' ') { cut = i; break; }
+        }
+        base = base.substring(0, cut);
+        if (base.startsWith("undefined")) return true;
+        return base.equals("pointer") || base.equals("pointer32") || base.equals("pointer64");
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /** Extract the first PascalCase word from a name like "GetPlayerHealth" -> "Get" */
+    static String extractFirstPascalWord(String name) {
+        if (name == null || name.isEmpty() || !Character.isUpperCase(name.charAt(0))) return null;
+        StringBuilder word = new StringBuilder();
+        word.append(name.charAt(0));
+        for (int i = 1; i < name.length(); i++) {
+            if (Character.isUpperCase(name.charAt(i))) break;
+            word.append(name.charAt(i));
+        }
+        return word.length() > 1 ? word.toString() : null;
+    }
+
+    /** Extract Hungarian prefix from a variable name like "dwFlags" -> "dw", "pUnit" -> "p" */
+    static String extractHungarianPrefix(String name) {
+        if (name == null || name.length() < 2) return null;
+
+        // Multi-char prefixes first (order matters: longer prefixes before shorter).
+        // ppfn / apfn come BEFORE pp / ap so the longer match wins — e.g.,
+        // g_ppfnCallback resolves as ppfn (pointer-to-function-pointer) and
+        // not as pp (pointer-to-pointer) followed by 'fnCallback'.
+        String[] multiPrefixes = {"lpcsz", "lpsz", "wsz", "ppfn", "apfn", "pp", "pb", "pw",
+                "pdw", "pn", "pfn", "ap", "sz", "dw", "fl", "ll", "qw", "ld",
+                "ab", "aw", "ad", "an"};
+        for (String prefix : multiPrefixes) {
+            if (name.startsWith(prefix) && name.length() > prefix.length()
+                    && Character.isUpperCase(name.charAt(prefix.length()))) {
+                return prefix;
+            }
+        }
+
+        // Single-char prefixes
+        char first = name.charAt(0);
+        if ("bcfnwhld".indexOf(first) >= 0 && name.length() > 1 && Character.isUpperCase(name.charAt(1))) {
+            return String.valueOf(first);
+        }
+
+        // Pointer prefix: p followed by uppercase (pUnit, pGame)
+        if (first == 'p' && name.length() > 1 && Character.isUpperCase(name.charAt(1))) {
+            return "p";
+        }
+
+        // Global prefix: g_ followed by Hungarian
+        if (name.startsWith("g_") && name.length() > 3) {
+            String afterG = name.substring(2);
+            String innerPrefix = extractHungarianPrefix(afterG);
+            return innerPrefix != null ? "g_" + innerPrefix : null;
+        }
+
+        return null;
+    }
+
+    /** Attempt to convert a string to PascalCase */
+    static String toPascalCase(String name) {
+        if (name == null || name.isEmpty()) return name;
+        // Handle underscore-separated (SKILLS_GetLevel -> SkillsGetLevel)
+        StringBuilder result = new StringBuilder();
+        for (String part : name.split("_")) {
+            if (!part.isEmpty()) {
+                result.append(Character.toUpperCase(part.charAt(0)));
+                if (part.length() > 1) result.append(part.substring(1).toLowerCase());
+            }
+        }
+        return result.toString();
+    }
+
+    // -----------------------------------------------------------------------
+    // Global variable name validation (Q4 design — v5.7.0)
+    // -----------------------------------------------------------------------
+    //
+    // Globals must:
+    //   * start with `g_`
+    //   * have a valid Hungarian prefix after `g_` matching the variable's type
+    //   * NOT match auto-generated patterns the model might lazily "rename"
+    //     by stripping the DAT_ / PTR_ prefix without adding semantic content.
+    //
+    // Conservative placeholders (g_dwField1D0, g_pUnk20) are explicitly
+    // allowed — they mirror the project's underclaim-with-placeholder
+    // convention from CLAUDE.md.
+
+    private static final Pattern AUTO_GLOBAL_NAME = Pattern.compile(
+            "^g_(?:DAT|PTR|FUN|LAB|SUB)_.*|^g_[a-zA-Z]{1,4}_?[0-9a-fA-F]{6,}$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    private static final Pattern AUTO_GENERATED_GLOBAL = Pattern.compile(
+            "^(?:DAT|PTR|UNK|LAB|FLOAT|DOUBLE|UINT|UNDEFINED|s)_[0-9a-fA-F]+(?:\\.[0-9a-fA-F]+)*$"
+                    + "|^PTR_DAT_[0-9a-fA-F]+$"
+                    + "|^PTR_(?:FUN|LAB)_[0-9a-fA-F]+$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    // Ghidra string labels: s_<text>_<addr> / u_<text>_<addr>. The text segment
+    // can contain any non-space chars; the trailing component is a 6+ hex-digit
+    // address. Without this branch every defined-string global is mis-flagged
+    // as user-named and hits the missing-g_-prefix audit.
+    private static final Pattern STRING_LABEL =
+            Pattern.compile("^[su]_.*_[0-9a-fA-F]{6,}$");
+
+    /**
+     * Whether {@code name} is an auto-generated global symbol Ghidra produced
+     * (DAT_xxx, PTR_DAT_xxx, LAB_xxx, UNDEFINED_xxx, s_xxx, u_xxx, etc.). These are
+     * exempt from {@link #checkGlobalNameQuality} — they get the
+     * unrenamed_globals deduction at the scoring layer instead.
+     */
+    public static boolean isAutoGeneratedGlobalName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        if (STRING_LABEL.matcher(name).matches()) return true;
+        return AUTO_GENERATED_GLOBAL.matcher(name).matches();
+    }
+
+    /**
+     * Names that come straight from Windows OS-defined symbols
+     * (TIB / TEB / PEB / KUSER_SHARED_DATA members). These are *exempt*
+     * from the global-name validator because Microsoft's name IS the
+     * canonical convention; renaming them to {@code g_*} form is wrong.
+     * Match is case-insensitive. List is intentionally narrow — only
+     * symbols Ghidra's PE loader applies automatically. User-defined
+     * names that happen to collide with these are vanishingly rare.
+     */
+    private static final Set<String> OS_CANONICAL_GLOBAL_NAMES = Set.of(
+            // NT_TIB / TEB members
+            "exceptionlist", "stackbase", "stacklimit", "subsystemtib",
+            "fiberdata", "arbitraryuserpointer", "self", "environmentpointer",
+            "clientid", "activerpchandle", "threadlocalstoragepointer",
+            "processenvironmentblock", "lastcomstatus", "tlsslots",
+            "vdm", "reservedforntrpc", "instrumentationcallback",
+            // KUSER_SHARED_DATA fields commonly seen at 0x7ffe****
+            "kuser_shared_data", "interrupttime", "systemtime",
+            "tickcountmultiplier", "ntmajorversion", "ntminorversion"
+    );
+
+    /**
+     * Whether {@code name} is an OS-canonical global label that should
+     * be exempt from the global-name validator (TIB/PEB/KUSER members
+     * applied by Ghidra's PE loader). The audit reports zero issues
+     * for these so the worker doesn't try to "fix" them — Microsoft's
+     * name IS the canonical convention.
+     */
+    public static boolean isOsCanonicalGlobalName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        return OS_CANONICAL_GLOBAL_NAMES.contains(name.toLowerCase());
+    }
+
+    // -----------------------------------------------------------------------
+    // Generic-descriptor + IDA-reserved-prefix detection (v5.7.x soft issues)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Common-words list + gibberish guard for the soft `generic_descriptor`
+     * issue. These are descriptors that pass the Hungarian + length checks
+     * but tell the reader nothing about the global's purpose. Match is
+     * case-insensitive on the descriptor part of the name.
+     *
+     * Per design Q3=C: includes both the genuine common-words bucket
+     * (Data, Buffer, Status, Result, etc.) and the gibberish bucket
+     * (Foo, Bar, Test, Sample) that catches model hallucinations.
+     */
+    private static final Set<String> GENERIC_DESCRIPTORS = Set.of(
+            // Common-words bucket — likely-generic English nouns that
+            // appear as descriptors with no specific meaning.
+            "data", "buffer", "flag", "value", "count", "index",
+            "ptr", "field", "var", "tmp", "result", "status", "info",
+            "object", "item", "entry", "element", "node", "handle", "context",
+            // Gibberish bucket — virtually never appear in legitimate RE
+            // names; catch model hallucinations cleanly.
+            "foo", "bar", "baz", "qux", "thing", "stuff",
+            "x", "y", "z", "test", "sample", "demo"
+    );
+
+    /**
+     * Pattern recognizing the "underclaim with placeholder" convention
+     * documented in step-globals.md / CLAUDE.md — names like
+     * `g_dwField1D0`, `g_pUnk20`, `g_nValue04` are explicitly *correct*
+     * when the global's semantic role is uncertain. Only the canonical
+     * placeholder descriptors (`Field`, `Unk`, `Unknown`, `Value`, `Var`,
+     * `Sub`) followed by ≥2 hex characters qualify; arbitrary words
+     * with digit suffixes (e.g., `Buffer42`) do NOT — those are still
+     * generic descriptors, just with a number tacked on.
+     */
+    private static final Pattern PLACEHOLDER_DESCRIPTOR = Pattern.compile(
+            "^(?:Field|Unk|Unknown|Value|Var|Sub)[0-9a-fA-F]{2,}$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * Whether the descriptor portion of a name (after `g_` and the
+     * Hungarian prefix have been stripped) is a low-information generic
+     * word. Returns false for accepted placeholder patterns
+     * (`Field1D0`, `Unk20`, `Value04`). Soft signal — drives the
+     * `generic_descriptor` issue at audit time but doesn't block writes.
+     */
+    public static boolean isGenericDescriptor(String descriptor) {
+        if (descriptor == null || descriptor.isEmpty()) return false;
+        // Placeholder convention exempt — Field1D0 / Unk20 / Value04 etc.
+        if (PLACEHOLDER_DESCRIPTOR.matcher(descriptor).matches()) {
+            return false;
+        }
+        // Strip trailing digits (Flag1, Buffer3, Tmp42) so the underlying
+        // word is checked. The placeholder pattern above requires ≥2 hex
+        // digits which is what saves Field1D0; here we match a single
+        // trailing run of any digits.
+        String trimmed = descriptor.replaceAll("[0-9]+$", "");
+        return GENERIC_DESCRIPTORS.contains(trimmed.toLowerCase());
+    }
+
+    /**
+     * IDA Pro / Hex-Rays reserved auto-name prefixes (per Igor's tip #34).
+     * Reusing these in a user-defined global name destroys downstream
+     * tools' ability to recognize "untouched" symbols. Hard issue.
+     */
+    private static final Set<String> IDA_RESERVED_PREFIXES = Set.of(
+            "sub_", "loc_", "off_", "byte_", "word_", "dword_", "qword_",
+            "flt_", "dbl_", "stru_", "unk_", "var_", "arg_"
+    );
+
+    /** Whether {@code name} starts with an IDA reserved auto-name prefix. */
+    public static boolean hasIdaReservedPrefix(String name) {
+        if (name == null || name.isEmpty()) return false;
+        String lower = name.toLowerCase();
+        for (String p : IDA_RESERVED_PREFIXES) {
+            if (lower.startsWith(p)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Plate-comment quality rule for globals (v5.7.0 / Q6 design).
+     *
+     * Returns null when the comment passes ("ok"); returns a structured
+     * pair (issue, message) when it fails. Exposed as a separate static
+     * helper so DataTypeService.set_global and the matching offline
+     * NamingConventionsTest share the same rule and can't drift apart.
+     *
+     * Rule: when a plate comment is provided, its first non-empty line
+     * must be a meaningful one-line summary — at least 4 whitespace-
+     * separated words. Empty/null comments are accepted (caller decides
+     * whether the absence is itself an error).
+     *
+     * Returns {@code null} when ok, or a 2-element String[] {issue, firstLine}
+     * when the rule fails. issue is one of:
+     *   * "plate_comment_too_short" — fewer than 4 words on the first line
+     */
+    public static String[] checkGlobalPlateComment(String plateComment) {
+        if (plateComment == null) return null;
+        ConventionConfig.PlateCommentRules rules =
+                NamingPolicy.getInstance().getConfig().plateComments();
+        // Project disabled plate-comment validation entirely — accept
+        // anything. (Previously this gate was always-on; v5.11.2 adds the
+        // toggle so non-Algorithm/Parameters/Returns formats can ship.)
+        if (!rules.validate()) return null;
+        String trimmed = plateComment.trim();
+        if (trimmed.isEmpty()) return null;
+        String firstLine = trimmed.split("\n", 2)[0].trim();
+        if (firstLine.isEmpty()) {
+            return new String[]{"plate_comment_too_short", firstLine};
+        }
+        // split("\\s+") on a non-empty trimmed string returns ≥1 token.
+        int wordCount = firstLine.split("\\s+").length;
+        if (wordCount < rules.minFirstLineWords()) {
+            return new String[]{"plate_comment_too_short", firstLine};
+        }
+        return null;
+    }
+
+    /**
+     * Listing-column clip threshold for plate-comment lines. Ghidra's
+     * default pre-comment column is ~80 chars; lines past this get
+     * truncated with an ellipsis in the listing view, so an unwrapped
+     * `Set by: A, B, C, ... 19 names` displays as `Set by: A, B, Pro.`
+     * even though the stored text is intact. We use 80 as the audit
+     * threshold so the plate-comment is still readable in the most
+     * common reading surface; the prompt asks workers to wrap at 70 to
+     * give a safety margin.
+     */
+    public static final int PLATE_LINE_CLIP_THRESHOLD = 80;
+
+    /**
+     * Length of the longest line in a plate comment (counted by
+     * character count, not display width — tabs count as one). Empty
+     * or null comments return 0.
+     *
+     * <p>Exposed as a static helper so the audit
+     * ({@code DataTypeService.auditGlobalAt}) and any future call site
+     * share the rule without duplicating the line-walk. Callers compare
+     * against {@link #PLATE_LINE_CLIP_THRESHOLD} to decide whether to
+     * surface the soft {@code plate_line_too_long} issue.
+     */
+    public static int longestPlateLineLength(String plateComment) {
+        if (plateComment == null || plateComment.isEmpty()) return 0;
+        int max = 0;
+        for (String line : plateComment.split("\n", -1)) {
+            if (line.length() > max) max = line.length();
+        }
+        return max;
+    }
+
+    /** Structured result from {@link #checkGlobalNameQuality(String, String)}. */
+    public static final class GlobalNameResult {
+        public final boolean ok;
+        public final String issue;
+        public final String message;
+        public final String suggestion;
+
+        private GlobalNameResult(boolean ok, String issue, String message, String suggestion) {
+            this.ok = ok;
+            this.issue = issue;
+            this.message = message;
+            this.suggestion = suggestion;
+        }
+
+        public static GlobalNameResult ok() {
+            return new GlobalNameResult(true, null, null, null);
+        }
+
+        public static GlobalNameResult reject(String issue, String message, String suggestion) {
+            return new GlobalNameResult(false, issue, message, suggestion);
+        }
+    }
+
+    /**
+     * Validate a global variable name against project conventions.
+     * Returns ok() when the name passes; reject() with a structured error
+     * when it fails. typeName may be null when the type isn't known yet —
+     * Hungarian-vs-type checking is skipped in that case.
+     *
+     * Rules:
+     *   * `g_` prefix required
+     *   * after `g_`, a valid Hungarian prefix that matches typeName (when typeName supplied)
+     *   * ≥2 chars of descriptor after the Hungarian prefix
+     *   * not matching `g_DAT_*`, `g_PTR_*`, `g_FUN_*`, `g_LAB_*`, `g_SUB_*`,
+     *     or `g_<prefix>_<hex>` (auto-generated remnant) — these are
+     *     "renamed" but content-free.
+     *
+     * Auto-generated globals (DAT_xxx, PTR_DAT_xxx, etc.) are exempt — they
+     * get the unrenamed_globals deduction at the scoring layer instead.
+     */
+    public static GlobalNameResult checkGlobalNameQuality(String name, String typeName) {
+        if (name == null || name.isEmpty()) return GlobalNameResult.ok();
+        ConventionConfig.GlobalNamingRules globalRules =
+                NamingPolicy.getInstance().getConfig().globalNaming();
+        // Project disabled global-name validation entirely. Accept any
+        // identifier and let the scoring layer surface low-quality names
+        // through other signals.
+        if (!globalRules.validate()) return GlobalNameResult.ok();
+        // Auto-generated symbols (DAT_xxx, PTR_DAT_xxx, etc.) are exempt —
+        // they get the unrenamed_globals deduction at the scoring layer.
+        if (isAutoGeneratedGlobalName(name)) return GlobalNameResult.ok();
+        if (ServiceUtils.isAutoGeneratedName(name)) return GlobalNameResult.ok();
+        // OS-canonical labels (TIB/PEB/KUSER members) are exempt — Microsoft's
+        // name IS the canonical convention; renaming them to g_* form would
+        // be a regression. Without this exemption every globals worker run
+        // burned ~50 provider calls confirming-and-skipping these labels.
+        if (isOsCanonicalGlobalName(name)) return GlobalNameResult.ok();
+
+        if (globalRules.requireGPrefix() && !name.startsWith("g_")) {
+            return GlobalNameResult.reject(
+                    "missing_g_prefix",
+                    "Global '" + name + "' must start with 'g_' per project convention.",
+                    "Prepend 'g_' followed by the Hungarian type prefix and a descriptive name. "
+                            + "Example: g_dwActiveQuestState, g_pUnitList, g_szPlayerName."
+            );
+        }
+        // When the g_ prefix is NOT required by config, downstream Hungarian
+        // checks below still need a stripped name. Treat the whole identifier
+        // as "after g_" in that case.
+        if (!globalRules.requireGPrefix() && !name.startsWith("g_")) {
+            // Skip the g_-prefix-specific structural checks; the rest of the
+            // validator assumes g_-prefixed input. A project that opted out of
+            // the g_ requirement gets a more permissive accept here.
+            return GlobalNameResult.ok();
+        }
+
+        if (AUTO_GLOBAL_NAME.matcher(name).matches()) {
+            return GlobalNameResult.reject(
+                    "auto_generated_remnant",
+                    "Global name '" + name + "' looks auto-generated — it matches DAT_/PTR_/FUN_/LAB_/SUB_ "
+                            + "or <hex>-suffix patterns. Stripping the auto-generated prefix isn't enough; "
+                            + "the name needs a meaningful descriptor.",
+                    "Replace with a name describing what the global represents. "
+                            + "Example: g_pUnitList instead of g_PTR_DAT_6fdf64d8."
+            );
+        }
+
+        // Strip g_ then validate Hungarian on the remainder.
+        String afterG = name.substring(2);
+        if (afterG.isEmpty()) {
+            return GlobalNameResult.reject(
+                    "empty_after_prefix",
+                    "Global name '" + name + "' has no content after 'g_'.",
+                    "Add a Hungarian prefix matching the type plus a descriptive name."
+            );
+        }
+
+        String hungarian = extractHungarianPrefix(afterG);
+        if (hungarian == null) {
+            return GlobalNameResult.reject(
+                    "missing_hungarian_prefix",
+                    "Global '" + name + "' has no recognized Hungarian prefix after 'g_' (got '"
+                            + afterG + "').",
+                    "Add a Hungarian prefix matching the type: dw/uint, n/int, p/ptr, sz/char*, "
+                            + "ab/byte[], pfn/func_ptr. Example: g_" + (afterG.length() > 0 && Character.isUpperCase(afterG.charAt(0)) ? "dw" + afterG : afterG)
+            );
+        }
+
+        // Descriptor part = after Hungarian prefix.
+        // extractHungarianPrefix only succeeds when the next char is uppercase,
+        // so we know descriptor starts with an uppercase letter — no need to
+        // check that explicitly. Just verify the descriptor is long enough.
+        String descriptor = afterG.substring(hungarian.length());
+        int minDescriptor = globalRules.minDescriptorLength();
+        if (descriptor.length() < minDescriptor) {
+            return GlobalNameResult.reject(
+                    "short_descriptor",
+                    "Global '" + name + "' has only a " + descriptor.length() + "-char descriptor after "
+                            + "Hungarian prefix '" + hungarian + "'.",
+                    "Provide ≥" + minDescriptor + " chars of descriptor explaining what the global represents."
+            );
+        }
+
+        // Hungarian-vs-type consistency. Reuses the existing variable validator.
+        if (typeName != null && !typeName.isEmpty()) {
+            String hungarianMismatch = validateHungarianPrefix(afterG, typeName);
+            if (hungarianMismatch != null) {
+                // Pointer-prefix-with-non-pointer-type is the dominant
+                // friction in production logs: model passes type_name like
+                // "DialogResource" with name "g_pDialogX" expecting the
+                // validator to infer pointer-ness from the struct name.
+                // The validator's pointer check is purely string-based
+                // (typeName.contains("*") || typeName.contains("[")), so
+                // the literal asterisk is required. Surface that
+                // explicitly when it's the obvious fix.
+                boolean typeIsPointer = typeName.contains("*") || typeName.contains("[");
+                boolean prefixWantsPointer = hungarian.equals("p") || hungarian.equals("pp")
+                        || hungarian.equals("pb") || hungarian.equals("pw")
+                        || hungarian.equals("pdw") || hungarian.equals("pn")
+                        || hungarian.equals("pfn") || hungarian.equals("ppfn");
+                String suggestion;
+                if (prefixWantsPointer && !typeIsPointer) {
+                    String pointerType = hungarian.equals("pp") || hungarian.equals("ppfn")
+                            ? typeName + " **"
+                            : typeName + " *";
+                    suggestion = "Prefix '" + hungarian + "' expects a pointer type. "
+                            + "Pass type_name=\"" + pointerType + "\" (with the asterisk) — "
+                            + "the DataTypeManager will resolve it to a pointer-to-" + typeName + ". "
+                            + "Or rename the global without the pointer prefix if it isn't a pointer.";
+                } else {
+                    suggestion = "Either rename the global with a Hungarian prefix that matches '" + typeName
+                            + "', or correct the type so it matches the prefix.";
+                }
+                return GlobalNameResult.reject(
+                        "prefix_type_mismatch",
+                        "Global '" + name + "' Hungarian prefix '" + hungarian + "' doesn't match type '" + typeName + "'.",
+                        suggestion
+                );
+            }
+        }
+
+        return GlobalNameResult.ok();
+    }
+}

@@ -1,0 +1,276 @@
+# Release Checklist
+
+Use this checklist when preparing a stable release or pre-release. It is written
+for humans working with Claude Code, Codex, or another coding agent: keep the
+agent focused on one phase at a time, make it show command results, and do not
+let it tag or publish until the verification gates are complete.
+
+## Release Owner Rules
+
+- Keep this file as the canonical release checklist.
+- Keep `CLAUDE.md` and `AGENTS.md` as short pointers to this file, not full
+  copies of the runbook.
+- Use `python -m tools.setup bump-version --new X.Y.Z` for version changes.
+- Do not create a release tag until the release branch is merged to `main` or
+  the release workflow is intentionally creating the tag from the selected
+  branch.
+- Do not run deploy/live regression from an agent session without confirming
+  the current Ghidra UI state when modal dialogs may be present.
+
+## 1. Decide Version Scope
+
+- [ ] Identify the release type:
+  - Patch: bug fixes only, no new behavior.
+  - Minor: backward-compatible features, new endpoints, new tests, workflow
+    improvements.
+  - Major: breaking endpoint behavior, removed tools, or incompatible config.
+- [ ] Confirm the target version does not already exist as a tag:
+
+```text
+git tag --list "v*" --sort=-v:refname
+```
+
+- [ ] Update the version:
+
+```text
+python -m tools.setup bump-version --new X.Y.Z
+```
+
+- [ ] Verify version consistency:
+
+```text
+python -m tools.setup verify-version
+```
+
+## 2. Documentation and Metadata
+
+- [ ] Update `CHANGELOG.md` with a new top entry for the release.
+- [ ] Update `docs/releases/README.md` so the latest release summary is current.
+- [ ] Update user-facing docs for any changed commands, defaults, side effects,
+  endpoints, or environment variables.
+- [ ] Confirm `README.md` examples and version references are current.
+- [ ] If endpoint annotations changed, update `tests/endpoints.json`.
+- [ ] If the release removes or renames a tool, name it with its replacement in
+  `docs/project-management/MIGRATION_7.0.0_TOOL_CONSOLIDATION.md` (or the
+  release's own migration guide). `test_migration_guide_coverage.py` fails on a
+  removed tool the guide does not name, and
+  `test_migration_guide_successors.py` on a successor the catalog lacks.
+
+For agent-assisted releases, ask the agent to search for stale version and tool
+count references before committing:
+
+```text
+rg -n "OLD_VERSION|NEW_VERSION|MCP Tools|GUI Endpoints|Headless Endpoints|total_endpoints" README.md CHANGELOG.md docs tests src pom.xml
+```
+
+## 3. Local Verification
+
+Run the cheap gates before any live Ghidra work:
+
+```text
+./gradlew preflight      "-PGHIDRA_INSTALL_DIR=F:/ghidra_12.1.4_PUBLIC"
+./gradlew buildExtension "-PGHIDRA_INSTALL_DIR=F:/ghidra_12.1.4_PUBLIC"
+uv build                                  # build the ghidra-mcp-bridge wheel (-> dist/)
+uv run pytest tests/unit/ -v --no-cov
+git diff --check
+git diff --cached --check
+```
+
+Gradle is the default backend. The Maven equivalents
+(`python -m tools.setup preflight --ghidra-path ...` /
+`python -m tools.setup build`) still work and are what CI runs, but they need
+Maven on PATH and Ghidra's jars installed into the local repository first.
+
+`bump-version` keeps `pyproject.toml` (the wheel version) and the
+`python/bridge_mcp_ghidra/__init__.py` `__version__` fallback in lockstep with
+`pom.xml`; `test_project_consistency.py::test_pyproject_version_matches_pom`
+guards the wheel version, and CI builds + attaches
+`ghidra_mcp_bridge-X.Y.Z-py3-none-any.whl` as the release asset (the raw
+bridge script is no longer shipped).
+
+For setup/version/catalog changes, also run:
+
+```text
+pytest tests/unit/test_version_bump.py tests/unit/test_endpoint_catalog.py tests/unit/test_setup_cli.py tests/unit/test_setup_ghidra.py -v --no-cov
+pytest tests/unit/test_published_counts.py tests/unit/test_audit_server_scope.py tests/unit/test_migration_guide_coverage.py tests/unit/test_migration_guide_successors.py tests/unit/test_release_evidence.py -v --no-cov
+```
+
+The second line pins every published tool count to the catalog, the catalog's
+`servers` field to the two servers' wiring, and the migration guide to the
+removed tools; `uv run pytest tests/unit/` already includes all of them.
+
+For Java endpoint/catalog changes, run the offline Java scanner/parity tests:
+
+```text
+./gradlew test --tests 'com.xebyte.offline.*' "-PGHIDRA_INSTALL_DIR=F:/ghidra_12.1.4_PUBLIC"
+```
+
+Under Maven the Ghidra JARs must be in the local repository first, or dependency
+resolution fails before any test runs. Gradle needs no such step:
+
+```text
+python -m tools.setup install-ghidra-deps --ghidra-path "F:\ghidra_12.1.4_PUBLIC"
+mvn test -Dtest='com.xebyte.offline.*Test'
+```
+
+If `EndpointsJsonParityTest` fails, `tests/endpoints.json` is stale. Regenerate
+it, re-stamp the `servers` field, then refresh the generated README API section
+it feeds.
+
+**The regenerator needs Maven and has no Gradle form** — Gradle can select the
+class but cannot pass `-Dregenerate=true` into the forked test JVM, so it exits
+BUILD SUCCESSFUL having regenerated nothing. If Maven is not available, the
+catalog cannot be regenerated on this machine; get Maven, or regenerate
+elsewhere.
+
+```text
+mvn test -Dtest=RegenerateEndpointsJson -Dregenerate=true   # Maven only
+python -m tools.audit_server_scope --write
+python -m tools.gen_readme_api_reference --write
+```
+
+## 4. Live Ghidra Regression
+
+Live regression is required before merging risky deploy, GUI plugin, debugger,
+benchmark, or endpoint behavior changes.
+
+The `release` tier imports the benchmark fixture from
+`tests/fixtures/benchmark/` into the active Ghidra project at
+`/testing/benchmark/`. The fixture is committed and generated rather than
+compiled, so no toolchain is needed — but confirm it is intact before spending a
+build and a Ghidra restart on discovering otherwise:
+
+```text
+python tests/fixtures/benchmark/make_fixture.py --check
+```
+
+- [ ] Confirm the current Ghidra UI has no blocking modal dialogs.
+- [ ] Run the release-grade deploy regression:
+
+```text
+python -m tools.setup deploy --ghidra-path "F:\ghidra_12.1.4_PUBLIC" --test release
+```
+
+- [ ] Record whether the release regression passed, **and read its last line**.
+  It ends `Debugger live test: ran` or `Debugger live test: SKIPPED (<reason>)`.
+  A skip is tolerated by design — the tier needs a dbgeng backend and
+  `ghidratrace` in the launcher's Python — but it is a hole in the run, not a
+  pass, and it should be recorded as one.
+- [ ] If the run required manual dialog intervention, document the popup and
+  decide whether the deploy/prompt-policy automation needs another fix before
+  release.
+- [ ] **Commit the evidence file the run wrote.** A passing `--test release`
+  writes `docs/releases/live-regression-evidence.json`, and `release.yml` /
+  `pre-release.yml` refuse to publish without it:
+
+```text
+git add docs/releases/live-regression-evidence.json
+python -m tools.release_evidence verify --version <the version being released>
+```
+
+For a pre-release the evidence carries the base version: `pre-release.yml`
+verifies `7.0.0` for `7.0.0-rc.2` (it strips everything from the first `-`).
+`python -m tools.release_evidence show` prints what was recorded, and
+`python -m tools.release_evidence fingerprint` the fingerprint of the tree as
+it stands, so a mismatch can be diagnosed before CI reports it.
+
+> **Why the publish gate reads a committed file rather than running the tier.**
+> Until now `release.yml` accepted
+> `needs.release-regression.result == 'skipped'`, and on a **tag push** that job
+> is *always* skipped — its own `if` requires `workflow_dispatch`. So the gate
+> had never blocked a tagged release and could not. It cannot simply be made to
+> run either: the tier needs a live Ghidra GUI on Windows and targets
+> `[self-hosted, Windows]`, and **no self-hosted runner is registered** — a
+> deliberate choice, because on a public repo labelling a fork PR would run a
+> stranger's code on the maintainer's machine.
+>
+> The evidence file records a **source fingerprint**, not a timestamp: the git
+> blob ids of everything under `src/main/java`, `python/bridge_mcp_ghidra`,
+> `tools/setup`, `tests/fixtures/benchmark`, `tests/endpoints.json`, `pom.xml`
+> and `build.gradle`. Change any of them after the run and the release fails
+> until the tier is re-run. Change the CHANGELOG or a doc and it does not — the
+> gate has to survive writing the release notes, or people route around it.
+
+<!-- -->
+
+> **This gate was dead from 2026-08-10 to 2026-08-31.** `fun-doc/` moved to
+> `d2-game-exe` and took the `Benchmark.dll` fixture with it, so `release` and
+> five other tiers raised in `reset_benchmark_fixture()` before running a single
+> assertion. If this section ever stops being satisfiable again, say so in the
+> release notes rather than substituting a tier that does not test the same
+> thing: `endpoint-catalog` and `selected-contract` check that endpoints are
+> *registered*, and never touch a program.
+
+## 5. Commit and Pull Request
+
+- [ ] Review staged files:
+
+```text
+git status --short --branch
+git diff --cached --stat
+git diff --cached --check
+```
+
+- [ ] Commit with a release-appropriate message.
+- [ ] Push the branch.
+- [ ] Open or update the PR with:
+  - Version number.
+  - Summary of user-facing changes.
+  - Tests run and live regression result.
+  - Known risks or intentionally deferred items.
+- [ ] Confirm GitHub `tests.yml` checks pass.
+- [ ] For high-risk Ghidra changes, add the `live-ghidra-regression` PR label
+  if a self-hosted runner is available.
+
+## 6. Merge and Publish
+
+- [ ] Merge the PR to `main`.
+- [ ] Confirm `main` contains the intended version:
+
+```text
+git fetch origin
+git checkout main
+git pull --ff-only
+python -m tools.setup verify-version
+```
+
+- [ ] Publish using the GitHub **Create Release** workflow, or create/push an
+  annotated tag and let `release.yml` run:
+
+```text
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+- [ ] **For a pre-release** (`X.Y.Z-rc.N`), run the **Create Pre-Release**
+  workflow (`pre-release.yml`, `workflow_dispatch`) with the version and the
+  branch to build from; it creates and pushes the `vX.Y.Z-rc.N` tag itself and
+  marks the GitHub release as a pre-release. Do not push an rc tag by hand:
+  `release.yml` triggers on `v*.*.*`, which an rc tag also matches, and would
+  publish it as a full release.
+
+- [ ] Enable `run_live_regression` in the release workflow **only** if a
+  self-hosted Windows runner is available — today none is registered, so the
+  committed evidence file from section 4 is the gate. It calls
+  `release-regression.yml` with
+  `test_tier: release`, which works again as of 2026-08-31.
+- [ ] Verify release assets include `GhidraMCP-X.Y.Z.zip` and
+  `ghidra_mcp_bridge-X.Y.Z-py3-none-any.whl`.
+- [ ] Download the release ZIP and sanity-check that it installs or at least
+  contains the expected extension payload.
+
+## 7. Post-Release
+
+- [ ] Confirm GitHub release notes are accurate.
+- [ ] Confirm the latest release badge points at the new release.
+- [ ] Close or update issues/PRs covered by the release.
+- [ ] If the release exposed follow-up work, create issues before moving on.
+
+## Agent Usage Notes
+
+- Ask the agent to execute one checklist phase at a time.
+- Require exact command results in the final PR/release summary.
+- Keep secrets, local `.env`, and generated runtime reports out of commits.
+- Prefer deterministic repo tools over hand editing version metadata.
+- For UI-touching Ghidra actions, pause for a screenshot/checkpoint if the
+  agent cannot inspect the Ghidra window directly.

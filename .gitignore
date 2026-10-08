@@ -1,0 +1,539 @@
+# =============================================================================
+# PRODUCTION BUILD ARTIFACTS
+# =============================================================================
+
+# Maven target directory and build artifacts
+/target/
+# Gradle build cache
+/.gradle/
+*.jar
+!/gradle/wrapper/gradle-wrapper.jar
+*.zip
+*.war
+*.ear
+*.nar
+
+# Compiled class files
+*.class
+
+# Build directories
+/build/
+/out/
+/dist/
+
+# =============================================================================
+# PYTHON ENVIRONMENT AND CACHE
+# =============================================================================
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+
+# Python distribution / packaging
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# =============================================================================
+# TESTING AND DEVELOPMENT
+# =============================================================================
+
+# Test artifacts
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.benchmarks/
+htmlcov/
+.nyc_output
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Test reports and logs
+test-results/
+test-reports/
+*.xml
+*.html
+
+# =============================================================================
+# LOGS AND RUNTIME FILES
+# =============================================================================
+
+# Application logs
+*.log
+# The tracked logs/ directory was removed in 7.0.0; anything a tool still
+# writes there is local output.
+logs/
+
+# Runtime and temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+._.DS_Store
+.Trashes
+.fuse_hidden*
+
+# =============================================================================
+# IDE AND EDITOR FILES
+# =============================================================================
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse
+.project
+.classpath
+.settings/
+.metadata/
+bin/
+tmp/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# SYSTEM FILES
+# =============================================================================
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.fseventsd
+.TemporaryItems
+.apdisk
+
+# Linux
+*~
+.directory
+.fuse_hidden*
+.nfs*
+
+# =============================================================================
+# ENVIRONMENT AND CONFIGURATION
+# =============================================================================
+
+# Environment files
+.env
+.env.*
+!.env.template
+.envrc
+
+# Configuration overrides
+config/local.properties
+application-local.yml
+application-local.yaml
+
+# =============================================================================
+# SECURITY AND SENSITIVE DATA
+# =============================================================================
+
+# Keys and certificates
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+private/
+.ghidra-cred
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+# SQLite sidecars (WAL mode produces -shm + -wal; rollback-journal mode produces -journal).
+# These are session-scoped runtime artifacts; the canonical state lives in the .db itself.
+*.db-shm
+*.db-wal
+*.db-journal
+
+# =============================================================================
+# MAVEN AND JAVA
+# =============================================================================
+
+# Maven Wrapper
+.mvn/
+!/.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+mvnw
+mvnw.cmd
+
+# Java crash logs
+hs_err_pid*
+replay_pid*
+
+# =============================================================================
+# GHIDRA SPECIFIC
+# =============================================================================
+
+# Ghidra project files
+*.gpr
+*.rep/
+*.lock
+# ...but the uv dependency lockfile is intentionally committed.
+!uv.lock
+
+# Ghidra analysis files
+*.gzf
+
+# =============================================================================
+# DEPLOYMENT AND PRODUCTION
+# =============================================================================
+
+# Deployment artifacts
+deploy/
+release/
+staging/
+
+# Docker
+.dockerignore
+Dockerfile.local
+docker-compose.override.yml
+
+# Kubernetes
+*.local.yaml
+*.local.yml
+
+# Cloud provider configs
+.aws/
+.azure/
+.gcp/
+
+# =============================================================================
+# DOCUMENTATION GENERATION
+# =============================================================================
+
+# Generated documentation
+docs/_build/
+docs/build/
+site/
+.mkdocs/
+
+# =============================================================================
+# NODE.JS (if used for tooling)
+# =============================================================================
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# =============================================================================
+# PROJECT SPECIFIC EXCLUSIONS
+# =============================================================================
+
+# Third party JAR files from Ghidra
+lib/*.jar
+
+# Temporary development files
+*.backup
+*.bak
+*.orig
+*.rej
+.merge_file_*
+*.txt
+
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.rar
+*.tar
+*.zip
+
+# Runtime configuration
+.claude/
+.benchmarks/
+
+# Migration and temporary scripts
+migrate_*.py.bak
+*_backup.*
+temp_*
+
+# Test outputs and reports
+test_output/
+test-output/
+allure-results/
+allure-report/
+junit/
+reports/
+live-all-mcp-tools-report.json
+
+# Performance and profiling
+*.prof
+*.trace
+*.mem
+
+# =============================================================================
+# FINAL CATCH-ALL PATTERNS
+# =============================================================================
+
+# Any directory named 'build' at any level
+**/build/
+
+# Any directory named 'dist' at any level
+**/dist/
+
+# Any directory named 'target' at any level
+**/target/
+
+# Temporary directories
+tmp/
+temp/
+.tmp/
+.temp/
+.tmp_pytest/
+
+# =============================================================================
+# ORDINAL FIX LOGS (Temporary - not part of repo)
+# =============================================================================
+
+# Ordinal fix log files (historical logs from automated fixing)
+ordinal_fix_log*.txt
+ordinal_fix_log.txt
+
+# =============================================================================
+# GENERATED GHIDRA SCRIPTS (Auto-created during function documentation)
+# =============================================================================
+
+# Address-specific fix/recreate scripts created by Claude during documentation
+# These are one-time use scripts and should not be committed
+# Note: FixFunctionParameters.java and FixFunctionParametersHeadless.java are legitimate scripts
+ghidra_scripts/RecreateFunction*.java
+ghidra_scripts/RecreateFUN_*.java
+ghidra_scripts/RecreateFun*.java
+ghidra_scripts/RecreateFunc*.java
+ghidra_scripts/Recreate_*.java
+ghidra_scripts/FixFunction6*.java
+ghidra_scripts/FixFUN_*.java
+ghidra_scripts/FixFun6*.java
+ghidra_scripts/FixFunc6*.java
+ghidra_scripts/Fix6fc*.java
+ghidra_scripts/CreateFunctionAt*.java
+ghidra_scripts/SimpleDisasm*.java
+ghidra_scripts/SimpleFix*.java
+ghidra_scripts/SimpleRecreate*.java
+ghidra_scripts/AggressiveFix*.java
+ghidra_scripts/ClearAndRecreate*.java
+ghidra_scripts/ExpandFunc*.java
+ghidra_scripts/ExpandFunction*.java
+ghidra_scripts/CheckInstr*.java
+ghidra_scripts/Debug6*.java
+ghidra_scripts/DisassembleAt*.java
+ghidra_scripts/InspectAddress*.java
+ghidra_scripts/InspectListing*.java
+ghidra_scripts/MinimalFix*.java
+ghidra_scripts/QuickFix*.java
+ghidra_scripts/TestSimple.java
+
+
+# =============================================================================
+# FUNCTION HASH INDEX AND PROGRESS TRACKING
+# =============================================================================
+
+# Function hash index (user-specific, regenerated per binary)
+function_hash_index.json
+
+# Completeness tracking state (local analysis state)
+completeness-tracking.json
+
+# Worker progress files (parallel processing state)
+functions-progress-worker*.json
+
+# =============================================================================
+# TEST OUTPUT DIRECTORIES
+# =============================================================================
+
+# Quality reports from automated testing
+quality-reports/
+
+# Model comparison test output
+model-comparison-output/
+
+# Global data analysis reports (regenerated)
+global_data_analysis_report.md
+
+# Windows NUL file artifacts
+nul
+
+# =============================================================================
+# PERSONAL MEMORY (Total Recall)
+# =============================================================================
+
+CLAUDE.local.md
+
+# =============================================================================
+# PER-PROJECT ANALYSIS DATA (never part of this repo)
+# =============================================================================
+# Reverse-engineering work on a specific target (exports maps, examples,
+# generated documentation, todo lists, investigation notes) belongs in that
+# target's own repository, not here.
+
+dll_exports/
+examples/
+output/
+FunctionsTodo.txt
+FunctionsTodo-*.txt
+MEMORY.md
+ISSUES.md
+docs/Analysis_*.md
+docs/Detailed_Investigation_*.md
+docs/Investigation_*.md
+.worktrees/
+
+# Temporary analysis state files
+completeness_tmp.json
+schema_tmp.json
+schema_dump.json
+*_tmp.json
+
+# One-off extraction/utility scripts
+extract_*.py
+audit_*.py
+audit-*.json
+# ...but tools/ is an importable package invoked as `python -m tools.<name>`
+# and referenced from CLAUDE.md's test matrix -- it is first-class tooling,
+# never a one-off drop zone. audit_endpoint_categories.py (the reproducer for
+# the endpoints.json category drift) was silently unstageable until this line
+# existed.
+!tools/audit_*.py
+
+# Directories that moved to other repositories in the 7.0 scope split. A
+# working copy that predates the split can still hold them, along with runtime
+# state and third-party binaries; keep them ignored so nothing left behind is
+# committed by accident.
+/workflows/
+/fun-doc/
+/d2-analysis/
+/tools/scyllahide/
+
+# Playwright MCP scratch directory (snapshots, screenshots, console logs)
+.playwright-mcp/
+
+# AI tool config directories (Gemini, etc.) — local only, not project config
+.gemini/
+
+# BSim credentials (see ghidra_scripts/db.env.example)
+ghidra_scripts/db.env
+
+# A wheel downloaded into the repo root is never a source file. Build output
+# already goes to /dist/; this catches strays like packaging-*.whl that
+# otherwise sit in `git status` forever and invite being committed by accident.
+/*.whl
+
+# Local MCP client config: machine-specific paths. Copy .mcp.json.example.
+.mcp.json

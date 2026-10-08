@@ -1,0 +1,74 @@
+# Dependabot configuration — keeps dependencies fresh on a known
+# cadence so security advisories surface as PRs instead of as
+# "discovered six months too late" entries in a Snyk report.
+#
+# Covers every package ecosystem in the repo:
+#   * GitHub Actions used by the workflows under .github/workflows/
+#   * Python requirements at the repo root (bridge runtime + test + debugger)
+#   * Maven (pom.xml) for the Java plugin
+#   * Gradle (build.gradle) for the alternate Gradle build path
+#
+# Schedule: weekly per ecosystem to keep noise manageable but stay
+# inside most CVE advisory windows. open-pull-requests-limit keeps
+# Dependabot from spamming a backlog of stale PRs if a maintainer
+# falls behind on review.
+#
+# Required by OSSF Scorecard's Dependency-Update-Tool check.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    # github/codeql-action/init and .../analyze MUST move together. CodeQL
+    # refuses to run when the two halves disagree, failing with
+    # "Loaded a configuration file for version 'X', but running version 'Y'".
+    # Ungrouped, Dependabot files one PR per path, so each one is red on its
+    # own and neither can be merged to prove the other — measured on #443
+    # (init 4.37.6 -> 4.37.7) and #445 (analyze 4.37.6 -> 4.37.7), both of
+    # which failed Analyze (java-kotlin) and Analyze (python) for exactly
+    # this reason while every other check passed. Grouping them makes the
+    # pair arrive as a single mergeable PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - java
+    # Ghidra API jars are installed from the local Ghidra install
+    # via tools.setup install-ghidra-deps — they are not on Maven
+    # Central, so Dependabot would file noise PRs proposing
+    # nonsensical upgrades. Ignore them.
+    ignore:
+      - dependency-name: "ghidra:*"
+
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - java
+      - gradle
