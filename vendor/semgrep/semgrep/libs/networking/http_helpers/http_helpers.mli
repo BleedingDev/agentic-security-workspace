@@ -1,0 +1,160 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(* This module provides a simple interface for making HTTP requests. It wraps
+   Cohttp with better error handling, adds network mocking, and proxy support *)
+
+type body_result = (string, string) result
+(** [response_body] is [Ok body] when the server returns an a success status
+    code. A success status is any 2xx status code [Code.is_success]. Otherwise
+    it is an [Error body]. The body will not be modified either way.
+  *)
+
+type server_response = {
+  body : body_result;
+  response : Cohttp.Response.t;
+  code : int;
+}
+(** [server_response] is whatever the server returns *)
+
+type client_result = (server_response, string) result
+(** [client_result] is [Ok response] when the network request is successful.
+    This does not guarantee the server response was an Ok status code. It
+    just means we made a network response and got /some/ response  *)
+
+(* Before we didn't wrap anything here in two results. It used to be one result
+ * with a string error message. This was a mistake. We were trusting cohttp to
+ * not blow up on the smallest stuff, instead of returning a proper error. So
+ * now we have a proper error type. That Cohttp should have done for us. *)
+
+val scrub_uri : Uri.t -> string
+(** [scrub_uri uri] renders [uri] safely for log output by returning only its
+    host component (falling back to ["<no-host>"] if absent). Userinfo, path,
+    query, and fragment are excluded, since those are the parts where secrets
+    typically end up after metavariable substitution or client-side request
+    construction. *)
+
+val call_client :
+  ?body:Cohttp_lwt.Body.t ->
+  ?headers:(string * string) list ->
+  ?chunked:bool ->
+  ?resp_handler:
+    (Cohttp.Response.t * Cohttp_lwt.Body.t ->
+    (Cohttp.Response.t * string) Lwt.t) ->
+  ?timeout_secs:float ->
+  Cohttp.Code.meth ->
+  Uri.t ->
+  (Cohttp.Response.t * string, string) result Lwt.t
+(** [call_client] is a low-level function that sends an HTTP request to the
+    provided URI. It returns a promise of either [Ok (response, body)] if the
+    request was successful, or an [Error msg] if the request failed.
+    [resp_handler] can be used to directly work with the response body, as it
+    has to be handled directly on the stream. By default it will convert the
+    body to a string *)
+
+val call_eio_client :
+  ?body:Cohttp.Body.t ->
+  ?headers:(string * string) list ->
+  ?chunked:bool ->
+  ?resp_handler:
+    (Cohttp.Response.t * Cohttp_eio.Body.t ->
+    (Cohttp.Response.t * string, string) result) ->
+  Cohttp.Code.meth ->
+  Uri.t ->
+  (Cohttp.Response.t * string, string) result
+
+val get :
+  ?headers:(string * string) list ->
+  ?timeout_secs:float ->
+  Uri.t ->
+  client_result Lwt.t
+(** [get ~headers uri] retrieves [uri] (via HTTP GET) with the
+    provided [headers], asynchronously. The return value is either a promise
+    of [Ok body] - if the request was successful, or an error message.
+    If a temporary redirect (307) is returned, this function will automatically
+    re-query and resolve the redirection.
+   *)
+
+val get_eio : ?headers:(string * string) list -> Uri.t -> client_result
+
+val post :
+  body:string ->
+  ?headers:(string * string) list ->
+  ?chunked:bool ->
+  Uri.t ->
+  client_result Lwt.t
+(** [post ~body ~headers ~chunked uri] asynchronously sends a
+    POST request to [uri] with
+    - [headers] (default: content-type: application/json)
+    - [chunked] (default: false) this maps to whether we enable
+      "Transfer-Encoding: chunked" in our outgoing request, which can be useful
+       for streaming a large body of text, but not all servers support it.
+       We err on the side of caution and disable it by default.
+       Reference: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Transfer-Encoding#directives
+    - [body] payload to send (e.g. JSON body as string)
+
+    The returned value is a promise of either [Ok body] if the request was
+    successful, or an [Error (code, msg)], including the HTTP status [code]
+    and a message. *)
+
+val post_eio :
+  body:string ->
+  ?headers:(string * string) list ->
+  ?chunked:bool ->
+  Uri.t ->
+  client_result
+
+val put :
+  body:string ->
+  ?headers:(string * string) list ->
+  ?chunked:bool ->
+  Uri.t ->
+  client_result Lwt.t
+(** [put ~body ~headers ~chunked uri] asynchronously sends a
+    PUT request to [uri] with
+    - [headers] (default: content-type: application/json)
+    - [chunked] (default: false) this maps to whether we enable
+      "Transfer-Encoding: chunked" in our outgoing request, which can be useful
+       for streaming a large body of text, but not all servers support it.
+       We err on the side of caution and disable it by default.
+       Reference: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Transfer-Encoding#directives
+    - [body] payload to send (e.g. JSON body as string)
+
+    The returned value is a promise of either [Ok body] if the request was
+    successful, or an [Error (code, msg)], including the HTTP status [code]
+    and a message. *)
+
+val set_client_ref : (module Cohttp_lwt.S.Client) -> unit
+(** [set_client_ref] sets a reference to the Cohttp client module used by the
+    functions in this module. By default, it is set to
+    [Cohttp_lwt_unix.Client], but can be changed to an instance
+    of [TestingClient] if you want to test things. *)
+
+val with_client_ref : (module Cohttp_lwt.S.Client) -> ('a -> 'b) -> 'a -> 'b
+(** [with_client client f x] is a helper function that temporarily sets the client
+    reference to the provided client module, runs the provided function, and
+    then resets the client reference to its original value.
+*)
+
+type eio_call_fn =
+  sw:Eio.Switch.t ->
+  headers:Cohttp.Header.t ->
+  body:Cohttp_eio.Body.t ->
+  chunked:bool ->
+  Http.Method.t ->
+  Uri.t ->
+  Cohttp.Response.t * Cohttp_eio.Body.t
+
+val hook_eio_call_fn : eio_call_fn option Hook.t
+val with_hook_eio_call_fn_set : eio_call_fn -> (unit -> 'a) -> 'a
+val mk_eio_call_fn : Cohttp_eio.Client.t -> eio_call_fn
+val mk_eio_client : Eio_unix.Stdenv.base -> Cohttp_eio.Client.t

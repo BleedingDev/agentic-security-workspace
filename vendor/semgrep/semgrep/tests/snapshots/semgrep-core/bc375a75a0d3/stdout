@@ -1,0 +1,9 @@
+Test name: without git > basic test
+--- Files not added to git ---
+.gitignore
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+--- Selected targets ---
+selected .gitignore
+--- Skipped targets ---

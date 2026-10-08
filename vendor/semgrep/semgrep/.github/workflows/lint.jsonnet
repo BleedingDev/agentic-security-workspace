@@ -1,0 +1,120 @@
+// The main goal of this workflow is to run pre-commit on every pull requests.
+// Note that we run Semgrep inside pre-commit, so this is also dogfooding
+// and testing how semgrep interact with pre-commit.
+// We also run some Github Actions (GHA) lint checks.
+
+local actions = import 'libs/actions.libsonnet';
+local gha = import 'libs/gha.libsonnet';
+local semgrep = import 'libs/semgrep.libsonnet';
+local uses = import 'libs/uses.libsonnet';
+// ----------------------------------------------------------------------------
+// The jobs
+// ----------------------------------------------------------------------------
+
+// Note that in a CI context pre-commit runs the hooks with the '--all'
+// flag, so semgrep for example is passed all the files in the repository,
+// not just the one modifed in the PR (as it is the case when it's ran from
+// git hooks locally). This is why sometimes pre-commit passes locally but
+// fails in CI, for the same PR.
+//
+// WARNING!!! it is unreasonably difficult to get pre-commit to run in a
+// subdir. Don't bother, just add whatever check you need to the top level
+// pre-commit config. You have been warned!!
+local pre_commit_steps() = [
+  actions.setup_python_step(cache=true),
+  semgrep.opam_setup(cache_profile='format'),
+  { run: 'opam install -y ocamlformat.0.29.0' },
+  {
+    name: 'Cache pre-commit hook envs',
+    uses: uses.actions.cache,
+    with: {
+      path: '~/.cache/pre-commit',
+      key: "pre-commit-v1|${{ hashFiles('.pre-commit-config.yaml') }}",
+    },
+  },
+  {
+    name: 'Install pre-commit',
+    run: 'uv tool install pre-commit --with pre-commit-uv',
+  },
+  {
+    name: 'Run pre-commit',
+    env: {
+      // check-opam-conflicts will report an error about missing vendored
+      // dependencies in CI (like tree-sitter), but for local development
+      // we would expect those to be installed.  So, ignore this conflict
+      // check in CI.
+      SKIP: 'check-opam-conflicts',
+    },
+    run: 'pre-commit run --show-diff-on-failure --color=always --all-files',
+  },
+];
+
+// Running pre-commit in CI. See semgrep/.pre-commit-config.yaml for
+// our pre-commit configuration.
+local pre_commit_job(checkout_steps) = {
+  'runs-on': 'ubuntu-latest',
+  steps:
+    checkout_steps + pre_commit_steps(),
+};
+
+// TODO: we should port those GHA checks to semgrep and add them in semgrep-rules
+local action_lint_job(checkout_steps, dir='.github/workflows') = {
+  'runs-on': 'ubuntu-latest',
+  steps: checkout_steps + [
+    {
+      uses: uses.actions.setup_go,
+      with: {
+        'go-version': '1.24',
+      },
+    },
+    {
+      run: 'go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8',
+    },
+    {
+      run: |||
+        cd %(dir)s
+        actionlint -shellcheck=''
+      ||| % { dir: dir },
+    },
+  ],
+};
+
+local jsonnet_gha_job(checkout_steps, dir='.github/workflows') = {
+  'runs-on': 'ubuntu-latest',
+  steps: checkout_steps
+         + [
+           {
+             name: 'Check GitHub workflow files are up to date',
+             // yq (the good one) is actually pre-installed in GHA ubuntu image, see
+             // https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Readme.md
+             run: |||
+               sudo apt-get update
+               sudo apt-get install jsonnet
+               cd %(dir)s
+               make clean
+               make
+               git diff --exit-code
+             ||| % { dir: dir },
+           },
+         ],
+};
+
+// ----------------------------------------------------------------------------
+// The Workflow
+// ----------------------------------------------------------------------------
+
+{
+  name: 'lint',
+  on: gha.on_classic,
+  jobs: {
+    'pre-commit': pre_commit_job(actions.checkout_with_submodules()),
+    'github-actions': action_lint_job(actions.checkout()),
+    'jsonnet-gha': jsonnet_gha_job(actions.checkout()),
+  },
+  export:: {
+    // reused in semgrep-pro
+    'github-actions': action_lint_job,
+    'jsonnet-gha': jsonnet_gha_job,
+    'pre-commit': pre_commit_job,
+  },
+}

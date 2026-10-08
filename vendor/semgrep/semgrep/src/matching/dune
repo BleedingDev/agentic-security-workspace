@@ -1,0 +1,20 @@
+(library
+ (public_name semgrep.matching)
+ (name semgrep_matching)
+ (wrapped false)
+ (libraries
+   yaml ppx_deriving.runtime re
+
+   commons
+   lib_parsing
+   pfff-lang_GENERIC-analyze
+   pfff_lang_GENERIC_naming
+   parser_javascript.ast ; for Ast_js.default_entity
+
+   semgrep_core
+   semgrep_typing
+   semgrep.prefiltering
+   ; No dependencies to semgrep_parsing here!
+ )
+ (preprocess (pps ppx_deriving.show ppx_profiling commons.ppx))
+)

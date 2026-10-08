@@ -1,0 +1,289 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+open Common
+module J = JSON
+open Fpath_.Operators
+module Out = Semgrep_output_v1_t
+
+(*****************************************************************************)
+(* Prelude *)
+(*****************************************************************************)
+(* There was no 'pysemgrep show' subcommand. Dumps were run via
+ * 'semgrep scan --dump-ast ...' but it is better to have a separate
+ * subcommand. Note that the legacy 'semgrep scan --dump-xxx' are
+ * redirected to this file after having built a compatible Show_CLI.conf
+ *
+ * LATER: get rid of Core_CLI.dump_pattern and Core_CLI.dump_ast functions
+ *
+ * Note that we're using UConsole here, to print on stdout (Logs.app()
+ * is printing on stderr, but for a show command it's probably better to
+ * print on stdout).
+ *)
+
+(*****************************************************************************)
+(* Pro hooks *)
+(*****************************************************************************)
+
+(* A bundle of functions for output formatting for Supply Chain (Pro) *)
+type pro_sca_output_functions = {
+  show_subprojects : Semgrep_output_v1_t.subproject list -> string;
+}
+
+let default_pro_sca_output_functions = { show_subprojects = (fun _ -> "") }
+
+(* A module in Semgrep Pro is supposed to initialize this to a bundle
+   of functions that do something meaningful. *)
+let pro_sca_output_functions_plugin =
+  Plugin.create_slot ~name:__FUNCTION__ default_pro_sca_output_functions
+
+(*****************************************************************************)
+(* Types *)
+(*****************************************************************************)
+(* we need the network for the 'semgrep show identity/deployment' *)
+(*****************************************************************************)
+(* Helpers *)
+(*****************************************************************************)
+
+(* copy paste of Core_CLI.json_of_v *)
+let json_of_v (v : OCaml.v) =
+  let rec aux v =
+    match v with
+    | OCaml.VUnit -> J.String "()"
+    | OCaml.VBool v1 -> if v1 then J.String "true" else J.String "false"
+    | OCaml.VFloat v1 -> J.Float v1 (* ppf "%f" v1 *)
+    | OCaml.VChar v1 -> J.String (spf "'%c'" v1)
+    | OCaml.VString v1 -> J.String v1
+    | OCaml.VInt i -> J.Int (Int64.to_int i)
+    | OCaml.VTuple xs -> J.Array (List.map aux xs)
+    | OCaml.VDict xs -> J.Object (List.map (fun (k, v) -> (k, aux v)) xs)
+    | OCaml.VSum (s, xs) -> (
+        match xs with
+        | [] -> J.String (spf "%s" s)
+        | [ one_element ] -> J.Object [ (s, aux one_element) ]
+        | _ :: _ :: _ -> J.Object [ (s, J.Array (List.map aux xs)) ])
+    | OCaml.VVar (s, i64) -> J.String (spf "%s_%Ld" s i64)
+    | OCaml.VArrow _ -> failwith "Arrow TODO"
+    | OCaml.VNone -> J.Null
+    | OCaml.VSome v -> J.Object [ ("some", aux v) ]
+    | OCaml.VRef v -> J.Object [ ("ref@", aux v) ]
+    | OCaml.VList xs -> J.Array (List.map aux xs)
+    | OCaml.VTODO _ -> J.String "VTODO"
+  in
+  aux v
+
+(* mostly a copy paste of Core_CLI.dump_v_to_format *)
+let dump_v_to_format ~json (v : OCaml.v) =
+  if json then J.string_of_json (json_of_v v) else OCaml.string_of_v v
+
+let require_experimental_flag (conf : Show_CLI.conf) func : Exit_code.t =
+  match conf.common.maturity with
+  | Experimental -> func ()
+  | _ -> failwith "This command requires '--experimental'."
+
+(*****************************************************************************)
+(* Main logic *)
+(*****************************************************************************)
+
+let run_conf (conf : Show_CLI.conf) : Exit_code.t =
+  CLI_common.with_logging ~color:Auto ~level:conf.common.logging_level
+  @@ fun () ->
+  Logs.debug (fun m -> m "conf = %s" (Show_CLI.show_conf conf));
+  let print = UConsole.print in
+  match conf.show_kind with
+  | Version ->
+      print Version.version;
+      (* TODO? opportunity to perform version-check? *)
+      Exit_code.ok ~__LOC__
+  | Identity -> Whoami.print Whoami.Identity
+  | Deployment -> Whoami.print Whoami.Deployment
+  | SupportedLanguages ->
+      print (spf "supported languages are: %s" Analyzer.supported_analyzers);
+      Exit_code.ok ~__LOC__ (* dumpers *)
+  (* TODO? error management? improve error message for parse errors?
+   * or let CLI.safe_run do the right thing?
+   *)
+  | ProjectRoot { scan_root } ->
+      let project_root =
+        match
+          Project.find_any_project_root ~fallback_root:None ~force_novcs:false
+            ~force_root:None scan_root
+        with
+        | Ok ({ kind = _; root }, _scan_root_info) ->
+            root.fpath |> Fpath.to_string
+        | Error msg -> failwith ("Cannot determine project root: " ^ msg)
+      in
+      (* Print the project root path followed by a newline.
+
+         There's more useful info available than just the project root path.
+         We could show that as part of another subcommand (dump-targets?)
+         or with a flag.
+      *)
+      print project_root;
+      Exit_code.ok ~__LOC__
+  | Resources ->
+      require_experimental_flag conf (fun () ->
+          let output =
+            if conf.json then Resources.to_json () else Resources.show ()
+          in
+          print output;
+          Exit_code.ok ~__LOC__)
+  | DumpPattern (str, lang) -> (
+      (* mostly a copy paste of Core_CLI.dump_pattern *)
+      (* TODO: maybe enable the "semgrep.parsing" src here *)
+      match Parse_pattern.parse_pattern lang str with
+      | Ok any ->
+          let v = Meta_AST.vof_any any in
+          let s = dump_v_to_format ~json:conf.json v in
+          print s;
+          Exit_code.ok ~__LOC__
+      | Error s ->
+          Logs.app (fun m -> m "Parse error: %s" s);
+          Exit_code.invalid_pattern ~__LOC__)
+  | DumpCST (file, lang) ->
+      Test_parsing.dump_tree_sitter_cst lang file;
+      Exit_code.ok ~__LOC__
+  | DumpAST (file, lang) -> (
+      (* mostly a copy paste of Core_CLI.dump_ast *)
+      let Parsing_result2.
+            {
+              ast;
+              errors;
+              tolerated_errors;
+              skipped_tokens;
+              inserted_tokens;
+              stat = _;
+            } =
+        (* alt: call Parse_target.just_parse_with_lang()
+         * but usually we also want the naming/typing info.
+         * we could add a flag --naming, but simpler to just call
+         * parse_and_resolve_name by default
+         * LATER? could also have a --pro where we use the advanced
+         * naming/typing of Deep_scan by analyzing the files around too?
+         *)
+        Parse_target.parse_and_resolve_name lang file
+      in
+      let v = Meta_AST.vof_any (AST_generic.Pr ast) in
+      (* 80 columns is too little *)
+      Format.set_margin 120;
+      let s = dump_v_to_format ~json:conf.json v in
+      print s;
+      match (errors @ tolerated_errors, skipped_tokens @ inserted_tokens) with
+      | [], [] -> Exit_code.ok ~__LOC__
+      | _, _ ->
+          Logs.err (fun m ->
+              m "errors=%s\ntolerated errors=%s\nskipped=%s\ninserted=%s"
+                (Parsing_result2.format_errors errors)
+                (Parsing_result2.format_errors tolerated_errors)
+                (skipped_tokens |> List.map Tok.show_location
+               |> String.concat ", ")
+                (inserted_tokens |> List.map Tok.show_location
+               |> String.concat ", "));
+          Exit_code.invalid_code ~__LOC__)
+  | DumpConfig config_str ->
+      let settings = Semgrep_settings.load () in
+      let token_opt = settings.api_token in
+      let in_docker = !Semgrep_envvars.v.in_docker in
+      let config = Rules_config.parse_config_string ~in_docker config_str in
+      let rules_and_errors, errors =
+        Rule_fetching.rules_from_dashdash_config
+          ~rewrite_rule_ids:true (* command-line default *)
+          ~token_opt config
+      in
+
+      if errors <> [] then
+        raise
+          (Error.Semgrep_error
+             ( Common.spf "invalid configuration string found: %s" config_str,
+               Some (Exit_code.missing_config ~__LOC__) ));
+
+      rules_and_errors
+      |> List.iter (fun x -> print (Rule_fetching.show_rules_and_origin x));
+      Exit_code.ok ~__LOC__
+  (* see also the pysemgrep and osemgrep scan --x-ls option *)
+  | DumpTargets (scanning_root, target_conf, config_str_opt) -> (
+      (* coupling: similar to parts of Core_scan.targets_of_config *)
+      let target_paths, _errors, skipped =
+        Find_targets.get_targets target_conf [ scanning_root ]
+      in
+      match config_str_opt with
+      | None ->
+          target_paths
+          |> List.iter (fun ({ fpath; _ } : Fppath.t) ->
+              print (spf "target = %s" !!fpath));
+          skipped
+          |> List.iter (fun (skip : Out.skipped_target) ->
+              print (spf "skipped = %s" (Out.show_skipped_target skip)));
+          Exit_code.ok ~__LOC__
+      | Some config_str ->
+          (* copy-paste of parts of DumpConfig above to get the rules
+           * alt: requires a local file and use Parse_rule.parse instead
+           *)
+          let settings = Semgrep_settings.load () in
+          let token_opt = settings.api_token in
+          let config =
+            Rules_config.parse_config_string ~in_docker:false config_str
+          in
+          let rules_and_errors, _errors =
+            Rule_fetching.rules_from_dashdash_config
+              ~rewrite_rule_ids:true (* command-line default *)
+              ~token_opt config
+          in
+          let rules, _invalid =
+            Rule_fetching.partition_rules_and_invalid rules_and_errors
+          in
+          let targets : Target.t list =
+            Core_targeting.targets_for_files_and_rules target_paths rules
+          in
+          targets
+          |> List.iter (fun (tgt : Target.t) ->
+              print (spf "Target = %s" (Target.show tgt)));
+          Exit_code.ok ~__LOC__)
+  | DumpEnginePath _pro -> failwith "TODO: dump-engine-path not implemented yet"
+  | FilePrefilterOfRules file -> (
+      match Parse_rule.parse file with
+      | Ok rules ->
+          let xs =
+            rules
+            |> List.map (fun r ->
+                let filter = Prefiltering.File.of_rule ~interfile:false r in
+                let filter_atd =
+                  Option.map Prefiltering.File.to_semgrep_formula filter
+                in
+                let id = r.Rule.id |> fst in
+                {
+                  Prefiltering.Semgrep_prefilter_t.rule_id =
+                    Rule_ID.to_string id;
+                  filter = filter_atd;
+                })
+          in
+          let json = Prefiltering.Semgrep_prefilter_j.string_of_prefilters xs in
+          print json;
+          Exit_code.ok ~__LOC__
+      | Error s ->
+          Logs.err (fun m -> m "Parse error: %s" (Rule_error.string_of_error s));
+          Exit_code.invalid_pattern ~__LOC__)
+  | DumpCommandForCore ->
+      failwith "TODO: dump-command-for-core not implemented yet"
+  | Debug _ -> failwith "TODO: CE-only show debug not implemented yet"
+  | DumpLockfile _ -> failwith "this subcommand requires semgrep-pro"
+  | ProjectPrefilterOfRules _file ->
+      failwith
+        "'semgrep show project-prefilter-of-rules' is only available in the \
+         Pro engine."
+
+(*****************************************************************************)
+(* Entry point *)
+(*****************************************************************************)
+let main (argv : string array) : Exit_code.t =
+  let conf = Show_CLI.parse_argv argv in
+  run_conf conf

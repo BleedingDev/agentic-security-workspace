@@ -1,0 +1,32 @@
+(library
+ (public_name semgrep.rpc)
+ (name semgrep_rpc)
+ (wrapped false)
+ (libraries
+    str
+    ppx_deriving.runtime
+
+    ; in libs/
+    commons
+    lib_parsing
+    process_limits
+    ; we now also depends on spacegrep with full-rule-in-ocaml
+    spacegrep
+
+    cohttp-lwt-unix
+
+    ; internal deps in src/
+    semgrep.core
+    semgrep.core_scan
+    semgrep.metachecking
+    semgrep.parsing
+    semgrep.parsing.tests ; Test_parsing.parsing_stats
+    semgrep.analyzing.tests ; Test_analyze_generic.actions
+    semgrep.osemgrep_reporting
+    semgrep.osemgrep_networking
+    semgrep.osemgrep_core
+    semgrep.osemgrep_cli_show
+    networking.proxy
+ )
+ (preprocess (pps telemetry.ppx))
+)

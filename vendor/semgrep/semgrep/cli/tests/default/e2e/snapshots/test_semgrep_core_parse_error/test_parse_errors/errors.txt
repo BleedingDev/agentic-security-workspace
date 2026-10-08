@@ -1,0 +1,72 @@
+running 2 rules from 2 configs
+Rules:
+- rules.two_rules.eqeq-is-bad
+- rules.two_rules.func
+
+
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 1 file tracked by git with 2 Code rules:
+  Scanning 1 file with 2 js rules.
+SCA findings adjustment: No SCA rules to adjust
+[31m[41m[22m[24m[[0m[38;5;231m[41m[1m[24mWARN[0m[31m[41m[22m[24m][0m Syntax error at line targets/bad/invalid_javascript.js:5:
+ `key:` was unexpected
+
+========================================
+Files skipped:
+========================================
+
+  [1m[24mAlways skipped by Semgrep:[0m
+
+   • <none>
+
+  [1m[24mSkipped by .gitignore:[0m
+  [1m[24m(Disable by passing --no-git-ignore)[0m
+
+   • <all files not listed by `git ls-files` were skipped>
+
+  [1m[24mSkipped by .semgrepignore:[0m
+  [1m[24m- https://semgrep.dev/docs/ignoring-files-folders-code/#understand-semgrep-defaults[0m
+
+   • <none>
+
+  [1m[24mSkipped by --include patterns:[0m
+
+   • <none>
+
+  [1m[24mSkipped by --exclude patterns:[0m
+
+   • <none>
+
+  [1m[24mFiles that couldn't be accessed:[0m
+
+   • <none>
+
+  [1m[24mSkipped by limiting to files smaller than 1000000 bytes:[0m
+  [1m[24m(Adjust with the --max-target-bytes flag)[0m
+
+   • <none>
+
+  [1m[24mPartially analyzed due to parsing or internal Semgrep errors[0m
+
+   • [36m[22m[24mtargets/bad/invalid_javascript.js (~20.0% of lines always skipped)[0m
+
+     [38;5;7m[22m[24mThe following lines were skipped for all analysis:[0m
+
+     • [36m[22m[24mlines 5-5[0m[33m[22m[24m due to exception "PartialParsing" raised during analysis[0m
+     • [36m[22m[24mlines 10-10[0m[33m[22m[24m due to exception "PartialParsing" raised during analysis[0m
+
+
+
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 3 (3 blocking)
+ • Rules run: 2
+ • Targets scanned: 1
+ • Parsed lines: ~80.0%
+ • No ignore information available
+Ran 2 rules on 1 file: 3 findings.
+Not sending pseudonymous metrics since metrics are configured to OFF, registry usage is False, and login status is False

@@ -1,0 +1,41 @@
+{
+  "engine_requested": "OSS",
+  "errors": [
+    {
+      "code": 4,
+      "level": "error",
+      "long_msg": "These properties are invalid in the current mode: '0'",
+      "short_msg": "Invalid rule schema",
+      "spans": [
+        {
+          "end": {
+            "col": 1,
+            "line": 1,
+            "offset": -1
+          },
+          "file": "rules/syntax/bad14.yaml",
+          "source_hash": "2077ff5b0b9e50d642755280dcb9d7bd7d3b5e29cbfdf4d8ef32fd8f1ec72fc8",
+          "start": {
+            "col": 1,
+            "line": 1,
+            "offset": -1
+          }
+        }
+      ],
+      "type": "InvalidRuleSchemaError"
+    },
+    {
+      "code": 7,
+      "level": "error",
+      "message": "invalid configuration file found (1 configs were invalid)",
+      "type": "SemgrepError"
+    }
+  ],
+  "paths": {
+    "scanned": []
+  },
+  "profiling_results": [],
+  "results": [],
+  "skipped_rules": [],
+  "version": "0.42"
+}

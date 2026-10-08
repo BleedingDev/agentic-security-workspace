@@ -1,0 +1,18 @@
+(library
+ (public_name semgrep.reporting)
+ (name semgrep_reporting)
+ (wrapped false)
+ (libraries
+   base
+   collections
+
+   yaml
+   commons
+   lib_parsing
+   pfff-lang_GENERIC-analyze
+
+   semgrep_core
+
+)
+ (preprocess (pps ppx_deriving.show ppx_profiling commons.ppx))
+)

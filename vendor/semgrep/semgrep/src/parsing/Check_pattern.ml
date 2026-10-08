@@ -1,0 +1,97 @@
+(*
+   Copyright (c) 2020-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(* for these languages, we are sure that $x is an error *)
+let lang_has_no_dollar_ids =
+  Lang.(
+    function
+    | Circom
+    | Apex
+    | Protobuf
+    | Python
+    | Python2
+    | Python3
+    | Java
+    | Gosu
+    | Go
+    | C
+    | Cpp
+    | Dart
+    | Julia
+    | Clojure
+    | Lisp
+    | Scheme
+    | Ocaml
+    | Json
+    | Jsonnet
+    | Yaml
+    | Terraform
+    | Csharp
+    | Kotlin
+    | Lua
+    | Elixir
+    | R
+    | Swift
+    | Html
+    | Xml
+    | Fga
+    | Move_on_aptos ->
+        true
+    | Move_on_sui
+    | Js
+    | Ts
+    | Vue
+    | Ruby
+    | Php
+    | Promql
+    | Hack
+    | Bash
+    | Powershell
+    | Dockerfile
+    | Rust
+    | Cairo
+    | Scala
+    | Solidity ->
+        false)
+
+class ['self] metavar_checker =
+  object (_self : 'self)
+    inherit [_] AST_generic.iter_no_id_info as super
+
+    method! visit_ident (error, lang) id =
+      let str, _tok = id in
+      if
+        String.length str > 0
+        && str.[0] = '$'
+        && (not (Mvar.is_metavar_name str))
+        && not (Mvar.is_metavar_ellipsis str)
+      then
+        error
+          (Common.spf
+             "`%s' is neither a valid identifier in %s nor a valid \
+              meta-variable"
+             str (Lang.to_string lang));
+      super#visit_ident (error, lang) id
+  end
+
+let metavar_checker = new metavar_checker
+
+let check_pattern_metavars error lang ast =
+  if lang_has_no_dollar_ids lang then
+    metavar_checker#visit_any (error, lang) ast
+
+exception CheckFailure of string
+
+let check lang ast =
+  let error s = raise (CheckFailure s) in
+  try Ok (check_pattern_metavars error lang ast) with
+  | CheckFailure s -> Error s

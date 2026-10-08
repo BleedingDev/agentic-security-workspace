@@ -1,0 +1,80 @@
+(*
+   Copyright (c) 2023-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+open Lsp
+open Types
+module Conv = Legacy_convert_utils
+module OutJ = Semgrep_output_v1_t
+
+let diagnostic_of_match is_intellij (m : OutJ.cli_match) =
+  let severity = Conv.convert_severity m.extra.severity in
+  let message = m.extra.message in
+  let check_id_str = Rule_ID.to_string m.check_id in
+  let message =
+    if String.equal message "" then
+      Printf.sprintf "Semgrep found: %s" check_id_str
+    else message
+  in
+  let code = `String check_id_str in
+  let shortlink =
+    let metadata = (m.extra.metadata :> Yojson.Safe.t) in
+    match metadata with
+    | `Assoc _ ->
+        metadata
+        |> Yojson.Safe.Util.member "shortlink"
+        |> Yojson.Safe.Util.to_string_option
+    | _ -> None
+  in
+  let message =
+    match shortlink with
+    (* IntelliJ doesn't display code descriptions:/ so we must insert them here *)
+    | Some s when is_intellij ->
+        message
+        ^ Printf.sprintf "\nSemgrep(<a href=\"%s\">%s</a>)" s check_id_str
+    | _ -> message
+  in
+  let codeDescription =
+    Option.bind shortlink (fun s ->
+        Some (CodeDescription.create ~href:(Uri.t_of_yojson (`String s))))
+  in
+  let diagnostic =
+    Diagnostic.create
+      ~range:(Conv.range_of_cli_match m)
+        (* NOTE: we can't use `MarkupContent until LSP 3.18 is supported on the
+           client side, and it appears Lsp doesn't use the capability for us, so
+           we need that logic manually once we can use it. *)
+      ~code ~severity ~source:"Semgrep" ~message:(`String message)
+  in
+  match codeDescription with
+  | None -> diagnostic ()
+  | Some codeDescription -> diagnostic ~codeDescription ()
+
+let diagnostics_of_file is_intellij matches file =
+  let matches =
+    List.filter (fun (m : OutJ.cli_match) -> m.path = file) matches
+  in
+  let diagnostics = List.map (diagnostic_of_match is_intellij) matches in
+  let diagnostics =
+    List_.deduplicate_gen
+      ~get_key:(fun (x : Diagnostic.t) ->
+        x |> Diagnostic.yojson_of_t |> Yojson.Safe.to_string)
+      diagnostics
+  in
+  let params =
+    PublishDiagnosticsParams.create
+      ~uri:(Uri.of_path (Fpath.to_string file))
+      ~diagnostics ()
+  in
+  Server_notification.PublishDiagnostics params
+
+let diagnostics_of_results ~is_intellij results files =
+  List.map (diagnostics_of_file is_intellij results) files

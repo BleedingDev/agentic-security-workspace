@@ -1,0 +1,536 @@
+###############################################################################
+# Prelude
+###############################################################################
+
+# Many targets in this Makefile assume some commands have been run before to
+# setup the correct build environment supporting the different languages
+# used for Semgrep development.
+#  - for OCaml: 'ocamlc' and 'ocamlopt' (currently 4.14.0), 'dune', 'opam'
+#  - for C: 'gcc', 'ld', 'pkgconfig', but also some C libs like PCRE, gmp
+#  - for Python: 'python3', 'pip', 'pipenv'
+#
+# You will also need obviously 'make', but also 'git', and many other
+# common dev tools (e.g., 'docker', 'bash').
+#
+# you can then use:
+#
+#     $ make install-deps
+#
+# to install the dependencies proper to semgrep (e.g., the necessary OPAM
+# packages used by semgrep-core).
+#
+# Then to compile semgrep simply type:
+#
+#     $ make all
+#
+# See INSTALL.md for more information
+# See also https://semgrep.dev/docs/contributing/contributing-code/
+
+# Most of the targets in this Makefile should work equally under
+# Linux (Alpine, Ubuntu, Arch), macOS (x86 and arm64), Windows (WSL, Cygwin),
+# and from a Dockerfile.
+
+# If you really have to use platform-specific commands or flags, try to use
+# macros like the one below to have a portable Makefile.
+#
+#     # To select commands with different usage under GNU/Linux and *BSD/Darwin
+#     ifeq ($(shell uname -s),Linux)
+#       LINUX = true
+#     else
+#       LINUX = false
+#     endif
+#     ifeq ($(LINUX),true)
+#       SED = sed -i -e
+#     else
+#       SED = sed -i ''
+#     endif
+
+# This is to deal with paths that change depending on whether we're in the
+# semgrep-proprietary monorepo or detached as a standalone semgrep project.
+# The script 'scripts/make-symlinks' also deals with such issues.
+PROJECT_ROOT = $(shell git rev-parse --show-toplevel || pwd)
+ifeq ($(shell pwd),$(PROJECT_ROOT))
+  # The root is here.
+  BUILD = _build
+  BUILD_DEFAULT = _build/default
+else
+  # Assume we're in the semgrep-proprietary repo where OSS/ = semgrep.
+  BUILD = ../_build
+  BUILD_DEFAULT = ../_build/default/OSS
+endif
+
+-include cygwin-env.mk
+
+# On macOS we point lwt's discover (and flags.sh's static linking) at the
+# brew-installed libraries via LIBRARY_PATH=$(HOMEBREW_PREFIX)/lib. GitHub-hosted
+# macOS runners export HOMEBREW_PREFIX in the environment, but some other runners
+# (e.g. Depot's macOS images) do not.
+ifeq ($(shell uname -s),Darwin)
+  HOMEBREW_PREFIX ?= $(shell brew --prefix 2>/dev/null)
+endif
+
+###############################################################################
+# Build (and clean) targets
+###############################################################################
+
+# First (and default) target.
+.PHONY: default
+default: core
+
+# Routine build. It assumes all dependencies and configuration are already in
+# place and correct.
+.PHONY: all
+all:
+# OCaml compilation
+	$(MAKE) core
+	$(MAKE) copy-core-for-cli
+# Python setup
+	cd cli && pipenv install --dev
+
+# Make binaries available to pysemgrep
+.PHONY: copy-core-for-cli
+copy-core-for-cli:
+	rm -f cli/src/semgrep/bin/semgrep-core$(EXE)
+	cp bin/semgrep-core$(EXE) cli/src/semgrep/bin/
+
+# Per-language grammar C stubs need TREESITTER_*.
+# Don't call dune directly for semgrep-core — use
+# 'make core' (or source tree-sitter-config.sh).
+include tree-sitter-config.mk
+_TS_DUNE := libs/ocaml-tree-sitter-semgrep/core/tree-sitter-out
+
+# Build the tree-sitter C runtime (headers + libtree-sitter).
+# Only the C library is built; the tree-sitter CLI (needs Rust/cargo) is not.
+.PHONY: tree-sitter-runtime
+tree-sitter-runtime:
+	dune build $(_TS_DUNE)
+
+# Minimal build of the semgrep-core executable. Intended for the docker build.
+# If you need other binaries, look at the build-xxx rules below.
+# We do not use .../bin/{semgrep-core,osemgrep,semgrep} below to
+# factorize because make under Alpine uses busybox/ash for /bin/sh which
+# does not support this bash feature.
+.PHONY: core
+core: tree-sitter-runtime
+	dune build $(BUILD)/install/default/bin/semgrep-core$(EXE)
+	dune build $(BUILD)/install/default/bin/osemgrep$(EXE)
+	chmod +w $(BUILD)/install/default/bin/semgrep-core$(EXE)
+
+#coupling: The 'semgrep-oss' is the name of the step in the Dockerfile, the
+# 'semgrep' the name of the docker image produced (will be semgrep:latest)
+.PHONY: build-docker
+build-docker:
+	docker build -t semgrep --target semgrep-oss .
+
+.PHONY: build-ojsonnet
+build-ojsonnet:
+	dune build $(BUILD)/install/default/bin/ojsonnet
+
+# Remove from the project tree everything that's not under source control
+# and was not created by 'make setup'.
+.PHONY: clean
+clean:
+	dune clean
+	rm -rf libs/ocaml-tree-sitter-semgrep/core/bin
+	$(MAKE) -C libs/ocaml-tree-sitter-semgrep/lang clean
+# We still need to keep the nonempty opam files in git for
+# 'make setup', so we should only remove the empty opam files.
+# This removes the gitignored opam files.
+	git clean -fX *.opam
+	-$(MAKE) -C cli clean
+
+###############################################################################
+# Install targets
+###############################################################################
+
+# Install semgrep on a developer's machine with pip and opam installed.
+# This should *not* install the open-source libraries that we maintain
+# as part of the semgrep project.
+.PHONY: install
+install:
+	$(MAKE) copy-core-for-cli
+# Install semgrep and semgrep-core in editable mode, so that they are available in the PATH and can be called
+	uv tool install -e ./cli
+
+.PHONY: uninstall
+uninstall:
+	uv tool uninstall semgrep
+
+###############################################################################
+# Test target
+###############################################################################
+
+# Core tests run locally and in platform CI jobs.
+.PHONY: test
+test: core-test
+
+# Experimental - only (re-)run the failed tests
+.PHONY: retest
+retest:
+	$(MAKE) build-core-test
+	./test run --lazy
+
+# Note that this target is actually not used in CI; it's only for local dev.
+# OTS unit tests are also covered in CI by ocaml-tree-sitter-ci.yml
+# (root `ots-test-ocaml` and `ots-test-python` targets).
+.PHONY: test-all
+test-all:
+	$(MAKE) test-scripts
+	$(MAKE) core-test
+	$(MAKE) -C cli test
+	$(MAKE) -C cli osempass
+	$(MAKE) ots-test
+
+# Vendored ocaml-tree-sitter-semgrep unit tests (OCaml dune + Python pytest).
+# coupling: .github/workflows/ocaml-tree-sitter-ci.yml runs the same targets.
+.PHONY: ots-test
+ots-test:
+	$(MAKE) ots-test-ocaml
+	$(MAKE) ots-test-python
+
+.PHONY: ots-test-ocaml
+ots-test-ocaml: grammar-tools
+	PATH="$(abspath libs/ocaml-tree-sitter-semgrep/core/bin):$$PATH" dune runtest libs/ocaml-tree-sitter-semgrep/core
+
+.PHONY: ots-test-python
+ots-test-python: setup-tree-sitter-versions
+	uv run --project cli --locked pytest libs/ocaml-tree-sitter-semgrep/scripts/test_*.py
+
+.PHONY: setup-tree-sitter-versions
+setup-tree-sitter-versions:
+	./libs/ocaml-tree-sitter-semgrep/core/scripts/provision-tree-sitter-all
+
+#coupling: this is run by .github/workflow/tests.yml
+.PHONY: core-test
+core-test:
+	./scripts/make-symlinks
+	$(MAKE) build-core-test
+# The following command ensures that we can call 'test.exe --help'
+# from the directory of the checkout
+# TODO: this generates weird cmdliner errors in Windows
+	./test --help 2>&1 >/dev/null
+	./scripts/run-core-test
+
+# Smoke subset of the OCaml test suite: only the tests tagged 'smoke' in
+# src/tests/Test.ml. Used on slower CI platforms (e.g. osx x86) to catch
+# platform-specific breakage without running the full suite. We bypass
+# run-core-test (and its extra inline/expect runs) to keep this lean.
+# coupling: the root Makefile's test-osx-smoke target.
+.PHONY: core-test-smoke
+core-test-smoke:
+	./scripts/make-symlinks
+	$(MAKE) build-core-test
+	./test --help 2>&1 >/dev/null
+	./test --max-inline-log-bytes=100_000 -t smoke
+
+# Please keep this standalone target.
+# We want to rebuild the tests without re-running all of them.
+# This is for working on one or a few specific test cases.
+# It rebuilds the test executable which can then be called with
+# './test <filter>' where <filter> selects the tests to run.
+.PHONY: build-core-test
+build-core-test: tree-sitter-runtime
+	dune build $(BUILD_DEFAULT)/src/tests/test.exe
+
+###############################################################################
+# Validation targets
+###############################################################################
+
+# Regenerate all .opam files from dune-project and validate dependencies
+# This ensures .opam files stay in sync with dune-project and don't have conflicts
+.PHONY: check-opam-conflicts
+check-opam-conflicts: dune-project
+	@dune build *.opam 2>/dev/null || true
+	@OUT=$$(find . -maxdepth 1 -name "*.opam" -type f | xargs opam install --deps-only --dry-run 2>&1); \
+	if echo "$$OUT" | grep -q "No solution found"; then \
+		echo "ERROR: OPAM package conflicts detected:" >&2; \
+		echo "$$OUT" >&2; \
+		exit 1; \
+	fi
+
+###############################################################################
+# External dependencies installation targets
+###############################################################################
+
+# **************************************************
+# Platform-independent dependencies installation
+# **************************************************
+
+# We need to install all the dependencies in a single 'opam install'
+# command so as to detect conflicts.
+# WEIRD: if you use ./libs/ocaml-tree-sitter-semgrep/ instead of the full
+# path, then recent versions of opam crash with a 'git ls-files fatal error'
+# about some 'libs/ocaml-tree-sitter-semgrep/../../.git/...' not being a git
+# repo.
+#
+# EXTRA_OPAM_DEPS allows us to add more opam files when building semgrep
+# as part of a larger project (e.g. semgrep-proprietary). Using a single
+# 'opam install' command to install all the dependencies allows us to detect
+# version constraints incompatibilities.
+#
+# weird: when ./semgrep.opam is left as ./, opam install errors with
+# "Undefined boolean filter value: os != win32"
+REQUIRED_DEPS = \
+  ./semgrep.opam \
+  ./dev/required.opam \
+  $(EXTRA_OPAM_DEPS)
+
+OPTIONAL_DEPS = $(REQUIRED_DEPS) ./dev/optional.opam
+
+# This target is portable; it only assumes you have 'gcc', 'opam' and
+# other build-essential tools and a working OCaml (e.g., ocamlc) switch setup.
+# Note that we call opam update below because semgrep.opam may mention
+# new packages that are not covered yet by our ocaml-layer docker image.
+.PHONY: install-deps-for-semgrep-core
+install-deps-for-semgrep-core:
+	./scripts/build-static-libcurl.sh
+	$(MAKE) install-opam-deps
+# Build the tree-sitter runtime so grammar bindings can compile against it
+# (see TREESITTER_INCDIR/TREESITTER_LIBDIR and tree-sitter-runtime above).
+	opam exec -- dune build $(_TS_DUNE)
+
+# Standalone grammar jobs only; full setup solves all dependencies together.
+.PHONY: install-grammar-deps
+install-grammar-deps:
+	opam install --yes --deps-only ./libs/ocaml-tree-sitter-semgrep/core/tree-sitter.opam
+
+.PHONY: grammar-tools
+grammar-tools: tree-sitter-runtime
+	dune build libs/ocaml-tree-sitter-semgrep/core/bin/ocaml-tree-sitter libs/ocaml-tree-sitter-semgrep/core/tree-sitter.install
+
+# Regenerate an in-tree grammar, e.g. `make regen-grammar-python`.
+# Pattern rule (not LANG=) to avoid colliding with the LANG locale var.
+regen-grammar-%: grammar-tools
+	./libs/ocaml-tree-sitter-semgrep/scripts/regen-grammar $*
+
+.PHONY: test-grammars
+test-grammars: grammar-tools
+	$(MAKE) -C libs/ocaml-tree-sitter-semgrep/lang test
+
+test-grammar-%: grammar-tools
+	./libs/ocaml-tree-sitter-semgrep/scripts/test-grammar $*
+
+# Pin the upstream opam-repository to a known-good commit.
+# coupling: keep this commit in sync with opam_repository_pin in
+# .github/workflows/libs/semgrep.libsonnet
+#
+OPAM_REPOSITORY_PIN = git+https://github.com/ocaml/opam-repository.git\#78d29aba187e8362b8ab86c189790c0af9153d4b
+
+# Extra flags forwarded to 'opam init' by 'opam-init'. The Dockerfiles pass
+# '--disable-sandboxing' since containers can't use the bubblewrap sandbox.
+OPAM_INIT_FLAGS ?=
+
+pin-opam-repo:
+	opam repository remove default --all-switches --yes
+	opam repository add default $(OPAM_REPOSITORY_PIN) --all-switches --set-default --yes
+
+# Initialize opam and pin to a commit of ocaml/opam-repository.
+opam-init:
+	opam init --bare --yes $(OPAM_INIT_FLAGS)
+	$(MAKE) pin-opam-repo
+
+# Create the opam switch, then install our fork of the compiler. Run
+# 'make opam-init' first to pin the opam-repository (the Dockerfiles do this).
+switch:
+	opam switch create 5.4.0 ocaml-variants.5.4.0+options ocaml-option-flambda -y -v
+	$(MAKE) pin-ocaml-fork
+
+switch-tsan:
+	opam switch create 5.4.0-tsan ocaml-variants.5.4.0+options ocaml-option-tsan -y -v
+	$(MAKE) pin-ocaml-fork-tsan
+	# For some reason tsan on x86 linux fails unless we preemptively install dune
+	opam install dune -y
+
+pin-ocaml-fork:
+	# the fork without TSan is pinned via our `semgrep.opam.template` file + `semgrep.opam`
+	echo "skipping pinning ocaml fork via make"
+
+pin-ocaml-fork-tsan:
+	# NBT: our fork of the compiler
+	opam pin add ocaml-variants.5.4.0+options "git+https://github.com/semgrep/ocaml.git#5.4.0-semgrep-tsan" --update-invariant -y
+# Install OCaml dependencies (globally) from *.opam files.
+# This now also installs the dev dependencies. This has the benefit
+# of installing all the packages in one shot and detecting possible
+# version conflicts.
+# OPAMSOLVERTIMEOUT default is 60 but seems not enough
+#
+# Per the note above install-deps-ALPINE-for-semgrep-core, we may want
+# to keep it and add `--no-cache`
+#
+# Note that we do the upgrade --fixup here to ensure that the dependencies are
+# up to date and have all necessary dependencies installed. One would think that
+# since opam complains about missing system dependencies when running `opam
+# install` it would try and reinstall the system dependencies. By running `opam
+# upgrade --fixup` opam will install these missing system deps.
+#
+# This helps:
+# - If someone accidentally uninstalls a package or cancels the installation and
+#   breaks the build
+# - When we have cache hits in GHA on things like conf-pcre, by default we won't
+#   install the pcre system package, this ensures those are reinstalled
+install-opam-deps: pin-ocaml-fork$(OPTIONS)
+	opam update -y
+	# use the opam cache by default, as third party package hosts are unreliable
+	opam option --global 'archive-mirrors="https://opam.ocaml.org/cache"'
+	# we want to install our forked OCaml compiler, however this contradicts
+	# the default 5.4.0 invariant of `ocaml-base-compiler = 5.4.0`.
+	# --update-invariant does just that
+	OPAMSOLVERTIMEOUT=1500 LWT_DISCOVER_ARGUMENTS="--use-libev true" LIBRARY_PATH="$(HOMEBREW_PREFIX)/lib:$(LIBRARY_PATH)" opam install --locked --update-invariant --confirm-level=unsafe-yes -y --depext-only $(REQUIRED_DEPS)
+	OPAMSOLVERTIMEOUT=1500 LWT_DISCOVER_ARGUMENTS="--use-libev true" LIBRARY_PATH="$(HOMEBREW_PREFIX)/lib:$(LIBRARY_PATH)" opam install --locked --update-invariant --confirm-level=unsafe-yes -y --deps-only $(REQUIRED_DEPS)
+	# Validate that after installing deps the pinned compiler hasn't changed
+	./scripts/validate-compiler-sha.sh
+
+# This installs pyro caml profiler, which allows us to do some nice continous
+# profiling (--profile passed to pysemgrep). This is separate from
+# install-opam-deps, as it is not compatible with tsan nor windows. This allows
+# us to only install it when needed, in the normal docker image build.
+# Additionally the profiler relies on Rust as a dependency, so this avoids
+# forcing developers to install Rust unless they need it.
+# COUPLING: semgrep.opam.template where we pin the library
+.PHONY: install-pyro-caml
+install-pyro-caml:
+	opam pin add --confirm-level=unsafe-yes pyro-caml.dev $$(cat semgrep.opam | grep -E -o "git\+.*pyro-caml.git#[a-zA-Z0-9]*" | head -1)
+	opam install pyro-caml -y  --confirm-level=unsafe-yes
+
+# This will fail if semgrep.opam isn't up-to-date (in git),
+# and dune isn't installed yet. You can always install dune with
+# 'opam install dune' to get started.
+semgrep.opam: dune-project semgrep.opam.template
+	dune build $@
+# Foolproofing
+	chmod a-w semgrep.opam
+
+# We could also add python dependencies at some point
+# and an 'install-deps-for-semgrep-cli' target
+install-deps:
+	./scripts/pick-lockfile.sh --strict semgrep.opam
+	$(MAKE) install-deps-for-semgrep-core
+
+# ******************************************
+# Release target
+# ******************************************
+
+# Prepare a release branch.
+# This is mainly called by .github/workflow/start-release.yml
+# it is safe to call it multiple times.
+.PHONY: release
+release:
+	./scripts/release/bump
+
+# **************************************************
+# Platform-dependent dependencies installation
+# **************************************************
+
+# -------------------------------------------------
+# Nix
+# -------------------------------------------------
+# See flake.nix top level comments for more information
+
+# always accept the semgrep cache substituer
+NIX=nix --accept-flake-config
+
+# Enter development environment with all dependencies installed
+#
+shell:
+	$(NIX) develop ".?submodules=1#default"
+
+# exclude all non-nix environment variables, good for debugging
+shell-pure:
+	$(NIX) develop -i ".?submodules=1#pure"
+
+shell-pure-test:
+	$(NIX) develop -i ".?submodules=1#pure" -c make core
+
+# Build targets
+# For all the .?submodules=1 we need because nix is weird:
+# https://github.com/NixOS/nix/issues/4423#issuecomment-791352686
+nix-semgrep:
+	$(NIX) build ".?submodules=1#semgrep"
+
+nix-semgrep-core:
+	$(NIX) build ".?submodules=1#semgrep-core"
+
+# Build + run tests (doesn't run python tests yet)
+nix-check:
+	$(NIX) flake check ".?submodules=1#"
+
+# verbose and sandboxing are disabled to enable networking for tests
+nix-check-verbose:
+	$(NIX) flake check -L ".?submodules=1#"
+
+###############################################################################
+# Developer targets
+###############################################################################
+
+configure-osx:
+	# Prep the OCaml package manager (OPAM)'s environment
+	opam init
+	brew install uv bash opam
+	make configure
+
+configure:
+	opam switch create semgrep --empty
+	eval $(opam env)
+
+# This is a best effort to install some external dependencies.
+# As a developer you should not run frequently 'make setup', only when
+# important dependencies change.
+.PHONY: setup
+setup:
+	./scripts/make-symlinks
+	./scripts/check-bash-version
+	./scripts/pick-lockfile.sh semgrep.opam
+	$(MAKE) pin-opam-repo
+	LIBRARY_PATH="$(HOMEBREW_PREFIX)/lib:$(LIBRARY_PATH)" $(MAKE) install-deps-for-semgrep-core
+
+# Install optional development dependencies in addition to build dependencies.
+.PHONY: dev-setup
+dev-setup:
+	$(MAKE) setup
+	opam install -y --deps-only $(OPTIONAL_DEPS)
+
+# Update and rebuild everything within the project.
+.PHONY: rebuild
+rebuild:
+	git submodule update --init
+	-$(MAKE) clean
+	$(MAKE) build
+
+# This starts the profiling backend Pyroscope, for use with the pyro caml
+# profiler. This is needed to collect + visualize profiling data.
+pyroscope:
+	docker run --rm -it -p 4040:4040 grafana/pyroscope:latest
+
+# Run utop with all the semgrep-core libraries loaded.
+.PHONY: utop
+utop:
+	dune utop
+
+DOCKER_IMAGE=semgrep/semgrep-nightly:develop
+
+# If you get parsing errors while running this command, maybe you have an old
+# cached version of the docker image. You can invalidate the cache with
+#   'docker rmi semgrep/semgrep-nightly:develop`
+check_with_docker:
+	docker run --rm -v "${PWD}:/src" $(DOCKER_IMAGE) semgrep $(SEMGREP_ARGS)
+
+
+###############################################################################
+# Martin's targets
+###############################################################################
+# Build executables and place them where semgrep expects them.
+# These are normally copied by '/cli/setup.py' but it doesn't happen if we
+# run only 'dune build'.
+#
+# Usage:
+#  $ make dev
+#  $ PIPENV_PIPFILE=~/semgrep/cli/Pipfile pipenv run semgrep ...
+.PHONY: dev
+dev:
+	$(MAKE) core
+	$(MAKE) copy-core-for-cli
+
+# Script tests include local Git repositories and require Git LFS.
+.PHONY: test-scripts
+test-scripts:
+	uv run --project cli --locked pytest scripts/tests

@@ -1,0 +1,10 @@
+Configuration is invalid - found 2 configuration error(s), and 0 rule(s).
+semgrep error: Invalid rule schema
+  --> rules/invalid-rules/additional-invalid-pattern-operator.yaml:4
+4 |     pattern: foo
+  |     ^
+
+Expected exactly one key of `pattern`, `all`, `any`, `regex`, `not`, or `inside`
+
+[ERROR] Rule parse error in rule eqeq:
+ Expected exactly one key of `pattern`, `all`, `any`, `regex`, `not`, or `inside`

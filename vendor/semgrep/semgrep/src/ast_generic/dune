@@ -1,0 +1,24 @@
+; this library might be used outside semgrep (e.g., in pad's codemap)
+; so try to _not_ make it depend on semgrep.xxx libs
+(library
+ (public_name ast_generic)
+ (wrapped false)
+ (libraries
+   atdgen-runtime
+   sexplib
+
+   commons
+   lib_parsing
+ )
+ (preprocess
+   (pps
+      ppx_deriving.show
+      ppx_deriving.eq
+      ppx_deriving.ord
+      ppx_hash
+      profiling.ppx
+      visitors.ppx
+      ppx_sexp_conv
+   )
+ )
+)

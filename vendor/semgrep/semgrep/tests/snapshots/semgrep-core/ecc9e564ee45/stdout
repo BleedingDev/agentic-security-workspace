@@ -1,0 +1,11 @@
+Test name: without git > scanning root as a symlink to a missing regular file
+--- Files not added to git ---
+a.py
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+{ Core_error.typ = Semgrep_output_v1_t.SemgrepError;
+  msg = "Invalid scanning root: a.py"; loc = None; rule_id = None;
+  details = None }
+--- Selected targets ---
+--- Skipped targets ---

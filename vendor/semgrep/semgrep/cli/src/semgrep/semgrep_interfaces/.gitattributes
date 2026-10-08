@@ -1,0 +1,5 @@
+semgrep_metrics* linguist-generated=true
+semgrep_output_v1* linguist-generated=true
+*.atd linguist-generated=false
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter

@@ -1,0 +1,17 @@
+(library
+ (public_name parallelism)
+ (wrapped false)
+ (libraries
+   base
+   collections
+   eio
+   eio_main
+   eio.mock
+   logs
+ )
+ (preprocess
+   (pps
+     ppx_deriving.show
+   )
+ )
+)

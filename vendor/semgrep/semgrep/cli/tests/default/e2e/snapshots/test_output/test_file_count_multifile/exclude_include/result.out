@@ -1,0 +1,25 @@
+
+
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 5 files tracked by git with 5 Code rules, 1 Secrets rule:
+
+  Language      Rules   Files          Origin   Rules
+ ─────────────────────────────        ────────────────
+  <multilang>       3       5          Custom       5
+  js                1       4
+
+
+
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 0 (0 blocking)
+ • Rules run: 4
+ • Targets scanned: 5
+ • Parsed lines: ~100.0%
+ • Scan was limited to files tracked by git
+ • For a detailed list of skipped files and lines, run semgrep with the --verbose flag
+Ran 4 rules on 5 files: 0 findings.
