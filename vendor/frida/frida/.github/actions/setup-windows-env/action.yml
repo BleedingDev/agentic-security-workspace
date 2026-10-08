@@ -1,0 +1,63 @@
+name: Set up Windows environment
+description: Set up everything needed to build and release things on Windows
+inputs:
+  aws-access-key-id:
+    required: true
+    description: The aws-access-key-id used to authenticate with AWS
+  aws-secret-access-key:
+    required: true
+    description: The aws-secret-access-key used to authenticate with AWS
+  cloudflare-email:
+    required: true
+    description: The email used to authenticate with Cloudflare
+  cloudflare-token:
+    required: true
+    description: The token used to authenticate with Cloudflare
+  architecture:
+    description: The target architecture
+    default: x64
+runs:
+  using: composite
+  steps:
+    - name: Configure git
+      run: |
+        git config --global user.name "Frida Developers"
+        git config --global user.email "oleavr@frida.re"
+      shell: pwsh
+    - name: Check out releng
+      run: |
+        git submodule update --init --depth 1 releng
+        cd releng
+        git submodule update --init --depth 1
+      shell: pwsh
+    - name: Add convenience environment variables
+      run: |
+        echo "FRIDA_PREFIX=$Env:RUNNER_WORKSPACE\dist" >> $Env:GITHUB_ENV
+        echo "FRIDA_VERSION=$(python releng/frida_version.py)" >> $Env:GITHUB_ENV
+      shell: pwsh
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: us-east-1
+    - name: Configure Cloudflare credentials
+      run: |
+        @"
+        defaults:
+            domain: frida.re
+            email: ${{ inputs.cloudflare-email }}
+            token: ${{ inputs.cloudflare-token }}
+        "@ | Set-Content -Path $HOME\.cfcli.yml -NoNewline
+      shell: pwsh
+    - name: Install Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+        architecture: ${{ inputs.architecture }}
+    - name: Install setuptools
+      run: pip install setuptools
+      shell: pwsh
+    - name: Install cloudflare-cli
+      run: npm install -g cloudflare-cli@5.0.5
+      shell: pwsh

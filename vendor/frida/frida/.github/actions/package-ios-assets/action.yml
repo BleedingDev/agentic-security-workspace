@@ -1,0 +1,21 @@
+name: Package iOS assets
+description: Downloads iOS assets and packages them
+runs:
+  using: composite
+  steps:
+    - name: Download iOS assets
+      uses: actions/download-artifact@v8
+      with:
+        name: ios-assets
+        path: build/ios-assets/
+    - name: Create frida-server iOS .deb
+      run: |
+        cd build
+        mkdir -p release-assets
+        for arch in arm arm64; do
+          ../subprojects/frida-core/tools/package-server-fruity.sh \
+              iphoneos-$arch \
+              ios-assets \
+              release-assets/frida_${FRIDA_VERSION}_iphoneos-$arch.deb
+        done
+      shell: bash

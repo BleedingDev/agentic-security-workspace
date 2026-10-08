@@ -1,0 +1,101 @@
+task:
+  name: freebsd-x86_64
+  freebsd_instance:
+    image_family: freebsd-15-0-amd64-ufs
+  environment:
+    S3_ACCESS_KEY: ENCRYPTED[2f368bef589e43779394e459191eaad2fc4cc50dc36c6f03168a1e8e43897476e8bf596fd4dd0d988bcbab8fa8e171f8]
+    S3_SECRET_KEY: ENCRYPTED[45f352473433a1053622a662ce8d57bc7421bce5772c9c5caf4a0e54f63944bd420f71101e014876e038f0c66c134ac2]
+    CF_EMAIL: ENCRYPTED[a9f0dcd0ee83fa111c36f092f34b3d5660acafe0d07804d6b6a89bfa70a127ef8305f21089408959c51e23ecd2fd3622]
+    CF_TOKEN: ENCRYPTED[4f9f3f7c8603fd32978b825d65f34b06fce8e51bedb4303744c799d21fc38266173a6be5a7a46b5e616573d27c9f6e91]
+    PYTHON: /usr/local/bin/python3.11
+    PYTHON3: /usr/local/bin/python3.11
+  timeout_in: 2h
+  install_dependencies_script: |
+    pkg install -y \
+      bash \
+      bison \
+      git \
+      go \
+      npm \
+      py311-pip \
+      py311-setuptools
+    echo "CIRRUS_SHELL=$(which bash)" >> $CIRRUS_ENV
+    pip install awscli typing-extensions
+    npm install -g cloudflare-cli@5.0.5
+  clone_script: |
+    if [ -z "$CIRRUS_PR" ]; then
+      git clone --branch=$CIRRUS_BRANCH https://x-access-token:${CIRRUS_REPO_CLONE_TOKEN}@github.com/${CIRRUS_REPO_FULL_NAME}.git $CIRRUS_WORKING_DIR
+    else
+      git clone https://x-access-token:${CIRRUS_REPO_CLONE_TOKEN}@github.com/${CIRRUS_REPO_FULL_NAME}.git $CIRRUS_WORKING_DIR
+      git fetch origin pull/$CIRRUS_PR/head:pull/$CIRRUS_PR
+    fi
+    git reset --hard $CIRRUS_CHANGE_IN_REPO
+    $PYTHON tools/ensure-submodules.py
+  setup_environment_script: |
+    echo "FRIDA_PREFIX=$CIRRUS_WORKING_DIR/dist" >> $CIRRUS_ENV
+    echo "FRIDA_VERSION=$(python releng/frida_version.py)" >> $CIRRUS_ENV
+    mkdir -p ~/.aws
+    (
+      echo "[default]"
+      echo "region = us-east-1"
+    ) > ~/.aws/config
+    (
+      echo "[default]"
+      echo "aws_access_key_id = $S3_ACCESS_KEY"
+      echo "aws_secret_access_key = $S3_SECRET_KEY"
+    ) > ~/.aws/credentials
+    (
+      echo "defaults:"
+      echo "    domain: frida.re"
+      echo "    email: $CF_EMAIL"
+      echo "    token: $CF_TOKEN"
+    ) > ~/.cfcli.yml
+  roll_toolchain_script: $PYTHON releng/deps.py roll toolchain freebsd-x86_64 --activate
+  roll_sdk_script: $PYTHON releng/deps.py roll sdk freebsd-x86_64
+  configure_script: >-
+    ./configure
+    "--prefix=$FRIDA_PREFIX"
+    --enable-gadget
+    --enable-server
+    --enable-portal
+    --enable-inject
+    --disable-frida-tools
+    --
+    -Dfrida-gum:devkits=gum,gumjs
+    -Dfrida-core:compiler_backend=enabled
+    -Dfrida-core:devkits=core
+  compile_script: make
+  install_script: make install
+  frida_gum_devkit_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/lib/frida/devkits/gum/*"
+  frida_gumjs_devkit_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/lib/frida/devkits/gumjs/*"
+  frida_core_devkit_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/lib/frida/devkits/core/*"
+  frida_server_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/bin/frida-server"
+  frida_portal_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/bin/frida-portal"
+  frida_inject_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/bin/frida-inject"
+  frida_gadget_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/lib/frida/64/frida-gadget.so"
+  package_python_script: |
+    export FRIDA_EXTENSION=$(find "$FRIDA_PREFIX" -name _frida.abi3.so)
+    cd subprojects/frida-python
+    pip wheel -w "$FRIDA_PREFIX/wheels" --no-deps .
+  frida_python_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/wheels/*.whl"
+  build_node_script: |
+    installdir=$FRIDA_PREFIX/prebuilds
+    export FRIDA_DEPS=$PWD/deps
+    export PKG_CONFIG_PATH=$FRIDA_PREFIX/libdata/pkgconfig
+    python tools/ensure-submodules.py frida-node
+    cd subprojects/frida-node
+    npm version $FRIDA_VERSION
+    ./configure "--prefix=$FRIDA_PREFIX"
+    make prebuild
+    mkdir "$installdir"
+    cp build/*.tar.gz "$installdir"
+  frida_node_freebsd_x86_64_artifacts:
+    path: "$FRIDA_PREFIX/prebuilds/*"

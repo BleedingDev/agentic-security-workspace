@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/frida/libnice.git
+revision = 9a3da6e3e5bbcf935fd85b6b8557ff8c7dd9032c
+depth = 1
+
+[provide]
+dependency_names = nice
+
