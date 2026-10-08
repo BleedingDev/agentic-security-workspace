@@ -1,0 +1,329 @@
+package jadx.gui;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import jadx.api.ICodeInfo;
+import jadx.api.JadxArgs;
+import jadx.api.JadxDecompiler;
+import jadx.api.JavaClass;
+import jadx.api.JavaNode;
+import jadx.api.JavaPackage;
+import jadx.api.ResourceFile;
+import jadx.api.impl.InMemoryCodeCache;
+import jadx.api.metadata.ICodeNodeRef;
+import jadx.api.plugins.pass.JadxPassInfo;
+import jadx.api.plugins.pass.impl.SimpleJadxPassInfo;
+import jadx.api.plugins.pass.types.JadxPreparePass;
+import jadx.api.usage.impl.EmptyUsageInfoCache;
+import jadx.api.usage.impl.InMemoryUsageInfoCache;
+import jadx.cli.JadxAppCommon;
+import jadx.cli.plugins.JadxFilesGetter;
+import jadx.core.dex.nodes.ClassNode;
+import jadx.core.dex.nodes.ProcessState;
+import jadx.core.dex.nodes.RootNode;
+import jadx.core.utils.exceptions.JadxRuntimeException;
+import jadx.gui.cache.code.CodeCacheMode;
+import jadx.gui.cache.code.CodeStringCache;
+import jadx.gui.cache.code.disk.BufferCodeCache;
+import jadx.gui.cache.code.disk.DiskCodeCache;
+import jadx.gui.cache.usage.UsageInfoCache;
+import jadx.gui.plugins.GuiPluginsManager;
+import jadx.gui.settings.JadxProject;
+import jadx.gui.settings.JadxSettings;
+import jadx.gui.ui.MainWindow;
+import jadx.gui.utils.CacheObject;
+
+import static jadx.core.dex.nodes.ProcessState.GENERATED_AND_UNLOADED;
+import static jadx.core.dex.nodes.ProcessState.NOT_LOADED;
+import static jadx.core.dex.nodes.ProcessState.PROCESS_COMPLETE;
+
+@SuppressWarnings("ConstantConditions")
+public class JadxWrapper {
+	private static final Logger LOG = LoggerFactory.getLogger(JadxWrapper.class);
+
+	private static final Object DECOMPILER_UPDATE_SYNC = new Object();
+
+	private final MainWindow mainWindow;
+	private volatile @Nullable JadxDecompiler decompiler;
+
+	public JadxWrapper(MainWindow mainWindow) {
+		this.mainWindow = mainWindow;
+	}
+
+	public void open() {
+		close();
+		try {
+			synchronized (DECOMPILER_UPDATE_SYNC) {
+				JadxProject project = getProject();
+				GuiPluginsManager guiPluginsManager = mainWindow.getGuiPluginsManager();
+				JadxArgs jadxArgs = getSettings().toJadxArgs();
+				jadxArgs.setPluginLoader(guiPluginsManager.buildProjectPluginLoader());
+				jadxArgs.setFilesGetter(JadxFilesGetter.INSTANCE);
+				project.fillJadxArgs(jadxArgs);
+				JadxAppCommon.applyEnvVars(jadxArgs);
+
+				decompiler = new JadxDecompiler(jadxArgs);
+				guiPluginsManager.initGuiPluginsContext(decompiler.getPluginManager(), jadxArgs, false);
+				guiPluginsManager.injectGlobalPlugins(decompiler);
+				initUsageCache(jadxArgs);
+				registerCodeCache(decompiler);
+				decompiler.setEventsImpl(mainWindow.events());
+				decompiler.load();
+			}
+		} catch (Exception e) {
+			LOG.error("Jadx decompiler wrapper init error", e);
+			close();
+		}
+	}
+
+	// TODO: check and move into core package
+	public void unloadClasses() {
+		getCurrentDecompiler().ifPresent(decompiler -> {
+			for (ClassNode cls : decompiler.getRoot().getClasses()) {
+				ProcessState clsState = cls.getState();
+				cls.unload();
+				cls.setState(clsState == PROCESS_COMPLETE ? GENERATED_AND_UNLOADED : NOT_LOADED);
+			}
+		});
+	}
+
+	public void close() {
+		try {
+			synchronized (DECOMPILER_UPDATE_SYNC) {
+				if (decompiler != null) {
+					decompiler.close();
+					decompiler = null;
+				}
+				mainWindow.getGuiPluginsManager().resetProjectScope();
+			}
+		} catch (Exception e) {
+			LOG.error("Jadx decompiler close error", e);
+		} finally {
+			mainWindow.getCacheObject().reset();
+		}
+	}
+
+	/**
+	 * Disk cache require loaded classes to operate, but cache should be set before 'after load' event
+	 * to allow plugins decompile classes with cache enabled.
+	 * To resolve this, register last 'prepare' pass for cache initialization.
+	 */
+	private void registerCodeCache(JadxDecompiler jadxDecompiler) {
+		CodeCacheMode codeCacheMode = getSettings().getCodeCacheMode();
+		if (codeCacheMode == CodeCacheMode.MEMORY) {
+			jadxDecompiler.getArgs().setCodeCache(new InMemoryCodeCache());
+			return;
+		}
+		jadxDecompiler.addCustomPass(new JadxPreparePass() {
+			@Override
+			public JadxPassInfo getInfo() {
+				return new SimpleJadxPassInfo("CacheInit");
+			}
+
+			@Override
+			public void init(RootNode root) {
+				switch (getSettings().getCodeCacheMode()) {
+					case DISK_WITH_CACHE:
+						root.getArgs().setCodeCache(new CodeStringCache(buildBufferedDiskCache(root)));
+						break;
+					case DISK:
+						root.getArgs().setCodeCache(buildBufferedDiskCache(root));
+						break;
+				}
+			}
+		});
+	}
+
+	private BufferCodeCache buildBufferedDiskCache(RootNode root) {
+		DiskCodeCache diskCache = new DiskCodeCache(root, getProject().getCacheDir());
+		return new BufferCodeCache(diskCache);
+	}
+
+	private void initUsageCache(JadxArgs jadxArgs) {
+		switch (getSettings().getUsageCacheMode()) {
+			case NONE:
+				jadxArgs.setUsageInfoCache(new EmptyUsageInfoCache());
+				break;
+			case MEMORY:
+				jadxArgs.setUsageInfoCache(new InMemoryUsageInfoCache());
+				break;
+			case DISK:
+				jadxArgs.setUsageInfoCache(new UsageInfoCache(getProject().getCacheDir(), jadxArgs.getInputFiles()));
+				break;
+		}
+	}
+
+	public void reloadPasses() {
+		mainWindow.getGuiPluginsManager().resetProjectScope();
+		decompiler.reloadPasses();
+	}
+
+	/**
+	 * Get the complete list of classes
+	 */
+	public List<JavaClass> getClasses() {
+		return getDecompiler().getClasses();
+	}
+
+	/**
+	 * Get all classes that are not excluded by the excluded packages settings
+	 */
+	public List<JavaClass> getIncludedClasses() {
+		List<JavaClass> classList = getDecompiler().getClasses();
+		List<String> excludedPackages = getExcludedPackages();
+		if (excludedPackages.isEmpty()) {
+			return classList;
+		}
+		return classList.stream()
+				.filter(cls -> isClassIncluded(excludedPackages, cls))
+				.collect(Collectors.toList());
+	}
+
+	/**
+	 * Get all classes that are not excluded by the excluded packages settings including inner classes
+	 */
+	public List<JavaClass> getIncludedClassesWithInners() {
+		List<JavaClass> classes = getDecompiler().getClassesWithInners();
+		List<String> excludedPackages = getExcludedPackages();
+		if (excludedPackages.isEmpty()) {
+			return classes;
+		}
+		return classes.stream()
+				.filter(cls -> isClassIncluded(excludedPackages, cls))
+				.collect(Collectors.toList());
+	}
+
+	private static boolean isClassIncluded(List<String> excludedPackages, JavaClass cls) {
+		for (String exclude : excludedPackages) {
+			String clsFullName = cls.getFullName();
+			if (clsFullName.equals(exclude)
+					|| clsFullName.startsWith(exclude + '.')) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public List<List<JavaClass>> buildDecompileBatches(List<JavaClass> classes) {
+		return getDecompiler().getDecompileScheduler().buildBatches(classes);
+	}
+
+	// TODO: move to CLI and filter classes in JadxDecompiler
+	public List<String> getExcludedPackages() {
+		String excludedPackages = getSettings().getExcludedPackages().trim();
+		if (excludedPackages.isEmpty()) {
+			return Collections.emptyList();
+		}
+		return Arrays.asList(excludedPackages.split(" +"));
+	}
+
+	public void setExcludedPackages(List<String> packagesToExclude) {
+		getSettings().setExcludedPackages(String.join(" ", packagesToExclude).trim());
+		getSettings().sync();
+	}
+
+	public void addExcludedPackage(String packageToExclude) {
+		String newExclusion = getSettings().getExcludedPackages() + ' ' + packageToExclude;
+		getSettings().setExcludedPackages(newExclusion.trim());
+		getSettings().sync();
+	}
+
+	public void removeExcludedPackage(String packageToRemoveFromExclusion) {
+		List<String> list = new ArrayList<>(getExcludedPackages());
+		list.remove(packageToRemoveFromExclusion);
+		getSettings().setExcludedPackages(String.join(" ", list));
+		getSettings().sync();
+	}
+
+	public Optional<JadxDecompiler> getCurrentDecompiler() {
+		synchronized (DECOMPILER_UPDATE_SYNC) {
+			return Optional.ofNullable(decompiler);
+		}
+	}
+
+	/**
+	 * TODO: make method private
+	 * Do not store JadxDecompiler in fields to not leak old instances
+	 */
+	public @NotNull JadxDecompiler getDecompiler() {
+		if (decompiler == null || decompiler.getRoot() == null) {
+			throw new JadxRuntimeException("Decompiler not yet loaded");
+		}
+		return decompiler;
+	}
+
+	// TODO: forbid usage of this method
+	public RootNode getRootNode() {
+		return getDecompiler().getRoot();
+	}
+
+	public void reloadCodeData() {
+		getDecompiler().reloadCodeData();
+	}
+
+	public JavaNode getJavaNodeByRef(ICodeNodeRef nodeRef) {
+		return getDecompiler().getJavaNodeByRef(nodeRef);
+	}
+
+	public @Nullable JavaNode getEnclosingNode(ICodeInfo codeInfo, int pos) {
+		return getDecompiler().getEnclosingNode(codeInfo, pos);
+	}
+
+	public List<JavaPackage> getPackages() {
+		return getDecompiler().getPackages();
+	}
+
+	public List<ResourceFile> getResources() {
+		return getDecompiler().getResources();
+	}
+
+	public JadxArgs getArgs() {
+		return getDecompiler().getArgs();
+	}
+
+	public JadxProject getProject() {
+		return mainWindow.getProject();
+	}
+
+	public JadxSettings getSettings() {
+		return mainWindow.getSettings();
+	}
+
+	public CacheObject getCache() {
+		return mainWindow.getCacheObject();
+	}
+
+	/**
+	 * @param fullName Full name of an outer class. Inner classes are not supported.
+	 */
+	public @Nullable JavaClass searchJavaClassByFullAlias(String fullName) {
+		return getDecompiler().getClasses().stream()
+				.filter(cls -> cls.getFullName().equals(fullName))
+				.findFirst()
+				.orElse(null);
+	}
+
+	public @Nullable JavaClass searchJavaClassByOrigClassName(String fullName) {
+		return getDecompiler().searchJavaClassByOrigFullName(fullName);
+	}
+
+	/**
+	 * @param rawName Full raw name of an outer class. Inner classes are not supported.
+	 */
+	public @Nullable JavaClass searchJavaClassByRawName(String rawName) {
+		return getDecompiler().getClasses().stream()
+				.filter(cls -> cls.getRawName().equals(rawName))
+				.findFirst()
+				.orElse(null);
+	}
+}
