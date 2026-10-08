@@ -13372,21 +13372,24 @@
       "url": "https://github.com/frida/frida-website.git",
       "branch": "main",
       "path": "vendor/frida/frida-website",
-      "license_hint": "MIT"
+      "license_hint": "MIT",
+      "commit": "a636f5011b4d8bf6a80712bfa5639bd2a5dd789d"
     },
     {
       "name": "semgrep/semgrep-docs",
       "url": "https://github.com/semgrep/semgrep-docs.git",
       "branch": "main",
       "path": "vendor/semgrep/semgrep-docs",
-      "license_hint": "LGPL-2.1"
+      "license_hint": "LGPL-2.1",
+      "commit": "cba2b96523194d5e198d1c07998d5d4f01090eae"
     },
     {
       "name": "openai/codex",
       "url": "https://github.com/openai/codex.git",
       "branch": "main",
       "path": "vendor/openai/codex",
-      "license_hint": "Apache-2.0"
+      "license_hint": "Apache-2.0",
+      "commit": "3b6ab3471a2d4d994c9fad322fca749564bc05e0"
     }
   ],
   "models": [
