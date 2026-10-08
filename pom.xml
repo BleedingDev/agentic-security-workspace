@@ -1,0 +1,538 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.xebyte</groupId>
+    <artifactId>GhidraMCP</artifactId>
+    <packaging>jar</packaging>
+    <version>7.0.0</version>
+    <name>Ghidra MCP Server</name>
+    <description>Production-ready Model Context Protocol server for Ghidra reverse engineering platform. Provides MCP-based tooling and automation for reverse engineering workflows: convention-enforcing rename/type/comment endpoints, batch operations, P-code emulation, live debugger integration, headless server, and Ghidra Server multi-version support.</description>
+    <url>https://github.com/bethington/ghidra-mcp</url>
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <ghidra.version>12.1.4</ghidra.version>
+        <!-- Build timestamp generated at compile time (format: yyyyMMdd-HHmmss) -->
+        <build.timestamp>${maven.build.timestamp}</build.timestamp>
+        <maven.build.timestamp.format>yyyyMMdd-HHmmss</maven.build.timestamp.format>
+        <!-- Build number - use current time as unique identifier -->
+        <build.number>${maven.build.timestamp}</build.number>
+        <!-- Default empty so surefire's @{argLine} resolves even when the
+             JaCoCo agent is skipped (jacoco.skip=true); prepare-agent
+             overwrites this property at runtime. -->
+        <argLine></argLine>
+    </properties>
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <id>bethington</id>
+            <name>Project Maintainer</name>
+            <url>https://github.com/bethington</url>
+        </developer>
+    </developers>
+    <scm>
+        <connection>scm:git:git://github.com/bethington/ghidra-mcp.git</connection>
+        <developerConnection>scm:git:ssh://github.com:bethington/ghidra-mcp.git</developerConnection>
+        <url>http://github.com/bethington/ghidra-mcp/tree/main</url>
+    </scm>
+    <dependencies>
+        <!-- Ghidra dependencies (installed locally via mvn install:install-file) -->
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Generic</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>SoftwareModeling</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Project</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Docking</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Decompiler</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Utility</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Base</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Gui</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>FileSystem</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Help</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <!-- Ghidra Emulation (for EmulationService P-code emulator) -->
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Emulation</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <!-- Ghidra Debug module dependencies (for DebuggerService) -->
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Debugger-api</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Framework-TraceModeling</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Debugger-rmi-trace</artifactId>
+            <version>${ghidra.version}</version>
+        </dependency>
+        <!-- Gson (provided — bundled with Ghidra in Framework/Generic/lib/) -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.14.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- JUnit (test only) -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Mockito (test only) -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.24.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Ghidra DB (provided — bundled with Ghidra in Framework/DB/lib/).
+             Needed at compile time because HeadlessProgramProvider touches
+             DomainObjectAdapterDB, which indirectly references db.util.ErrorHandler,
+             and at test time so Mockito can instrument Program's type hierarchy.
+             Must NOT be test-scoped: the IDE (Eclipse JDT) then compiles main
+             sources with an incomplete classpath and writes error-carrying classes
+             into target/classes, which surface as bogus "Unresolved compilation
+             problem" errors on the next `mvn test` that skips recompilation. -->
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>DB</artifactId>
+            <version>${ghidra.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- jdom2 (test only) — ghidra.framework.options.OptionType's static initializer
+             builds a CUSTOM_TYPE constant that reaches SaveState -> jdom2. Any offline
+             test that names an OptionType constant (e.g. the set_program_option type
+             tests) fails with NoClassDefFoundError without it. Same version Ghidra
+             ships in Framework/Generic/lib. -->
+        <dependency>
+            <groupId>org.jdom</groupId>
+            <artifactId>jdom2</artifactId>
+            <version>2.0.6.1</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Graph (test only) — ghidra.program.database.data.CompositeDBAdapter and the
+             SLEIGH language loader reach ghidra.graph.GEdge while a real Program is being
+             built. No main source touches ghidra.graph, so this must NOT be compile- or
+             provided-scoped: widening it would put Graph.jar in target/lib and ship it
+             inside the extension zip, where Ghidra already provides it.
+             All three workflows (tests/release/pre-release) already `install-file` this
+             jar; only the pom never declared it. -->
+        <dependency>
+            <groupId>ghidra</groupId>
+            <artifactId>Graph</artifactId>
+            <version>${ghidra.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <finalName>${project.artifactId}-${project.version}</finalName>
+        <!-- Enable resource filtering for version substitution -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>com/xebyte/version.properties</include>
+                    <include>extension.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>com/xebyte/version.properties</exclude>
+                    <exclude>extension.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- Maven Surefire Plugin — enable Byte Buddy experimental mode for Java 25.
+                 @{argLine} late-binds the JaCoCo agent injected by prepare-agent. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <argLine>@{argLine} -Dnet.bytebuddy.experimental=true</argLine>
+                    <systemPropertyVariables>
+                        <!-- The offline tests that assert on source text locate the
+                             repo through com.xebyte.offline.ProjectSource. It can
+                             find the root on its own (from the compiled test
+                             classes), but passing it explicitly means the answer is
+                             the build's, not an inference. -->
+                        <project.basedir>${project.basedir}</project.basedir>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <!-- JaCoCo — line coverage for the offline test tier. Report lands in
+                 target/site/jacoco/ on every `mvn test`. Disable with
+                 -Djacoco.skip=true. The coverage GATE that consumes this data
+                 lives in the `coverage-gate` profile at the bottom of this file. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.15</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Maven Compiler Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.16.0</version>
+                <configuration>
+                    <release>${maven.compiler.release}</release>
+                    <encoding>UTF-8</encoding>
+                    <showWarnings>false</showWarnings>
+                </configuration>
+            </plugin>
+            <!-- Ensure deterministic resource/properties encoding -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <encoding>${project.build.sourceEncoding}</encoding>
+                    <propertiesEncoding>${project.build.sourceEncoding}</propertiesEncoding>
+                </configuration>
+            </plugin>
+            <!-- Use custom MANIFEST.MF -->
+            <plugin>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.5.1</version>
+                <configuration>
+                    <archive>
+                        <manifestFile>src/main/resources/META-INF/MANIFEST.MF</manifestFile>
+                    </archive>
+                    <!-- Exclude the App class -->
+                    <excludes>
+                        <exclude>**/App.class</exclude>
+                    </excludes>
+                    <!-- Make sure output directory is target for consistency -->
+                    <outputDirectory>${project.build.directory}</outputDirectory>
+                </configuration>
+            </plugin>
+            <!-- The Assembly Plugin for creating the Ghidra extension ZIP -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.8.0</version>
+                <configuration>
+                    <!-- Using the custom assembly descriptor -->
+                    <descriptors>
+                        <descriptor>src/assembly/ghidra-extension.xml</descriptor>
+                    </descriptors>
+                    <!-- Don't append the assembly ID -->
+                    <appendAssemblyId>false</appendAssemblyId>
+                </configuration>
+            </plugin>
+            <!-- Copy dependencies to target/lib for the assembly -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!-- Build Profiles -->
+    <profiles>
+        <!-- Headless Server Profile -->
+        <profile>
+            <id>headless</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>3.5.1</version>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.xebyte.headless.GhidraMCPHeadlessServer</mainClass>
+                                    <addClasspath>true</addClasspath>
+                                    <classpathPrefix>lib/</classpathPrefix>
+                                </manifest>
+                            </archive>
+                            <outputDirectory>${project.build.directory}</outputDirectory>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <version>3.8.0</version>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>src/assembly/headless-jar.xml</descriptor>
+                            </descriptors>
+                            <appendAssemblyId>false</appendAssemblyId>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>make-headless-assembly</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Docker Build Profile -->
+        <profile>
+            <id>docker</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>io.fabric8</groupId>
+                        <artifactId>docker-maven-plugin</artifactId>
+                        <version>0.49.0</version>
+                        <configuration>
+                            <images>
+                                <image>
+                                    <name>ghidra-mcp-headless:${project.version}</name>
+                                    <build>
+                                        <contextDir>${project.basedir}</contextDir>
+                                        <dockerFile>docker/Dockerfile</dockerFile>
+                                    </build>
+                                </image>
+                            </images>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>build-docker</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>build</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Coverage gate. Opt-in via -Pcoverage-gate; CI enables it on the
+             full offline run.
+
+             It is a RATCHET, not a target: the minimum sits just under the
+             measured offline-tier coverage so a regression fails the build
+             while ordinary work doesn't. Raise it as coverage improves; never
+             lower it to make a build pass. (Mirrors the Python cov-fail-under
+             floors in CI.)
+
+             The number is low because it measures the OFFLINE tier only — the
+             integration suites that exercise the services need a live Ghidra
+             on 8089 and don't run in CI.
+
+             It lives in a profile rather than the default build because the
+             rule is only meaningful for a FULL run: `mvn test -Dtest=OneClass`
+             legitimately covers a few percent of the codebase, and gating that
+             by default would fail every targeted local test run. -->
+        <profile>
+            <id>coverage-gate</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>0.8.15</version>
+                        <executions>
+                            <execution>
+                                <id>jacoco-check</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <rule>
+                                            <element>BUNDLE</element>
+                                            <limits>
+                                                <limit>
+                                                    <counter>LINE</counter>
+                                                    <value>COVEREDRATIO</value>
+                                                    <minimum>0.075</minimum>
+                                                </limit>
+                                            </limits>
+                                        </rule>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Real-Ghidra test tier (src/test/java/com/xebyte/core/*GhidraTest.java).
+
+             Those tests build an actual ProgramDB through ghidra.program.database.ProgramBuilder,
+             which loads the x86 SLEIGH language for real. That drags in a dozen third-party
+             libraries that Ghidra BUNDLES inside its installation but that the pom's
+             hand-enumerated `ghidra:*` module jars do not carry: the module jars were installed
+             with `install-file`, which records no transitive dependencies at all.
+
+             The result, before this profile existed, was a tier that could not pass ANYWHERE
+             under Maven: with GHIDRA_INSTALL_DIR set it died in @Before with
+             NoClassDefFoundError: org/apache/logging/log4j/LogManager, and with it unset the
+             @BeforeClass assumeTrue skipped every test. The Gradle backend was already green,
+             because build.gradle puts the whole installation on the classpath via fileTree —
+             this profile is the Maven equivalent, narrowed to what the tier actually resolves.
+
+             ApplicationConfiguration.setInitializeLogging(false) does NOT avoid the log4j
+             requirement: DefaultLanguageService's static initializer resolves LogManager
+             before any configuration flag is consulted.
+
+             The chain was measured by leave-one-out on 2026-08-31 against Ghidra 12.1.2 —
+             every jar below except failureaccess is load-bearing, i.e. removing it turns
+             7 passing tests into 7 errors.
+
+             Activated by the presence of GHIDRA_INSTALL_DIR, which is exactly the condition
+             the tier's own assumeTrue gates on, so the classpath is extended precisely when
+             the tests intend to run. GhidraRuntimeClasspathGhidraTest fails loudly, naming
+             the missing file, if a Ghidra upgrade renames one of these jars — the JVM
+             silently ignores a classpath element that does not exist, so without that test
+             a rename resurfaces as an unrelated-looking NoClassDefFoundError.
+             A Ghidra version retarget must revisit the versions below; see the
+             `ghidra-runtime-tests` row in CLAUDE.md's "Match change -> tests" table. -->
+        <profile>
+            <id>ghidra-runtime-tests</id>
+            <activation>
+                <property>
+                    <name>env.GHIDRA_INSTALL_DIR</name>
+                </property>
+            </activation>
+            <properties>
+                <ghidra.generic.lib>${env.GHIDRA_INSTALL_DIR}/Ghidra/Framework/Generic/lib</ghidra.generic.lib>
+                <ghidra.swmodeling.lib>${env.GHIDRA_INSTALL_DIR}/Ghidra/Framework/SoftwareModeling/lib</ghidra.swmodeling.lib>
+                <ghidra.help.lib>${env.GHIDRA_INSTALL_DIR}/Ghidra/Framework/Help/lib</ghidra.help.lib>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <additionalClasspathElements>
+                                <!-- Framework/Generic/lib -->
+                                <!-- log4j: DefaultLanguageService.<clinit> -> LogManager. -->
+                                <element>${ghidra.generic.lib}/log4j-api-2.26.1.jar</element>
+                                <element>${ghidra.generic.lib}/log4j-core-2.26.1.jar</element>
+                                <!-- guava: SleighLanguage's caches -> com.google.common.collect.BiMap. -->
+                                <element>${ghidra.generic.lib}/guava-32.1.3-jre.jar</element>
+                                <!-- failureaccess is guava's declared runtime companion. The current
+                                     tests never reach it (leave-one-out still passes without it), but
+                                     any guava future/AbstractFuture path would, so it ships with guava
+                                     rather than waiting to appear as the next NoClassDefFoundError. -->
+                                <element>${ghidra.generic.lib}/failureaccess-1.0.1.jar</element>
+                                <!-- commons-lang3: db.TableRecord.<clinit> -> ArrayUtils. -->
+                                <element>${ghidra.generic.lib}/commons-lang3-3.20.0.jar</element>
+                                <!-- commons-collections4: listing iteration -> IteratorUtils. -->
+                                <element>${ghidra.generic.lib}/commons-collections4-4.6.0.jar</element>
+
+                                <!-- Framework/SoftwareModeling/lib -->
+                                <!-- antlr: SleighLanguageProvider parses the .sla grammar. -->
+                                <element>${ghidra.swmodeling.lib}/antlr-runtime-3.5.2.jar</element>
+                                <!-- msv + friends: RELAX NG validation of the language definition XML
+                                     (org.iso_relax.verifier.VerifierFactory). All four are required. -->
+                                <element>${ghidra.swmodeling.lib}/isorelax-20050913.jar</element>
+                                <element>${ghidra.swmodeling.lib}/msv-20050913.jar</element>
+                                <element>${ghidra.swmodeling.lib}/relaxngDatatype-20050913.jar</element>
+                                <element>${ghidra.swmodeling.lib}/xsdlib-20050913.jar</element>
+
+                                <!-- Framework/Help/lib -->
+                                <!-- javahelp: CompositeDBAdapter.<clinit> reaches
+                                     javax.help.UnsupportedOperationException through Ghidra's
+                                     help-annotated exception hierarchy. -->
+                                <element>${ghidra.help.lib}/javahelp-2.0.05.jar</element>
+                            </additionalClasspathElements>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

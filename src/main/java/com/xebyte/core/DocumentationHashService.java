@@ -1,0 +1,1686 @@
+package com.xebyte.core;
+
+import ghidra.app.decompiler.DecompileResults;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.StringDataType;
+import ghidra.program.model.lang.OperandType;
+import ghidra.program.model.listing.*;
+import ghidra.program.model.scalar.Scalar;
+import ghidra.program.model.symbol.*;
+import ghidra.util.Msg;
+import ghidra.util.task.ConsoleTaskMonitor;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
+
+/**
+ * Service for function hashing, documentation export/import, and cross-version matching.
+ * Extracted from GhidraMCPPlugin as part of v4.0.0 refactor.
+ */
+@McpToolGroup(value = "documentation", description = "Function hashing, cross-binary documentation, undocumented function discovery")
+public class DocumentationHashService {
+
+    private final ProgramProvider programProvider;
+    private final ThreadingStrategy threadingStrategy;
+    private final BinaryComparisonService binaryComparisonService;
+    private FunctionService functionService;
+
+    public DocumentationHashService(ProgramProvider programProvider, ThreadingStrategy threadingStrategy,
+                                     BinaryComparisonService binaryComparisonService) {
+        this.programProvider = programProvider;
+        this.threadingStrategy = threadingStrategy;
+        this.binaryComparisonService = binaryComparisonService;
+    }
+
+    /**
+     * Set the FunctionService (needed for decompilation in getFunctionDocumentation).
+     */
+    public void setFunctionService(FunctionService functionService) {
+        this.functionService = functionService;
+    }
+
+    // -----------------------------------------------------------------------
+    // Function Hash Methods
+    // -----------------------------------------------------------------------
+
+    /**
+     * Compute a normalized opcode hash for a function.
+     * The hash normalizes:
+     * - Absolute addresses (call targets, jump targets, data refs) are replaced with placeholders
+     * - Register-based operations are preserved
+     * - Instruction mnemonics and operand types are included
+     *
+     * This allows matching identical functions that are located at different addresses.
+     */
+    @McpTool(path = "/get_function_hash", description = "Compute the normalized opcode hash of ONE function (function=), or of MANY in one call by omitting it: every function, paged, optionally only the documented or undocumented ones (filter=). On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response getFunctionHash(
+            @Param(value = "function", paramType = Param.FUNCTION_REF, defaultValue = "",
+                   description = "Function to hash: a name, or an address as 0x<hex> (default space) or "
+                               + "<space>:<hex> (e.g., mem:1000, code:ff00). Some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous. Omit to hash many functions (offset, limit, "
+                               + "filter).") String functionAddress,
+            @Param(value = "offset", defaultValue = "0",
+                   description = "Bulk mode: number of matching functions to skip before this page "
+                               + "starts; 0 begins at the first. The filter is applied before the skip, "
+                               + "so paging is stable only within one filter value.") int offset,
+            @Param(value = "limit", defaultValue = "100",
+                   description = "Bulk mode: maximum functions whose hash is computed and returned in "
+                               + "this page (default 100). The walk still visits every function to "
+                               + "produce total_matching, so 0 returns an EMPTY page rather than "
+                               + "everything.") int limit,
+            @Param(value = "filter", defaultValue = "",
+                   description = "Bulk mode: `documented` keeps functions with a real name, "
+                               + "`undocumented` keeps auto-named ones (FUN_*, and names starting "
+                               + "with `switch`). Omit for all.") String filter,
+            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        if (functionAddress == null || functionAddress.trim().isEmpty()) {
+            return getFunctionHashes(program, offset, limit, filter);
+        }
+
+        try {
+            Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
+            if (addr == null) {
+                return Response.err(ServiceUtils.getLastParseError());
+            }
+
+            Function func = program.getFunctionManager().getFunctionAt(addr);
+            if (func == null) {
+                return Response.err("No function at address: " + functionAddress);
+            }
+
+            String hash = computeNormalizedFunctionHash(program, func);
+            int instructionCount = countFunctionInstructions(program, func);
+            long functionSize = func.getBody().getNumAddresses();
+
+            Map<String, Object> hashResult = new LinkedHashMap<>();
+            hashResult.put("function_name", func.getName());
+            hashResult.putAll(ServiceUtils.addressToJson(addr, program));
+            hashResult.put("hash", hash);
+            hashResult.put("instruction_count", instructionCount);
+            hashResult.put("size_bytes", functionSize);
+            hashResult.put("has_custom_name", !ServiceUtils.isAutoGeneratedName(func.getName()));
+            hashResult.put("program", program.getName());
+            return Response.ok(hashResult);
+        } catch (Exception e) {
+            return Response.err("Failed to compute hash: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Compute a normalized hash from function instructions.
+     * This ignores absolute addresses but preserves the logical structure.
+     */
+    private String computeNormalizedFunctionHash(Program program, Function func) {
+        StringBuilder normalized = new StringBuilder();
+        Listing listing = program.getListing();
+        AddressSetView functionBody = func.getBody();
+        InstructionIterator instructions = listing.getInstructions(functionBody, true);
+
+        Address funcStart = func.getEntryPoint();
+
+        while (instructions.hasNext()) {
+            Instruction instr = instructions.next();
+
+            // Add mnemonic
+            normalized.append(instr.getMnemonicString()).append(" ");
+
+            // Process each operand
+            int numOperands = instr.getNumOperands();
+            for (int i = 0; i < numOperands; i++) {
+                int opType = instr.getOperandType(i);
+
+                // Check if this operand contains an address reference
+                boolean isAddressRef = (opType & OperandType.ADDRESS) != 0 ||
+                                       (opType & OperandType.CODE) != 0 ||
+                                       (opType & OperandType.DATA) != 0;
+
+                if (isAddressRef) {
+                    // For address references, use relative offset from function start if within function,
+                    // otherwise use a generic placeholder
+                    Reference[] refs = instr.getOperandReferences(i);
+                    if (refs.length > 0) {
+                        Address targetAddr = refs[0].getToAddress();
+                        if (functionBody.contains(targetAddr)) {
+                            // Internal reference - use relative offset
+                            long relOffset = targetAddr.subtract(funcStart);
+                            normalized.append("REL+").append(relOffset);
+                        } else {
+                            // External reference - use generic marker with reference type
+                            RefType refType = refs[0].getReferenceType();
+                            if (refType.isCall()) {
+                                normalized.append("CALL_EXT");
+                            } else if (refType.isData()) {
+                                normalized.append("DATA_EXT");
+                            } else {
+                                normalized.append("EXT_REF");
+                            }
+                        }
+                    } else {
+                        normalized.append("ADDR");
+                    }
+                } else if ((opType & OperandType.REGISTER) != 0) {
+                    // Keep register names as-is (they're part of the function's logic)
+                    normalized.append(instr.getDefaultOperandRepresentation(i));
+                } else if ((opType & OperandType.SCALAR) != 0) {
+                    // For small constants (likely magic numbers or offsets), keep the value
+                    // For large constants (likely addresses), normalize
+                    Object[] opObjects = instr.getOpObjects(i);
+                    if (opObjects.length > 0 && opObjects[0] instanceof Scalar) {
+                        Scalar scalar = (Scalar) opObjects[0];
+                        long value = scalar.getValue();
+                        // Keep small constants (< 0x10000), normalize large ones
+                        if (Math.abs(value) < 0x10000) {
+                            normalized.append("IMM:").append(value);
+                        } else {
+                            normalized.append("IMM_LARGE");
+                        }
+                    } else {
+                        normalized.append(instr.getDefaultOperandRepresentation(i));
+                    }
+                } else {
+                    // Other operand types - use default representation
+                    normalized.append(instr.getDefaultOperandRepresentation(i));
+                }
+
+                if (i < numOperands - 1) {
+                    normalized.append(",");
+                }
+            }
+
+            normalized.append(";");
+        }
+
+        // Compute SHA-256 hash of the normalized representation
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(normalized.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashBytes) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // Fallback to simple string hash
+            return Integer.toHexString(normalized.toString().hashCode());
+        }
+    }
+
+    /**
+     * Count instructions in a function
+     */
+    private int countFunctionInstructions(Program program, Function func) {
+        Listing listing = program.getListing();
+        AddressSetView functionBody = func.getBody();
+        InstructionIterator instructions = listing.getInstructions(functionBody, true);
+        int count = 0;
+        while (instructions.hasNext()) {
+            instructions.next();
+            count++;
+        }
+        return count;
+    }
+
+    // -----------------------------------------------------------------------
+    // Bulk Function Hash Methods
+    // -----------------------------------------------------------------------
+
+    /**
+     * Hashes for many functions, paged, optionally only the documented or undocumented ones.
+     * The walk visits every function to produce total_matching, so limit bounds the hashing
+     * work, not the walk.
+     */
+    private Response getFunctionHashes(Program program, int offset, int limit, String filter) {
+        try {
+            FunctionManager funcMgr = program.getFunctionManager();
+            int total = 0;
+            int skipped = 0;
+            int added = 0;
+            List<Map<String, Object>> functionsList = new ArrayList<>();
+
+            for (Function func : funcMgr.getFunctions(true)) {
+                // Apply filter
+                boolean isDocumented = !ServiceUtils.isAutoGeneratedName(func.getName()) &&
+                                       !func.getName().startsWith("switch");
+
+                if ("documented".equals(filter) && !isDocumented) continue;
+                if ("undocumented".equals(filter) && isDocumented) continue;
+
+                total++;
+
+                if (skipped < offset) {
+                    skipped++;
+                    continue;
+                }
+
+                if (added >= limit) continue; // Still counting total
+
+                String hash = computeNormalizedFunctionHash(program, func);
+                int instructionCount = countFunctionInstructions(program, func);
+
+                functionsList.add(JsonHelper.mapOf(
+                    "name", func.getName(),
+                    "address", func.getEntryPoint().toString(),
+                    "hash", hash,
+                    "instruction_count", instructionCount,
+                    "has_custom_name", isDocumented
+                ));
+
+                added++;
+            }
+
+            return Response.ok(JsonHelper.mapOf(
+                "program", program.getName(),
+                "functions", functionsList,
+                "offset", offset,
+                "limit", limit,
+                "returned", added,
+                "total_matching", total
+            ));
+        } catch (Exception e) {
+            return Response.err("Failed to get bulk hashes: " + e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Function Documentation Export/Import
+    // -----------------------------------------------------------------------
+
+    /**
+     * Export all documentation for a function (for use in cross-binary propagation)
+     */
+    public Response getFunctionDocumentation(String functionAddress) {
+        return getFunctionDocumentation(functionAddress, null);
+    }
+
+    @McpTool(path = "/get_function_documentation", description = "Export all documentation for a function. Prefer /get_functions when you want decompile + docs + callers in one read. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response getFunctionDocumentation(
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
+                   description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
+                               + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous.") String functionAddress,
+            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        try {
+            Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
+            if (addr == null) {
+                return Response.err(ServiceUtils.getLastParseError());
+            }
+
+            Function func = program.getFunctionManager().getFunctionAt(addr);
+            if (func == null) {
+                return Response.err("No function at address: " + functionAddress);
+            }
+
+            // Compute hash for matching
+            String hash = computeNormalizedFunctionHash(program, func);
+
+            // Parameters
+            List<Map<String, Object>> paramsList = new ArrayList<>();
+            Parameter[] params = func.getParameters();
+            for (Parameter p : params) {
+                paramsList.add(JsonHelper.mapOf(
+                    "ordinal", p.getOrdinal(),
+                    "name", p.getName(),
+                    "type", p.getDataType().getName(),
+                    "comment", p.getComment()
+                ));
+            }
+
+            // Local variables (from decompilation if available)
+            List<Map<String, Object>> localVarsList = new ArrayList<>();
+            if (functionService == null) {
+                Msg.warn(this, "FunctionService not available, skipping local variable extraction for " + func.getName());
+            }
+            // HOTFIX v5.3.1: use no-retry variant. Retrying pathological
+            // functions at 60→120→180s wedges the HTTP thread pool. A clean
+            // miss on locals here just yields an empty localVarsList, which
+            // downstream hashing handles.
+            DecompileResults decompResults = functionService != null ? functionService.decompileFunctionNoRetry(func, program) : null;
+            if (decompResults != null && decompResults.decompileCompleted()) {
+                ghidra.program.model.pcode.HighFunction highFunc = decompResults.getHighFunction();
+                if (highFunc != null) {
+                    Iterator<ghidra.program.model.pcode.HighSymbol> symbols = highFunc.getLocalSymbolMap().getSymbols();
+                    while (symbols.hasNext()) {
+                        ghidra.program.model.pcode.HighSymbol sym = symbols.next();
+                        if (sym.isParameter()) continue; // Skip parameters, handled above
+
+                        String storage = null;
+                        ghidra.program.model.pcode.HighVariable highVar = sym.getHighVariable();
+                        if (highVar != null && highVar.getRepresentative() != null) {
+                            storage = highVar.getRepresentative().toString();
+                        }
+
+                        localVarsList.add(JsonHelper.mapOf(
+                            "name", sym.getName(),
+                            "type", sym.getDataType().getName(),
+                            "storage", storage
+                        ));
+                    }
+                }
+            }
+
+            // Inline comments (EOL and PRE comments within function body)
+            List<Map<String, Object>> commentsList = new ArrayList<>();
+            AddressSetView functionBody = func.getBody();
+            Listing listing = program.getListing();
+            Address funcStart = func.getEntryPoint();
+
+            for (Address cAddr : functionBody.getAddresses(true)) {
+                String eolComment = listing.getComment(CodeUnit.EOL_COMMENT, cAddr);
+                String preComment = listing.getComment(CodeUnit.PRE_COMMENT, cAddr);
+
+                if (eolComment != null || preComment != null) {
+                    long relOffset = cAddr.subtract(funcStart);
+                    commentsList.add(JsonHelper.mapOf(
+                        "relative_offset", relOffset,
+                        "eol_comment", eolComment,
+                        "pre_comment", preComment
+                    ));
+                }
+            }
+
+            // Labels within function
+            List<Map<String, Object>> labelsList = new ArrayList<>();
+            SymbolTable symTable = program.getSymbolTable();
+            for (Address lAddr : functionBody.getAddresses(true)) {
+                Symbol[] symbols = symTable.getSymbols(lAddr);
+                for (Symbol sym : symbols) {
+                    if (sym.getSymbolType() == SymbolType.LABEL && !sym.getName().equals(func.getName())) {
+                        long relOffset = lAddr.subtract(funcStart);
+                        labelsList.add(JsonHelper.mapOf(
+                            "relative_offset", relOffset,
+                            "name", sym.getName()
+                        ));
+                    }
+                }
+            }
+
+            // Completeness score - simplified version without full analysis
+            double completenessScore = calculateSimpleCompletenessScore(func);
+
+            return Response.ok(JsonHelper.mapOf(
+                "hash", hash,
+                "source_program", program.getName(),
+                "source_address", addr.toString(),
+                "function_name", func.getName(),
+                "return_type", func.getReturnType().getName(),
+                "calling_convention", func.getCallingConventionName() != null ? func.getCallingConventionName() : "",
+                "plate_comment", func.getComment(),
+                "parameters", paramsList,
+                "local_variables", localVarsList,
+                "comments", commentsList,
+                "labels", labelsList,
+                "completeness_score", completenessScore
+            ));
+
+        } catch (Exception e) {
+            return Response.err("Failed to export documentation: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Simple completeness score calculation for documentation export.
+     * A simplified version that doesn't require the full analysis infrastructure.
+     */
+    private double calculateSimpleCompletenessScore(Function func) {
+        double score = 100.0;
+
+        if (ServiceUtils.isAutoGeneratedName(func.getName())) score -= 30;
+        if (func.getComment() == null) score -= 20;
+
+        // Check parameters
+        for (Parameter param : func.getParameters()) {
+            if (param.getName().startsWith("param_")) {
+                score -= 5;
+            }
+            if (param.getDataType().getName().startsWith("undefined")) {
+                score -= 5;
+            }
+        }
+
+        return Math.max(0, score);
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-Version Matching Tools
+    // -----------------------------------------------------------------------
+
+    /**
+     * Compare documentation status across all open programs.
+     * Returns documented/undocumented function counts for each program.
+     */
+    public Response compareProgramsDocumentation() {
+        return compareProgramsDocumentation(null);
+    }
+
+    @McpTool(path = "/compare_programs_documentation", description = "Compare documented vs undocumented counts", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response compareProgramsDocumentation(
+            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+        try {
+            Program[] allPrograms = programProvider.getAllOpenPrograms();
+            ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+            Program currentProgram = pe.program(); // may be null if no program loaded, that's ok here
+
+            if (allPrograms == null || allPrograms.length == 0) {
+                return Response.err("No programs are open");
+            }
+
+            List<Map<String, Object>> programsList = new ArrayList<>();
+            for (Program prog : allPrograms) {
+                int documented = 0;
+                int undocumented = 0;
+                int total = 0;
+
+                FunctionManager funcMgr = prog.getFunctionManager();
+                for (Function func : funcMgr.getFunctions(true)) {
+                    total++;
+                    if (ServiceUtils.isAutoGeneratedName(func.getName())) {
+                        undocumented++;
+                    } else {
+                        documented++;
+                    }
+                }
+
+                double docPercent = total > 0 ? (documented * 100.0 / total) : 0;
+
+                programsList.add(JsonHelper.mapOf(
+                    "name", prog.getName(),
+                    "path", prog.getDomainFile().getPathname(),
+                    "is_current", prog == currentProgram,
+                    "total_functions", total,
+                    "documented", documented,
+                    "undocumented", undocumented,
+                    "documentation_percent", Double.parseDouble(String.format("%.1f", docPercent))
+                ));
+            }
+
+            return Response.ok(JsonHelper.mapOf(
+                "programs", programsList,
+                "count", allPrograms.length
+            ));
+
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    /**
+     * Find undocumented (FUN_*) functions that reference a given string address.
+     * This filters get_xrefs_to results to only return FUN_* functions.
+     */
+    @McpTool(path = "/find_undocumented_by_string", description = "Find FUN_* functions referencing a string. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response findUndocumentedByString(
+            @Param(value = "address", paramType = "address",
+                   description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
+                               + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous.") String stringAddress,
+            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+        if (stringAddress == null || stringAddress.isEmpty()) {
+            return Response.err("String address is required");
+        }
+
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        try {
+            Address addr = ServiceUtils.parseAddress(program, stringAddress);
+            if (addr == null) {
+                return Response.err(ServiceUtils.getLastParseError());
+            }
+
+            ReferenceManager refMgr = program.getReferenceManager();
+            FunctionManager funcMgr = program.getFunctionManager();
+
+            // Get references to this address
+            ReferenceIterator refIter = refMgr.getReferencesTo(addr);
+
+            Set<String> seenFunctions = new HashSet<>();
+            List<Map<String, Object>> undocumentedList = new ArrayList<>();
+            int undocCount = 0;
+            int docCount = 0;
+
+            while (refIter.hasNext()) {
+                Reference ref = refIter.next();
+                Address fromAddr = ref.getFromAddress();
+
+                // Find the function containing this reference
+                Function func = funcMgr.getFunctionContaining(fromAddr);
+                if (func != null) {
+                    String funcName = func.getName();
+
+                    // Only add each function once
+                    if (!seenFunctions.contains(funcName)) {
+                        seenFunctions.add(funcName);
+
+                        if (ServiceUtils.isAutoGeneratedName(funcName)) {
+                            undocCount++;
+                            undocumentedList.add(JsonHelper.mapOf(
+                                "name", funcName,
+                                "address", func.getEntryPoint().toString(),
+                                "ref_address", fromAddr.toString(),
+                                "ref_type", ref.getReferenceType().getName()
+                            ));
+                        } else {
+                            docCount++;
+                        }
+                    }
+                }
+            }
+
+            return Response.ok(JsonHelper.mapOf(
+                "string_address", stringAddress,
+                "undocumented_functions", undocumentedList,
+                "undocumented_count", undocCount,
+                "documented_count", docCount,
+                "total_referencing_functions", seenFunctions.size()
+            ));
+
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    /**
+     * Generate a report of all strings matching a pattern (e.g., ".cpp") and their referencing FUN_* functions.
+     * This helps identify undocumented functions that can be matched using string anchors.
+     */
+    @McpTool(path = "/batch_string_anchor_report", description = "Report of source file strings and their FUN_* functions", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response batchStringAnchorReport(
+            @Param(value = "pattern", defaultValue = ".cpp", description = "File pattern (e.g. .cpp)") String pattern,
+            @Param(value = "program", description = "Target program name (omit to use the active program — always specify when multiple programs are open)", defaultValue = "") String programName) {
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        try {
+            Listing listing = program.getListing();
+            ReferenceManager refMgr = program.getReferenceManager();
+            FunctionManager funcMgr = program.getFunctionManager();
+
+            int totalUndocumented = 0;
+            List<Map<String, Object>> anchorsList = new ArrayList<>();
+
+            // Iterate through all defined strings in the program
+            DataIterator dataIter = listing.getDefinedData(true);
+            while (dataIter.hasNext()) {
+                Data data = dataIter.next();
+
+                // Check if this is a string type
+                if (data.getDataType() instanceof StringDataType ||
+                    data.getDataType().getName().toLowerCase().contains("string")) {
+
+                    Object value = data.getValue();
+                    if (value instanceof String) {
+                        String strValue = (String) value;
+
+                        // Check if string matches the pattern
+                        if (strValue.toLowerCase().contains(pattern.toLowerCase())) {
+                            Address strAddr = data.getAddress();
+
+                            // Find FUN_* functions referencing this string
+                            ReferenceIterator refIter = refMgr.getReferencesTo(strAddr);
+                            List<Map<String, Object>> undocFuncsList = new ArrayList<>();
+                            List<String> docFuncsList = new ArrayList<>();
+                            Set<String> undocFuncKeys = new LinkedHashSet<>();
+                            Set<String> docFuncKeys = new LinkedHashSet<>();
+
+                            while (refIter.hasNext()) {
+                                Reference ref = refIter.next();
+                                Function func = funcMgr.getFunctionContaining(ref.getFromAddress());
+                                if (func != null) {
+                                    String funcName = func.getName();
+                                    if (ServiceUtils.isAutoGeneratedName(funcName)) {
+                                        String key = funcName + "@" + func.getEntryPoint().toString();
+                                        if (!undocFuncKeys.contains(key)) {
+                                            undocFuncKeys.add(key);
+                                            undocFuncsList.add(JsonHelper.mapOf(
+                                                "name", funcName,
+                                                "address", func.getEntryPoint().toString()
+                                            ));
+                                        }
+                                    } else {
+                                        if (!docFuncKeys.contains(funcName)) {
+                                            docFuncKeys.add(funcName);
+                                            docFuncsList.add(funcName);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Only include strings that have at least one referencing function
+                            if (!undocFuncsList.isEmpty() || !docFuncsList.isEmpty()) {
+                                totalUndocumented += undocFuncsList.size();
+
+                                anchorsList.add(JsonHelper.mapOf(
+                                    "string", strValue,
+                                    "address", strAddr.toString(),
+                                    "undocumented", undocFuncsList,
+                                    "documented", docFuncsList,
+                                    "undocumented_count", undocFuncsList.size(),
+                                    "documented_count", docFuncsList.size()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Response.ok(JsonHelper.mapOf(
+                "pattern", pattern,
+                "anchors", anchorsList,
+                "total_anchors", anchorsList.size(),
+                "total_undocumented_functions", totalUndocumented
+            ));
+
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy Matching & Diff Handlers (delegates to BinaryComparisonService)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Find functions in target program similar to the source function.
+     */
+    @McpTool(path = "/find_similar_functions_fuzzy", description = "Cross-binary fuzzy function matching. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response handleFindSimilarFunctionsFuzzy(
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
+                   description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
+                               + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous.") String addressStr,
+            @Param(value = "source_program", description = "Source program name") String sourceProgramName,
+            @Param(value = "target_program", description = "Target program name") String targetProgramName,
+            @Param(value = "threshold", defaultValue = "0.7", description = "Similarity threshold") double threshold,
+            @Param(value = "limit", defaultValue = "20",
+                   description = "Maximum matches returned, highest similarity first (default 20). It "
+                               + "truncates the result only: every candidate in the target program is still "
+                               + "scored, so a small limit does not make the call cheaper.") int limit) {
+        // Source program: use sourceProgramName if given, otherwise current program
+        ServiceUtils.ProgramOrError srcPe = ServiceUtils.getProgramOrError(programProvider, sourceProgramName);
+        if (srcPe.hasError()) return srcPe.error();
+        Program srcProgram = srcPe.program();
+
+        // Target program is required
+        if (targetProgramName == null || targetProgramName.trim().isEmpty()) {
+            return Response.err("target_program parameter is required");
+        }
+        ServiceUtils.ProgramOrError tgtPe = ServiceUtils.getProgramOrError(programProvider, targetProgramName);
+        if (tgtPe.hasError()) return tgtPe.error();
+        Program tgtProgram = tgtPe.program();
+
+        try {
+            Address addr = ServiceUtils.resolveFunctionAddress(srcProgram, addressStr);
+            if (addr == null) return Response.err(ServiceUtils.getLastParseError());
+
+            Function srcFunc = srcProgram.getFunctionManager().getFunctionAt(addr);
+            if (srcFunc == null) return Response.err("No function at address: " + addressStr);
+
+            return BinaryComparisonService.findSimilarFunctionsJson(
+                srcProgram, srcFunc, tgtProgram, threshold, limit, new ConsoleTaskMonitor());
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    /**
+     * Bulk fuzzy match: find best match for each source function in target program.
+     */
+    @McpTool(path = "/bulk_fuzzy_match", description = "Bulk cross-binary function matching", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response handleBulkFuzzyMatch(
+            @Param(value = "source_program", description = "Source program name") String sourceProgramName,
+            @Param(value = "target_program", description = "Target program name") String targetProgramName,
+            @Param(value = "threshold", defaultValue = "0.7", description = "Similarity threshold") double threshold,
+            @Param(value = "offset", defaultValue = "0",
+                   description = "Number of SOURCE functions to skip before this page starts; 0 begins at "
+                               + "the first. Negative values are clamped to 0, and an offset past the end "
+                               + "returns an empty match list.") int offset,
+            @Param(value = "limit", defaultValue = "50",
+                   description = "How many SOURCE functions this page tries to match (default 50) — it "
+                               + "slices the source list, not the matches. 0 returns an EMPTY page; "
+                               + "total_source_functions reports the full count to page "
+                               + "against.") int limit,
+            @Param(value = "filter", description = "Name filter") String filter) {
+        if (sourceProgramName == null || sourceProgramName.trim().isEmpty()) {
+            return Response.err("source_program parameter is required");
+        }
+        ServiceUtils.ProgramOrError srcPe = ServiceUtils.getProgramOrError(programProvider, sourceProgramName);
+        if (srcPe.hasError()) return srcPe.error();
+        Program srcProgram = srcPe.program();
+
+        if (targetProgramName == null || targetProgramName.trim().isEmpty()) {
+            return Response.err("target_program parameter is required");
+        }
+        ServiceUtils.ProgramOrError tgtPe = ServiceUtils.getProgramOrError(programProvider, targetProgramName);
+        if (tgtPe.hasError()) return tgtPe.error();
+        Program tgtProgram = tgtPe.program();
+
+        try {
+            return BinaryComparisonService.bulkFuzzyMatchJson(
+                srcProgram, tgtProgram, threshold, offset, limit, filter, new ConsoleTaskMonitor());
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    /**
+     * Compute a structured diff between two functions.
+     */
+    @McpTool(path = "/diff_functions", description = "Compute structured diff between two functions. On programs with multiple address spaces (e.g., embedded targets), prefix addresses with the space name (mem:1000) to avoid ambiguous resolution.", category = "documentation", access = ToolAccess.READ_ONLY)
+    public Response handleDiffFunctions(
+            @Param(value = "address_a", paramType = "address",
+                   description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
+                               + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous.") String addressA,
+            @Param(value = "address_b", paramType = "address",
+                   description = "Address in the program. Accepts 0x<hex> (default space) or <space>:<hex> "
+                               + "(e.g., mem:1000, code:ff00). Note: some programs — particularly "
+                               + "embedded/microcontroller targets — are not address-space-agnostic; "
+                               + "use get_address_spaces to discover spaces before assuming a plain hex "
+                               + "address is unambiguous.") String addressB,
+            @Param(value = "program_a", description = "First program name") String programAName,
+            @Param(value = "program_b", description = "Second program name") String programBName) {
+        // Program A
+        ServiceUtils.ProgramOrError peA = ServiceUtils.getProgramOrError(programProvider, programAName);
+        if (peA.hasError()) return peA.error();
+        Program progA = peA.program();
+
+        // Program B defaults to Program A if not specified
+        Program progB;
+        if (programBName == null || programBName.trim().isEmpty()) {
+            progB = progA;
+        } else {
+            ServiceUtils.ProgramOrError peB = ServiceUtils.getProgramOrError(programProvider, programBName);
+            if (peB.hasError()) return peB.error();
+            progB = peB.program();
+        }
+
+        try {
+            Address addrA = ServiceUtils.parseAddress(progA, addressA);
+            if (addrA == null) return Response.err(ServiceUtils.getLastParseError());
+
+            Address addrB = ServiceUtils.parseAddress(progB, addressB);
+            if (addrB == null) return Response.err(ServiceUtils.getLastParseError());
+
+            Function funcA = progA.getFunctionManager().getFunctionAt(addrA);
+            if (funcA == null) return Response.err("No function at address_a: " + addressA);
+
+            Function funcB = progB.getFunctionManager().getFunctionAt(addrB);
+            if (funcB == null) return Response.err("No function at address_b: " + addressB);
+
+            return BinaryComparisonService.diffFunctionsJson(progA, funcA, progB, funcB, new ConsoleTaskMonitor());
+        } catch (Exception e) {
+            return Response.err(e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Bulk program-to-program merge
+    // -----------------------------------------------------------------------
+
+    /**
+     * Pattern matching Ghidra's auto-generated default symbol names
+     * (FUN_xxxxxxxx, LAB_xxxxxxxx, DAT_xxxxxxxx, etc.). Used to skip
+     * non-user-named symbols during merge.
+     */
+    private static final Pattern DEFAULT_SYMBOL_NAME = Pattern.compile(
+        "^(FUN|LAB|DAT|UNK|SUB|EXT|OFF|switchD)_[0-9a-fA-F]+$");
+
+    @McpTool(path = "/merge_program_documentation", method = "POST",
+        description = "Bulk merge: copy ALL RE documentation from one program to another at matching "
+            + "addresses, in a single server-side transaction. Categories: function names + signatures "
+            + "+ plate comments + locals + calling convention + no-return + tags; standalone data types; "
+            + "data definitions (typed globals); plate comments at any address; comments at all 4 types "
+            + "(EOL/PRE/POST/REPEATABLE) on instructions AND data; labels & globals (with namespace "
+            + "preservation); external locations (ordinal renames); bookmarks; equates. Designed for "
+            + "the orphan-rescue workflow: source is typically '<name>_recovered', target is the original "
+            + "'<name>.dll'. Idempotent — re-running on an already-merged target only fills gaps. Set "
+            + "dry_run=true to count without writing.",
+        category = "documentation", access = ToolAccess.WRITE)
+    public Response mergeProgramDocumentation(
+            @Param(value = "source", source = ParamSource.BODY,
+                description = "Source program path or name (read-only — the rescued copy)") String sourceName,
+            @Param(value = "target", source = ParamSource.BODY,
+                description = "Target program path or name (writes go here — the original .dll)") String targetName,
+            @Param(value = "dry_run", source = ParamSource.BODY, defaultValue = "false",
+                description = "If true, count what would be merged without writing") boolean dryRun) {
+        if (sourceName == null || sourceName.isEmpty()) return Response.err("source is required");
+        if (targetName == null || targetName.isEmpty()) return Response.err("target is required");
+        if (sourceName.equals(targetName)) return Response.err("source and target must differ");
+
+        Program source = programProvider.getProgram(sourceName);
+        if (source == null) return Response.err("Source program not found: " + sourceName);
+        Program target = programProvider.getProgram(targetName);
+        if (target == null) return Response.err("Target program not found: " + targetName);
+        if (source == target) return Response.err("source and target resolved to same Program object");
+
+        // Counters: each pair tracks (planned_or_seen, actually_applied)
+        final Map<String, int[]> c = new LinkedHashMap<>();
+        final String[] keys = {
+            "function_names", "function_signatures", "function_plate_comments",
+            "function_calling_conventions", "function_no_return_flags", "function_tags",
+            "function_locals",
+            "data_types", "data_definitions", "data_plate_comments",
+            "instruction_comments", "data_item_comments",
+            "labels", "globals", "external_locations", "bookmarks", "equates"
+        };
+        for (String k : keys) c.put(k, new int[2]);
+        final AtomicInteger errors = new AtomicInteger();
+        final AtomicReference<String> errorMsg = new AtomicReference<>();
+
+        Runnable mergeTask = () -> {
+            // Dry run writes nothing, so it needs no transaction at all.
+            WriteTx tx = dryRun ? null : WriteTx.begin(target, "Merge from " + source.getName());
+            boolean commit = false;
+            try {
+                // ----- 1. Standalone data types (must precede signature/data def merges) -----
+                ghidra.program.model.data.DataTypeManager srcDtm = source.getDataTypeManager();
+                ghidra.program.model.data.DataTypeManager tgtDtm = target.getDataTypeManager();
+                java.util.Iterator<ghidra.program.model.data.DataType> dtIter = srcDtm.getAllDataTypes();
+                while (dtIter.hasNext()) {
+                    ghidra.program.model.data.DataType srcDt = dtIter.next();
+                    if (srcDt instanceof ghidra.program.model.data.BuiltInDataType) continue;
+                    ghidra.program.model.data.DataType existing = tgtDtm.getDataType(srcDt.getDataTypePath());
+                    if (existing != null && existing.isEquivalent(srcDt)) continue;
+                    int[] cc = c.get("data_types"); cc[0]++;
+                    if (!dryRun) {
+                        try {
+                            tgtDtm.resolve(srcDt, ghidra.program.model.data.DataTypeConflictHandler.REPLACE_HANDLER);
+                            cc[1]++;
+                        } catch (Throwable t) { errors.incrementAndGet(); }
+                    } else { cc[1]++; }
+                }
+
+                // ----- 2. Functions: name, signature, plate, calling conv, no-return, tags, locals -----
+                FunctionManager srcFm = source.getFunctionManager();
+                FunctionManager tgtFm = target.getFunctionManager();
+                for (Function srcFn : srcFm.getFunctions(true)) {
+                    Address addr = srcFn.getEntryPoint();
+                    Function tgtFn = tgtFm.getFunctionAt(addr);
+                    if (tgtFn == null) continue;
+
+                    // Name
+                    String srcFnName = srcFn.getName();
+                    if (!isDefaultSymbolName(srcFnName) && !srcFnName.equals(tgtFn.getName())) {
+                        int[] cc = c.get("function_names"); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtFn.setName(srcFnName, SourceType.USER_DEFINED); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+
+                    // Signature (params + return)
+                    try {
+                        String srcProto = srcFn.getPrototypeString(true, false);
+                        String tgtProto = tgtFn.getPrototypeString(true, false);
+                        if (!srcProto.equals(tgtProto)) {
+                            int[] cc = c.get("function_signatures"); cc[0]++;
+                            if (!dryRun) {
+                                try {
+                                    ghidra.program.util.FunctionUtility.updateFunction(tgtFn, srcFn);
+                                    cc[1]++;
+                                } catch (Throwable t) { errors.incrementAndGet(); }
+                            } else { cc[1]++; }
+                        }
+                    } catch (Exception ignored) {}
+
+                    // Plate comment
+                    String srcPlate = srcFn.getComment();
+                    if (srcPlate != null && !srcPlate.isEmpty()
+                            && (tgtFn.getComment() == null || !tgtFn.getComment().equals(srcPlate))) {
+                        int[] cc = c.get("function_plate_comments"); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtFn.setComment(srcPlate); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+
+                    // Calling convention
+                    String srcCc = srcFn.getCallingConventionName();
+                    if (srcCc != null && !srcCc.isEmpty()
+                            && !srcCc.equals(tgtFn.getCallingConventionName())) {
+                        int[] cc = c.get("function_calling_conventions"); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtFn.setCallingConvention(srcCc); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+
+                    // No-return flag
+                    if (srcFn.hasNoReturn() != tgtFn.hasNoReturn()) {
+                        int[] cc = c.get("function_no_return_flags"); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtFn.setNoReturn(srcFn.hasNoReturn()); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+
+                    // Function tags
+                    java.util.Set<ghidra.program.model.listing.FunctionTag> srcTags = srcFn.getTags();
+                    java.util.Set<ghidra.program.model.listing.FunctionTag> tgtTags = tgtFn.getTags();
+                    java.util.Set<String> tgtTagNames = new java.util.HashSet<>();
+                    for (ghidra.program.model.listing.FunctionTag t : tgtTags) tgtTagNames.add(t.getName());
+                    for (ghidra.program.model.listing.FunctionTag t : srcTags) {
+                        if (tgtTagNames.contains(t.getName())) continue;
+                        int[] cc = c.get("function_tags"); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtFn.addTag(t.getName()); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+
+                    // Function locals (named locals inside the body, not parameters)
+                    ghidra.program.model.listing.Variable[] srcLocals = srcFn.getLocalVariables();
+                    ghidra.program.model.listing.Variable[] tgtLocals = tgtFn.getLocalVariables();
+                    // Map target locals by storage signature for quick lookup
+                    java.util.Map<String, ghidra.program.model.listing.Variable> tgtByStorage = new java.util.HashMap<>();
+                    for (ghidra.program.model.listing.Variable v : tgtLocals) {
+                        if (v.getVariableStorage() != null) {
+                            tgtByStorage.put(v.getVariableStorage().toString(), v);
+                        }
+                    }
+                    for (ghidra.program.model.listing.Variable srcVar : srcLocals) {
+                        if (srcVar.getVariableStorage() == null) continue;
+                        if (srcVar.getSource() == SourceType.DEFAULT) continue;
+                        ghidra.program.model.listing.Variable tgtVar =
+                            tgtByStorage.get(srcVar.getVariableStorage().toString());
+                        if (tgtVar == null) continue;
+                        boolean nameDiffers = !srcVar.getName().equals(tgtVar.getName());
+                        boolean typeDiffers = srcVar.getDataType() != null
+                            && !srcVar.getDataType().isEquivalent(tgtVar.getDataType());
+                        if (!nameDiffers && !typeDiffers) continue;
+                        int[] cc = c.get("function_locals"); cc[0]++;
+                        if (!dryRun) {
+                            try {
+                                if (nameDiffers) tgtVar.setName(srcVar.getName(), SourceType.USER_DEFINED);
+                                if (typeDiffers) tgtVar.setDataType(srcVar.getDataType(), SourceType.USER_DEFINED);
+                                cc[1]++;
+                            } catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+                }
+
+                // ----- 3. Comments (4 types) on instructions AND data items -----
+                Listing srcListing = source.getListing();
+                Listing tgtListing = target.getListing();
+                final int[] commentTypes = {
+                    CodeUnit.EOL_COMMENT, CodeUnit.PRE_COMMENT,
+                    CodeUnit.POST_COMMENT, CodeUnit.REPEATABLE_COMMENT
+                };
+                // Iterate all code units (instructions + data) so we cover comments
+                // anchored on data items in addition to instructions.
+                ghidra.program.model.listing.CodeUnitIterator allCu = srcListing.getCodeUnits(true);
+                while (allCu.hasNext()) {
+                    CodeUnit cu = allCu.next();
+                    boolean isData = (cu instanceof ghidra.program.model.listing.Data);
+                    Address addr = cu.getAddress();
+                    for (int ct : commentTypes) {
+                        String srcCmt = cu.getComment(ct);
+                        if (srcCmt == null || srcCmt.isEmpty()) continue;
+                        String tgtCmt = tgtListing.getComment(ct, addr);
+                        if (tgtCmt != null && tgtCmt.equals(srcCmt)) continue;
+                        String key = isData ? "data_item_comments" : "instruction_comments";
+                        int[] cc = c.get(key); cc[0]++;
+                        if (!dryRun) {
+                            try { tgtListing.setComment(addr, ct, srcCmt); cc[1]++; }
+                            catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+                    // Plate comments at non-function addresses (handled separately above for functions)
+                    if (cu instanceof ghidra.program.model.listing.Data) {
+                        String srcPlate = cu.getComment(CodeUnit.PLATE_COMMENT);
+                        if (srcPlate != null && !srcPlate.isEmpty()) {
+                            String tgtPlate = tgtListing.getComment(CodeUnit.PLATE_COMMENT, addr);
+                            if (tgtPlate == null || !tgtPlate.equals(srcPlate)) {
+                                int[] cc = c.get("data_plate_comments"); cc[0]++;
+                                if (!dryRun) {
+                                    try { tgtListing.setComment(addr, CodeUnit.PLATE_COMMENT, srcPlate); cc[1]++; }
+                                    catch (Exception e) { errors.incrementAndGet(); }
+                                } else { cc[1]++; }
+                            }
+                        }
+                    }
+                }
+
+                // ----- 4. Symbols (labels & globals) with namespace preservation -----
+                SymbolTable srcSt = source.getSymbolTable();
+                SymbolTable tgtSt = target.getSymbolTable();
+                SymbolIterator allSrc = srcSt.getAllSymbols(false);
+                while (allSrc.hasNext()) {
+                    Symbol srcSym = allSrc.next();
+                    String name = srcSym.getName();
+                    if (isDefaultSymbolName(name)) continue;
+                    if (srcSym.getSource() == SourceType.DEFAULT) continue;
+                    if (srcSym.getSymbolType() == SymbolType.FUNCTION) continue;
+                    if (srcSym.isExternal()) continue; // handled in external block below
+                    Address addr = srcSym.getAddress();
+                    if (addr == null || !addr.isMemoryAddress()) continue;
+
+                    // Resolve target namespace (create if missing)
+                    ghidra.program.model.symbol.Namespace tgtNs;
+                    try {
+                        tgtNs = resolveNamespace(target, srcSym.getParentNamespace(), dryRun);
+                    } catch (Exception e) { errors.incrementAndGet(); continue; }
+
+                    // Check existence by (name, namespace) at this address
+                    boolean exists = false;
+                    for (Symbol s : tgtSt.getSymbols(addr)) {
+                        if (s.getName().equals(name) && s.getParentNamespace().equals(tgtNs)) {
+                            exists = true; break;
+                        }
+                    }
+                    if (exists) continue;
+
+                    boolean isGlobal = srcSym.getParentNamespace().isGlobal();
+                    int[] cc = c.get(isGlobal ? "globals" : "labels"); cc[0]++;
+                    if (!dryRun) {
+                        try {
+                            tgtSt.createLabel(addr, name, tgtNs, SourceType.USER_DEFINED);
+                            cc[1]++;
+                        } catch (Exception e) { errors.incrementAndGet(); }
+                    } else { cc[1]++; }
+                }
+
+                // ----- 5. Data definitions (typed globals) -----
+                ghidra.program.model.listing.DataIterator dataIter = srcListing.getDefinedData(true);
+                while (dataIter.hasNext()) {
+                    ghidra.program.model.listing.Data srcData = dataIter.next();
+                    Address addr = srcData.getAddress();
+                    ghidra.program.model.data.DataType srcDt = srcData.getDataType();
+                    if (srcDt == null) continue;
+                    if (srcDt instanceof ghidra.program.model.data.DefaultDataType) continue;
+
+                    ghidra.program.model.listing.Data tgtData = tgtListing.getDataAt(addr);
+                    if (tgtData != null && tgtData.getDataType() != null
+                            && tgtData.getDataType().isEquivalent(srcDt)) {
+                        continue; // already typed identically
+                    }
+                    int[] cc = c.get("data_definitions"); cc[0]++;
+                    if (!dryRun) {
+                        try {
+                            ghidra.program.model.data.DataType resolved = tgtDtm.resolve(srcDt,
+                                ghidra.program.model.data.DataTypeConflictHandler.DEFAULT_HANDLER);
+                            // Clear conflicting code units in the range, then create
+                            int len = resolved.getLength();
+                            if (len <= 0) len = srcData.getLength();
+                            if (len > 0) {
+                                Address end = addr.add(len - 1);
+                                tgtListing.clearCodeUnits(addr, end, false);
+                            }
+                            tgtListing.createData(addr, resolved);
+                            cc[1]++;
+                        } catch (Throwable t) { errors.incrementAndGet(); }
+                    } else { cc[1]++; }
+                }
+
+                // ----- 6. External locations (ordinal imports renamed by user) -----
+                ghidra.program.model.symbol.ExternalManager srcEm = source.getExternalManager();
+                ghidra.program.model.symbol.ExternalManager tgtEm = target.getExternalManager();
+                for (String libName : srcEm.getExternalLibraryNames()) {
+                    java.util.Iterator<ghidra.program.model.symbol.ExternalLocation> srcExtIter =
+                        srcEm.getExternalLocations(libName);
+                    while (srcExtIter.hasNext()) {
+                        ghidra.program.model.symbol.ExternalLocation srcExt = srcExtIter.next();
+                        if (srcExt.getSource() == SourceType.DEFAULT) continue;
+                        String srcExtName = srcExt.getLabel();
+                        if (srcExtName == null || isDefaultSymbolName(srcExtName)) continue;
+
+                        // Match by (library, original ordinal/address) on target
+                        ghidra.program.model.symbol.ExternalLocation tgtExt = null;
+                        java.util.Iterator<ghidra.program.model.symbol.ExternalLocation> tgtIter =
+                            tgtEm.getExternalLocations(libName);
+                        while (tgtIter.hasNext()) {
+                            ghidra.program.model.symbol.ExternalLocation candidate = tgtIter.next();
+                            if (srcExt.getAddress() != null && candidate.getAddress() != null
+                                    && srcExt.getAddress().equals(candidate.getAddress())) {
+                                tgtExt = candidate; break;
+                            }
+                        }
+                        if (tgtExt == null) continue;
+                        if (srcExtName.equals(tgtExt.getLabel())) continue;
+
+                        int[] cc = c.get("external_locations"); cc[0]++;
+                        if (!dryRun) {
+                            try {
+                                tgtExt.setName(tgtExt.getParentNameSpace(), srcExtName, SourceType.USER_DEFINED);
+                                cc[1]++;
+                            } catch (Exception e) { errors.incrementAndGet(); }
+                        } else { cc[1]++; }
+                    }
+                }
+
+                // ----- 7. Bookmarks -----
+                ghidra.program.model.listing.BookmarkManager srcBm = source.getBookmarkManager();
+                ghidra.program.model.listing.BookmarkManager tgtBm = target.getBookmarkManager();
+                java.util.Iterator<ghidra.program.model.listing.Bookmark> bmIter = srcBm.getBookmarksIterator();
+                while (bmIter.hasNext()) {
+                    ghidra.program.model.listing.Bookmark srcBookmark = bmIter.next();
+                    Address addr = srcBookmark.getAddress();
+                    String type = srcBookmark.getTypeString();
+                    String category = srcBookmark.getCategory();
+                    String comment = srcBookmark.getComment();
+                    // Skip auto-analysis bookmarks (Ghidra-generated, not user)
+                    if ("Analysis".equals(type) || "Error".equals(type)) continue;
+
+                    ghidra.program.model.listing.Bookmark[] tgtBookmarks = tgtBm.getBookmarks(addr, type);
+                    boolean exists = false;
+                    for (ghidra.program.model.listing.Bookmark b : tgtBookmarks) {
+                        if (java.util.Objects.equals(b.getCategory(), category)
+                                && java.util.Objects.equals(b.getComment(), comment)) {
+                            exists = true; break;
+                        }
+                    }
+                    if (exists) continue;
+                    int[] cc = c.get("bookmarks"); cc[0]++;
+                    if (!dryRun) {
+                        try {
+                            tgtBm.setBookmark(addr, type, category != null ? category : "", comment != null ? comment : "");
+                            cc[1]++;
+                        } catch (Exception e) { errors.incrementAndGet(); }
+                    } else { cc[1]++; }
+                }
+
+                // ----- 8. Equates -----
+                ghidra.program.model.symbol.EquateTable srcEt = source.getEquateTable();
+                ghidra.program.model.symbol.EquateTable tgtEt = target.getEquateTable();
+                java.util.Iterator<ghidra.program.model.symbol.Equate> eqIter = srcEt.getEquates();
+                while (eqIter.hasNext()) {
+                    ghidra.program.model.symbol.Equate srcEq = eqIter.next();
+                    String eqName = srcEq.getName();
+                    long eqValue = srcEq.getValue();
+                    ghidra.program.model.symbol.Equate tgtEq = tgtEt.getEquate(eqName);
+                    if (tgtEq != null && tgtEq.getValue() == eqValue) {
+                        // Equate exists with same value — copy any address bindings missing on target
+                        for (ghidra.program.model.symbol.EquateReference ref : srcEq.getReferences()) {
+                            Address refAddr = ref.getAddress();
+                            int opIndex = ref.getOpIndex();
+                            // Check if target already has this binding
+                            boolean bound = false;
+                            ghidra.program.model.symbol.Equate existingAtRef =
+                                tgtEt.getEquate(refAddr, opIndex, eqValue);
+                            if (existingAtRef != null && existingAtRef.getName().equals(eqName)) bound = true;
+                            if (bound) continue;
+                            int[] cc = c.get("equates"); cc[0]++;
+                            if (!dryRun) {
+                                try { tgtEq.addReference(refAddr, opIndex); cc[1]++; }
+                                catch (Exception e) { errors.incrementAndGet(); }
+                            } else { cc[1]++; }
+                        }
+                        continue;
+                    }
+                    if (tgtEq != null && tgtEq.getValue() != eqValue) continue; // name collision, skip
+                    // Create new equate on target with same references
+                    int[] cc = c.get("equates"); cc[0]++;
+                    if (!dryRun) {
+                        try {
+                            ghidra.program.model.symbol.Equate newEq = tgtEt.createEquate(eqName, eqValue);
+                            for (ghidra.program.model.symbol.EquateReference ref : srcEq.getReferences()) {
+                                try { newEq.addReference(ref.getAddress(), ref.getOpIndex()); }
+                                catch (Exception ignored) {}
+                            }
+                            cc[1]++;
+                        } catch (Exception e) { errors.incrementAndGet(); }
+                    } else { cc[1]++; }
+                }
+
+                commit = true;
+            } catch (Throwable t) {
+                errorMsg.set(t.getClass().getSimpleName() + ": " + t.getMessage());
+            } finally {
+                if (tx != null) tx.end(commit);
+            }
+        };
+
+        try {
+            threadingStrategy.runOnUi(mergeTask);
+        } catch (Throwable t) {
+            return Response.err("Merge invocation failed: " + t.getMessage());
+        }
+        if (errorMsg.get() != null) return Response.err(errorMsg.get());
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("dry_run", dryRun);
+        resp.put("source", source.getName());
+        resp.put("source_path", source.getDomainFile() != null ? source.getDomainFile().getPathname() : "");
+        resp.put("target", target.getName());
+        resp.put("target_path", target.getDomainFile() != null ? target.getDomainFile().getPathname() : "");
+        for (String k : keys) {
+            int[] cc = c.get(k);
+            resp.put(k, JsonHelper.mapOf("planned", cc[0], "applied", cc[1]));
+        }
+        resp.put("errors", errors.get());
+        return Response.ok(resp);
+    }
+
+    /**
+     * Resolve a namespace from the source program in the target program's symbol table,
+     * creating any missing intermediate namespaces. Walks parent chain to ensure full path.
+     */
+    private static ghidra.program.model.symbol.Namespace resolveNamespace(
+            Program target,
+            ghidra.program.model.symbol.Namespace srcNs,
+            boolean dryRun) throws ghidra.util.exception.InvalidInputException,
+                                   ghidra.util.exception.DuplicateNameException {
+        if (srcNs == null || srcNs.isGlobal()) {
+            return target.getGlobalNamespace();
+        }
+        // Build path from root to leaf
+        java.util.List<String> path = new java.util.ArrayList<>();
+        ghidra.program.model.symbol.Namespace cur = srcNs;
+        while (cur != null && !cur.isGlobal()) {
+            path.add(0, cur.getName());
+            cur = cur.getParentNamespace();
+        }
+        ghidra.program.model.symbol.Namespace result = target.getGlobalNamespace();
+        ghidra.program.model.symbol.SymbolTable st = target.getSymbolTable();
+        for (String segment : path) {
+            ghidra.program.model.symbol.Namespace child = st.getNamespace(segment, result);
+            if (child == null) {
+                if (dryRun) {
+                    // For dry run, return global to avoid creating real namespaces
+                    return target.getGlobalNamespace();
+                }
+                child = st.createNameSpace(result, segment, SourceType.USER_DEFINED);
+            }
+            result = child;
+        }
+        return result;
+    }
+
+    private static boolean isDefaultSymbolName(String name) {
+        if (name == null) return true;
+        return DEFAULT_SYMBOL_NAME.matcher(name).matches();
+    }
+
+    // -----------------------------------------------------------------------
+    // Function-doc archive ingestion (MCP → configured doc archive service)
+    // -----------------------------------------------------------------------
+    //
+    // Seeds the configured cross-version documentation archive with the
+    // documentation already in the program. Walks every function in a
+    // program, builds a doc payload mirroring what merge_program_documentation
+    // reads, and POSTs each to /v1/doc_archive/upsert. Idempotent — re-runs
+    // route through the field-level merge resolution on the archive side.
+    //
+    // Configuration:
+    //   - Archive exchange is disabled by default. Set a non-empty
+    //     GHIDRA_MCP_ARCHIVE_URL to opt in to an explicitly chosen service.
+    //
+    // Identity scheme:
+    //   - binary_name: program name (e.g. "example.dll")
+    //   - version:     extracted from project path; default heuristic walks
+    //                  /<BUCKET>/<VERSION>/... (e.g. /Project/1.0/...) and
+    //                  uses the second segment. Override via version_override param.
+    //   - address:     "0x" + hex (canonical Ghidra form)
+
+    private static String getArchiveUrl() {
+        String env = System.getenv("GHIDRA_MCP_ARCHIVE_URL");
+        return env == null ? "" : env.trim();
+    }
+
+    /**
+     * Best-effort version extraction from a Program's DomainFile path.
+     * Examples:
+     *   /Project/1.0/example.dll         -> "1.0"
+     *   /Releases/2.3b/example.dll       -> "2.3b"
+     *   /Builds/nightly/example.exe      -> "nightly"
+     * Falls back to "unknown" if the path doesn't match.
+     */
+    private static String extractVersion(Program program) {
+        ghidra.framework.model.DomainFile df = program.getDomainFile();
+        if (df == null) return "unknown";
+        String pathname = df.getPathname();
+        if (pathname == null) return "unknown";
+        String[] parts = pathname.split("/");
+        // Skip leading empty + the project-bucket segment, take the next:
+        //   "" / "Project" / "1.0" / "example.dll"  -> parts[2] = "1.0"
+        if (parts.length >= 3 && !parts[2].isEmpty()) return parts[2];
+        return "unknown";
+    }
+
+    @McpTool(path = "/archive_ingest_function", dryRun = false, method = "POST",
+        description = "Ingest a single function's documentation into the cross-version "
+            + "archive (the doc archive service configured via GHIDRA_MCP_ARCHIVE_URL). Idempotent; field-level merge "
+            + "resolution happens on the archive side. Use archive_ingest_program for bulk.",
+        category = "documentation", access = ToolAccess.WRITE)
+    public Response archiveIngestFunction(
+            @Param(value = "function", paramType = Param.FUNCTION_REF,
+                description = "Function entry-point address (Ghidra hex form)") String functionAddress,
+            @Param(value = "program",
+                description = "Target program path/name", defaultValue = "") String programName,
+            @Param(value = "version_override", source = ParamSource.QUERY,
+                description = "Override the auto-extracted version (e.g. '1.0')",
+                defaultValue = "") String versionOverride,
+            @Param(value = "dry_run", source = ParamSource.QUERY, defaultValue = "false",
+                description = "Build payload but skip the POST") boolean dryRun) {
+        if (!dryRun && getArchiveUrl().isEmpty()) {
+            return Response.err("archive exchange is disabled; set GHIDRA_MCP_ARCHIVE_URL to opt in");
+        }
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        Address addr = ServiceUtils.resolveFunctionAddress(program, functionAddress);
+        if (addr == null) return Response.err(ServiceUtils.getLastParseError());
+        Function fn = program.getFunctionManager().getFunctionAt(addr);
+        if (fn == null) return Response.err("No function at address: " + functionAddress);
+
+        String version = (versionOverride != null && !versionOverride.isEmpty())
+            ? versionOverride : extractVersion(program);
+        String runId = "ghidra-mcp-ingest-" + System.currentTimeMillis();
+
+        Map<String, Object> payload = buildArchivePayload(program, fn,
+            program.getName(), version, runId);
+
+        if (dryRun) {
+            return Response.ok(JsonHelper.mapOf(
+                "dry_run", true,
+                "address", payload.get("address"),
+                "name", payload.get("name"),
+                "payload_field_count", payload.size()
+            ));
+        }
+
+        try {
+            Map<String, Object> result = postToArchive("/v1/doc_archive/upsert", payload);
+            result.put("address", payload.get("address"));
+            return Response.ok(result);
+        } catch (Exception e) {
+            return Response.err("archive POST failed: " + e.getMessage());
+        }
+    }
+
+    @McpTool(path = "/archive_ingest_program", dryRun = false, method = "POST",
+        description = "Bulk-ingest every function in a program into the cross-version "
+            + "documentation archive. Posts each to /v1/doc_archive/upsert. Returns "
+            + "per-binary counts (created / updated / conflicts_enqueued / errors).",
+        category = "documentation", access = ToolAccess.WRITE)
+    public Response archiveIngestProgram(
+            @Param(value = "program",
+                description = "Target program path/name", defaultValue = "") String programName,
+            @Param(value = "version_override", source = ParamSource.QUERY,
+                description = "Override the auto-extracted version (e.g. '1.0')",
+                defaultValue = "") String versionOverride,
+            @Param(value = "limit", source = ParamSource.QUERY, defaultValue = "0",
+                description = "Stop after N functions (0 = no limit)") int limit,
+            @Param(value = "skip_default_named", source = ParamSource.QUERY,
+                defaultValue = "true",
+                description = "Skip functions whose name is FUN_/LAB_/etc. (default-named)") boolean skipDefault,
+            @Param(value = "dry_run", source = ParamSource.QUERY, defaultValue = "false",
+                description = "Build all payloads but skip the POSTs") boolean dryRun) {
+        if (!dryRun && getArchiveUrl().isEmpty()) {
+            return Response.err("archive exchange is disabled; set GHIDRA_MCP_ARCHIVE_URL to opt in");
+        }
+        ServiceUtils.ProgramOrError pe = ServiceUtils.getProgramOrError(programProvider, programName);
+        if (pe.hasError()) return pe.error();
+        Program program = pe.program();
+
+        String binaryName = program.getName();
+        String version = (versionOverride != null && !versionOverride.isEmpty())
+            ? versionOverride : extractVersion(program);
+        String runId = "ghidra-mcp-ingest-" + binaryName + "-" + System.currentTimeMillis();
+
+        AtomicInteger total = new AtomicInteger();
+        AtomicInteger created = new AtomicInteger();
+        AtomicInteger updated = new AtomicInteger();
+        AtomicInteger conflicts = new AtomicInteger();
+        AtomicInteger skipped = new AtomicInteger();
+        AtomicInteger errors = new AtomicInteger();
+        List<String> errorList = new ArrayList<>();
+
+        for (Function fn : program.getFunctionManager().getFunctions(true)) {
+            if (limit > 0 && total.get() >= limit) break;
+            total.incrementAndGet();
+
+            if (skipDefault && isDefaultSymbolName(fn.getName())) {
+                skipped.incrementAndGet();
+                continue;
+            }
+
+            try {
+                Map<String, Object> payload = buildArchivePayload(program, fn,
+                    binaryName, version, runId);
+                if (dryRun) {
+                    created.incrementAndGet();  // would-be
+                    continue;
+                }
+                Map<String, Object> result = postToArchive("/v1/doc_archive/upsert", payload);
+                Object createdFlag = result.get("created");
+                if (Boolean.TRUE.equals(createdFlag)) {
+                    created.incrementAndGet();
+                } else {
+                    updated.incrementAndGet();
+                }
+                Number conflictsThis = (Number) result.get("conflicts_enqueued");
+                if (conflictsThis != null) conflicts.addAndGet(conflictsThis.intValue());
+            } catch (Exception e) {
+                errors.incrementAndGet();
+                if (errorList.size() < 10) {
+                    errorList.add(fn.getEntryPoint() + " (" + fn.getName() + "): " + e.getMessage());
+                }
+            }
+        }
+
+        return Response.ok(JsonHelper.mapOf(
+            "binary_name",         binaryName,
+            "version",             version,
+            "source_run_id",       runId,
+            "dry_run",             dryRun,
+            "total_functions",     total.get(),
+            "created",             created.get(),
+            "updated",             updated.get(),
+            "conflicts_enqueued",  conflicts.get(),
+            "skipped_default_named", skipped.get(),
+            "errors",              errors.get(),
+            "first_errors",        errorList,
+            "archive_url",         getArchiveUrl()
+        ));
+    }
+
+    /**
+     * Build the doc payload that mirrors merge_program_documentation's read view.
+     * Includes: identity, matching keys (opcode_hash + shape stats), function metadata
+     * (name, prototype, plate, calling conv, no_return, is_thunk, tags, ordinal),
+     * and rich payload (locals, instruction_comments).
+     *
+     * Skipped for v1 (post-MVP): standalone data type definitions, referenced
+     * globals, referenced labels, equates_referenced. These can be backfilled
+     * by a follow-up enrichment pass once we validate the simpler categories
+     * round-trip cleanly.
+     */
+    private Map<String, Object> buildArchivePayload(
+            Program program, Function fn,
+            String binaryName, String version, String runId) {
+        Map<String, Object> p = new LinkedHashMap<>();
+        Address entry = fn.getEntryPoint();
+
+        // Identity
+        p.put("binary_name", binaryName);
+        p.put("version", version);
+        p.put("address", "0x" + entry.toString());
+        p.put("source_run_id", runId);
+        p.put("source_tool", "ghidra_mcp_ingest");
+
+        // Function metadata
+        p.put("name", fn.getName());
+        try { p.put("prototype", fn.getPrototypeString(true, false)); } catch (Exception ignored) {}
+        String plate = fn.getComment();
+        if (plate != null && !plate.isEmpty()) p.put("plate_comment", plate);
+        String cc = fn.getCallingConventionName();
+        if (cc != null && !cc.isEmpty()) p.put("calling_convention", cc);
+        p.put("no_return", fn.hasNoReturn());
+        p.put("is_thunk", fn.isThunk());
+
+        // Function tags
+        java.util.Set<ghidra.program.model.listing.FunctionTag> tags = fn.getTags();
+        if (tags != null && !tags.isEmpty()) {
+            List<String> tagList = new ArrayList<>();
+            for (ghidra.program.model.listing.FunctionTag t : tags) tagList.add(t.getName());
+            p.put("function_tags", tagList);
+        }
+
+        // Shape stats (matching keys for tier 3 fuzzy)
+        try {
+            long sizeBytes = fn.getBody().getNumAddresses();
+            p.put("function_size_bytes", (int) sizeBytes);
+            int instrCount = 0;
+            ghidra.program.model.listing.InstructionIterator it =
+                program.getListing().getInstructions(fn.getBody(), true);
+            while (it.hasNext()) { it.next(); instrCount++; }
+            p.put("instruction_count", instrCount);
+            try {
+                ghidra.program.model.block.BasicBlockModel bbm =
+                    new ghidra.program.model.block.BasicBlockModel(program);
+                ghidra.program.model.block.CodeBlockIterator bbIt =
+                    bbm.getCodeBlocksContaining(fn.getBody(), ghidra.util.task.TaskMonitor.DUMMY);
+                int bbCount = 0;
+                while (bbIt.hasNext()) { bbIt.next(); bbCount++; }
+                p.put("basic_block_count", bbCount);
+            } catch (Exception ignored) {}
+        } catch (Exception ignored) {}
+
+        // Opcode hash (tier 1 matching key)
+        try {
+            String hash = computeOpcodeHash(program, fn);
+            if (hash != null) p.put("opcode_hash", hash);
+        } catch (Exception ignored) {}
+
+        // Locals (parameters + body locals)
+        List<Map<String, Object>> locals = new ArrayList<>();
+        try {
+            for (ghidra.program.model.listing.Variable v : fn.getAllVariables()) {
+                if (v.getSource() == SourceType.DEFAULT) continue;
+                if (isDefaultSymbolName(v.getName())) continue;
+                Map<String, Object> entry2 = new LinkedHashMap<>();
+                entry2.put("name", v.getName());
+                if (v.getDataType() != null) {
+                    entry2.put("data_type", v.getDataType().getName());
+                }
+                if (v.getVariableStorage() != null) {
+                    entry2.put("storage", v.getVariableStorage().toString());
+                }
+                entry2.put("source_type", v.getSource() != null ? v.getSource().toString() : "USER_DEFINED");
+                locals.add(entry2);
+            }
+        } catch (Exception ignored) {}
+        if (!locals.isEmpty()) p.put("locals", locals);
+
+        // Instruction comments (4 types) anchored by offset from entry — portable
+        // across same-content/different-base copies of the same function.
+        List<Map<String, Object>> comments = new ArrayList<>();
+        try {
+            long entryOffset = entry.getOffset();
+            ghidra.program.model.listing.CodeUnitIterator cuIt =
+                program.getListing().getCodeUnits(fn.getBody(), true);
+            int[] commentTypes = {
+                CodeUnit.EOL_COMMENT, CodeUnit.PRE_COMMENT,
+                CodeUnit.POST_COMMENT, CodeUnit.REPEATABLE_COMMENT
+            };
+            String[] typeNames = {"EOL", "PRE", "POST", "REPEATABLE"};
+            while (cuIt.hasNext()) {
+                CodeUnit cu = cuIt.next();
+                long offset = cu.getAddress().getOffset() - entryOffset;
+                for (int i = 0; i < commentTypes.length; i++) {
+                    String text = cu.getComment(commentTypes[i]);
+                    if (text == null || text.isEmpty()) continue;
+                    Map<String, Object> entry3 = new LinkedHashMap<>();
+                    entry3.put("address_offset", (int) offset);
+                    entry3.put("type", typeNames[i]);
+                    entry3.put("text", text);
+                    comments.add(entry3);
+                }
+            }
+        } catch (Exception ignored) {}
+        if (!comments.isEmpty()) p.put("instruction_comments", comments);
+
+        return p;
+    }
+
+    /**
+     * Compute a normalized opcode hash for a function, matching the existing
+     * get_function_hash logic: opcodes only, register-stable, addresses stripped.
+     */
+    private String computeOpcodeHash(Program program, Function fn) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        ghidra.program.model.listing.InstructionIterator it =
+            program.getListing().getInstructions(fn.getBody(), true);
+        while (it.hasNext()) {
+            ghidra.program.model.listing.Instruction inst = it.next();
+            sb.append(inst.getMnemonicString());
+            int n = inst.getNumOperands();
+            for (int i = 0; i < n; i++) {
+                int t = inst.getOperandType(i);
+                sb.append('|').append(t);
+            }
+            sb.append(';');
+        }
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        byte[] dig = md.digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StringBuilder hex = new StringBuilder();
+        for (byte b : dig) hex.append(String.format("%02x", b));
+        return hex.toString();
+    }
+
+    /**
+     * POST a JSON payload to the archive and parse the JSON response.
+     * Throws on non-2xx HTTP status.
+     */
+    private Map<String, Object> postToArchive(String path, Map<String, Object> payload)
+            throws Exception {
+        String url = getArchiveUrl();
+        if (url == null || url.isEmpty()) {
+            throw new IllegalStateException("archive URL not configured");
+        }
+        String json = JsonHelper.toJson(payload);
+        java.net.URL u = new java.net.URL(url + path);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(30000);
+        try (java.io.OutputStream os = conn.getOutputStream()) {
+            os.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        int code = conn.getResponseCode();
+        java.io.InputStream is = (code >= 200 && code < 300)
+            ? conn.getInputStream() : conn.getErrorStream();
+        StringBuilder body = new StringBuilder();
+        try (java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) body.append(line);
+        }
+        if (code < 200 || code >= 300) {
+            throw new RuntimeException("HTTP " + code + ": " + body);
+        }
+        return JsonHelper.parseJson(body.toString());
+    }
+}

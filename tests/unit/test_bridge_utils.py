@@ -1,0 +1,2257 @@
+"""
+Unit tests for GhidraMCP bridge utility functions.
+
+These tests run WITHOUT requiring a Ghidra server connection.
+They test transport utilities, timeout logic, and discovery functions.
+"""
+
+import json
+import os
+import inspect
+import re
+import unittest
+import asyncio
+from pathlib import Path
+from unittest.mock import patch
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+
+class TestGetSocketDir(unittest.TestCase):
+    """Test socket directory resolution."""
+
+    @patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False)
+    def test_xdg_runtime_dir(self):
+        from bridge_mcp_ghidra import get_socket_dir
+
+        result = get_socket_dir()
+        self.assertEqual(result, Path("/run/user/1000/ghidra-mcp"))
+
+    def test_tmpdir_fallback(self):
+        # Force TMPDIR fallback by:
+        #   (a) clearing XDG_RUNTIME_DIR so the function skips the first branch
+        #   (b) shadowing os.getuid to return a UID whose /run/user/<uid> won't
+        #       exist (CI's ubuntu-latest runner has /run/user/1001 populated,
+        #       which would otherwise win before the TMPDIR branch)
+        env = {k: v for k, v in os.environ.items() if k != "XDG_RUNTIME_DIR"}
+        env["TMPDIR"] = "/custom/tmp"
+        env["USER"] = "testuser"
+        with patch.dict(os.environ, env, clear=True), patch("os.getuid", return_value=9_999_999, create=True):
+            from bridge_mcp_ghidra import get_socket_dir
+
+            result = get_socket_dir()
+            self.assertEqual(result, Path("/custom/tmp/ghidra-mcp-testuser"))
+
+
+class TestTcpPortScan(unittest.TestCase):
+    """Test _scan_tcp_for_project (issue #175 + Copilot review): when UDS
+    discovery returns nothing (e.g., AF_UNIX unavailable on the host), the
+    bridge must scan a TCP port range to find the matching instance instead
+    of giving up on port 8089. Project matching is project-name aware so
+    cross-transport behavior is consistent with UDS discovery.
+
+    Tests patch http.client.HTTPConnection (the bridge's stdlib HTTP client)
+    rather than `requests`, to keep the bridge dependency footprint minimal.
+    """
+
+    def _make_fake_conn(self, port_to_response):
+        """Build a HTTPConnection stand-in driven by a {port: (status, body)}
+        map. Ports not present raise ConnectionRefusedError to simulate a
+        closed port."""
+
+        class FakeResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            def read(self):
+                return self._body.encode("utf-8") if isinstance(self._body, str) else self._body
+
+        class FakeConn:
+            def __init__(self, host, port, timeout=None):
+                self.host = host
+                self.port = port
+                self._resp = port_to_response.get(port)
+                if self._resp is None:
+                    raise ConnectionRefusedError(f"no listener on {port}")
+
+            def connect(self):
+                pass
+
+            def request(self, method, url):
+                pass
+
+            def getresponse(self):
+                status, body = self._resp
+                return FakeResponse(status, body)
+
+            def close(self):
+                pass
+
+        return FakeConn
+
+    def test_scan_finds_exact_project_match(self):
+        """The first port responding with a matching project name wins."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn(
+            {
+                8089: (200, json.dumps({"project": "other"})),
+                8090: (200, json.dumps({"project": "wanted"})),
+            }
+        )
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("wanted", start_port=8089, range_size=4, timeout=0.5)
+        self.assertEqual(result, "http://127.0.0.1:8090")
+
+    def test_scan_returns_none_when_no_match(self):
+        """No instance matches the project — return None so connect_instance
+        produces a clear error instead of guessing."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn(
+            {
+                8089: (200, json.dumps({"project": "unrelated"})),
+                8090: (200, json.dumps({"project": "alsoNot"})),
+            }
+        )
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("wanted", start_port=8089, range_size=4, timeout=0.5)
+        self.assertIsNone(result)
+
+    def test_scan_returns_none_when_nothing_listening(self):
+        """Every port refuses connection — return None, don't crash."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn({})  # empty: every port refuses
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("wanted", start_port=8089, range_size=4, timeout=0.5)
+        self.assertIsNone(result)
+
+    def test_scan_falls_back_to_substring_when_no_exact(self):
+        """Substring match is used only when no exact match is found anywhere
+        in the scanned range. This mirrors the UDS match order."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn(
+            {
+                8089: (200, json.dumps({"project": "MyProjectVariant"})),
+            }
+        )
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("MyProject", start_port=8089, range_size=4, timeout=0.5)
+        self.assertEqual(result, "http://127.0.0.1:8089")
+
+    def test_scan_exact_match_wins_over_earlier_substring(self):
+        """If a substring match is found at port N but an exact match exists
+        at port N+M, the exact match must win regardless of port order."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn(
+            {
+                8089: (200, json.dumps({"project": "Diablo2Mod"})),  # substring of "Diablo2"
+                8091: (200, json.dumps({"project": "Diablo2"})),  # exact match
+            }
+        )
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("Diablo2", start_port=8089, range_size=4, timeout=0.5)
+        self.assertEqual(result, "http://127.0.0.1:8091")
+
+    def test_scan_unwraps_data_wrapper(self):
+        """/mcp/instance_info may be wrapped in {success, data} -- the scan
+        must reach the project field either way (uses _unwrap_response_data)."""
+        from unittest.mock import patch
+        import bridge_mcp_ghidra as bridge
+
+        FakeConn = self._make_fake_conn(
+            {
+                8089: (200, json.dumps({"data": {"project": "wanted"}})),
+            }
+        )
+        with patch("http.client.HTTPConnection", FakeConn):
+            result = bridge._scan_tcp_for_project("wanted", start_port=8089, range_size=2, timeout=0.5)
+        self.assertEqual(result, "http://127.0.0.1:8089")
+
+    def test_scan_empty_project_returns_none(self):
+        """Empty project name is a programming error -- return None rather
+        than scan + match nothing."""
+        import bridge_mcp_ghidra as bridge
+
+        self.assertIsNone(bridge._scan_tcp_for_project(""))
+        self.assertIsNone(bridge._scan_tcp_for_project(None))
+
+
+class TestTcpPortScanConcurrency(unittest.TestCase):
+    """The TCP scan must probe ports CONCURRENTLY.
+
+    A port that is dropped rather than refused costs the full timeout. On a
+    Windows host whose firewall drops, a serial scan of the default 16-port
+    range measured 15.2s of the bridge's 16.8s startup -- close enough to an
+    MCP client's start timeout to fail the connection outright, which presents
+    as "the Ghidra tools are missing" with a demonstrably healthy Ghidra.
+    """
+
+    def _make_slow_conn(self, delay, responding_ports):
+        """HTTPConnection stand-in where every port sleeps `delay` in connect(),
+        simulating a dropped (not refused) connection."""
+        import time as _time
+
+        class FakeResponse:
+            def __init__(self, body):
+                self.status = 200
+                self._body = body
+
+            def read(self):
+                return self._body.encode("utf-8")
+
+        class SlowConn:
+            def __init__(self, host, port, timeout=None):
+                self.port = port
+
+            def connect(self):
+                _time.sleep(delay)
+                if self.port not in responding_ports:
+                    raise TimeoutError(f"dropped on {self.port}")
+
+            def request(self, method, url):
+                pass
+
+            def getresponse(self):
+                return FakeResponse(json.dumps({"project": responding_ports[self.port]}))
+
+            def close(self):
+                pass
+
+        return SlowConn
+
+    def test_scan_is_concurrent_not_serial(self):
+        """16 ports each stalling 0.25s must finish far faster than 4.0s."""
+        import time as _time
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import discovery
+
+        SlowConn = self._make_slow_conn(0.25, {})
+        with patch("http.client.HTTPConnection", SlowConn):
+            t0 = _time.time()
+            found = list(discovery._iter_tcp_instances(start_port=8089, range_size=16, timeout=1.0))
+            elapsed = _time.time() - t0
+
+        self.assertEqual(found, [])
+        # Serial would be 16 * 0.25 = 4.0s. Concurrent should be ~0.25s;
+        # allow generous headroom for slow CI while still failing a
+        # regression back to serial scanning.
+        self.assertLess(elapsed, 2.0, f"scan took {elapsed:.2f}s -- looks serial, not concurrent")
+
+    def test_concurrent_scan_still_yields_in_port_order(self):
+        """Callers depend on lowest-port-wins, so results must be yielded in
+        ascending port order even though probes complete out of order."""
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import discovery
+
+        # Higher ports finish FIRST (shorter sleeps would be ideal, but a
+        # constant delay plus scheduler jitter already reorders completions);
+        # the yielded order must still be ascending by port.
+        SlowConn = self._make_slow_conn(0.05, {8089: "first", 8091: "second", 8093: "third"})
+        with patch("http.client.HTTPConnection", SlowConn):
+            found = list(discovery._iter_tcp_instances(start_port=8089, range_size=8, timeout=1.0))
+
+        self.assertEqual(
+            [url for url, _ in found],
+            ["http://127.0.0.1:8089", "http://127.0.0.1:8091", "http://127.0.0.1:8093"],
+        )
+
+    def test_empty_range_yields_nothing(self):
+        """range_size=0 must not spin up a pool or raise."""
+        from bridge_mcp_ghidra import discovery
+
+        self.assertEqual(list(discovery._iter_tcp_instances(start_port=8089, range_size=0)), [])
+
+
+class TestAutoConnectRetry(unittest.TestCase):
+    """A bridge that starts BEFORE Ghidra must still get its tools.
+
+    `_auto_connect()` runs once at startup. Without a retry, a bridge launched
+    before Ghidra registered zero dynamic tools and had no path to notice
+    Ghidra arriving -- observed as a bridge sitting beside a healthy Ghidra
+    for four days serving only the static tools.
+    """
+
+    def test_auto_connect_reports_failure_as_false(self):
+        """No instances and an unreachable TCP fallback -> False, not None."""
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import static_tools
+
+        with (
+            patch.object(static_tools.discovery, "discover_instances", return_value=[]),
+            patch.object(static_tools.registry, "_fetch_schema", side_effect=OSError("connection refused")),
+        ):
+            self.assertIs(static_tools._auto_connect(), False)
+
+    def test_auto_connect_reports_success_as_true(self):
+        """A successful registration must report True so the caller skips the
+        retry thread entirely."""
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import static_tools
+
+        with (
+            patch.object(static_tools.discovery, "discover_instances", return_value=[]),
+            patch.object(static_tools.registry, "_fetch_schema", return_value={}),
+            patch.object(static_tools.registry, "register_tools_from_schema", return_value=7),
+            patch.object(static_tools.state, "set_connection_snapshot"),
+        ):
+            self.assertIs(static_tools._auto_connect(), True)
+
+    def test_retry_stops_after_first_success(self):
+        """The retry loop must exit permanently once connected, and must emit
+        tools/list_changed so clients re-fetch the late-registered tools."""
+        import threading as _threading
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import static_tools
+
+        attempts = []
+        done = _threading.Event()
+
+        def fake_auto_connect():
+            attempts.append(1)
+            # Fail once, then succeed.
+            return len(attempts) > 1
+
+        notified = []
+
+        with (
+            patch.object(static_tools, "_auto_connect", side_effect=fake_auto_connect),
+            patch.object(
+                static_tools.state,
+                "notify_tools_changed_from_worker",
+                side_effect=lambda: (notified.append(1), done.set()),
+            ),
+            patch.object(static_tools.state, "_transport_mode", "none"),
+        ):
+            thread = static_tools._start_auto_connect_retry(interval=0.01)
+            done.wait(timeout=5)
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive(), "retry thread must exit after success")
+        self.assertEqual(len(attempts), 2, "should retry until success, then stop")
+        self.assertEqual(len(notified), 1, "must emit tools/list_changed exactly once")
+
+    def test_retry_exits_when_something_else_connects(self):
+        """An explicit connect_instance() while the retry is sleeping must end
+        the loop without a further auto-connect attempt."""
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import static_tools
+
+        attempts = []
+
+        with (
+            patch.object(static_tools, "_auto_connect", side_effect=lambda: (attempts.append(1), False)[1]),
+            patch.object(static_tools.state, "_transport_mode", "tcp"),
+        ):
+            thread = static_tools._start_auto_connect_retry(interval=0.01)
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(attempts, [], "must not attempt auto-connect when already connected")
+
+    def test_retry_survives_an_exception(self):
+        """A throwing attempt must not kill the retry thread."""
+        import threading as _threading
+        from unittest.mock import patch
+        from bridge_mcp_ghidra import static_tools
+
+        attempts = []
+        done = _threading.Event()
+
+        def flaky():
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("transient")
+            return True
+
+        with (
+            patch.object(static_tools, "_auto_connect", side_effect=flaky),
+            patch.object(static_tools.state, "notify_tools_changed_from_worker", side_effect=done.set),
+            patch.object(static_tools.state, "_transport_mode", "none"),
+        ):
+            thread = static_tools._start_auto_connect_retry(interval=0.01)
+            done.wait(timeout=5)
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(attempts), 2, "must keep retrying after an exception")
+
+
+class TestConnectInstanceTcpFallback(unittest.TestCase):
+    """Test connect_instance project matching across UDS and TCP discovery."""
+
+    def tearDown(self):
+        # connect_instance mutates global connection state; reset it so
+        # later tests (e.g. TestDispatchErrors) see a disconnected bridge.
+        import bridge_mcp_ghidra as bridge
+
+        bridge.state._active_socket = None
+        bridge.state._active_tcp = None
+        bridge.state._transport_mode = "none"
+        bridge.state._connected_project = None
+
+    def test_projectless_uds_instances_fall_back_to_tcp_scan(self):
+        import bridge_mcp_ghidra as bridge
+
+        instances = [{"socket": "/tmp/ghidra-123.sock", "pid": 123}]
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=instances),
+            patch.object(bridge.discovery, "_scan_tcp_for_project", return_value="http://127.0.0.1:8090") as scan,
+            patch.object(bridge.static_tools, "validate_server_url", return_value=True),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+            patch.object(bridge.static_tools, "os") as mock_os,
+        ):
+            mock_os.getenv.return_value = None
+            bridge.state._full_schema = []
+            bridge.state._loaded_groups.clear()
+
+            result = asyncio.run(bridge.connect_instance("wanted"))
+
+        data = json.loads(result)
+        self.assertTrue(data["connected"])
+        self.assertEqual(data["transport"], "tcp")
+        self.assertEqual(data["url"], "http://127.0.0.1:8090")
+        scan.assert_called_once_with("wanted")
+
+    def test_real_nonmatching_uds_projects_refuse_tcp_fallback(self):
+        import bridge_mcp_ghidra as bridge
+
+        instances = [
+            {"socket": "/tmp/ghidra-123.sock", "pid": 123, "project": "other"},
+            {"socket": "/tmp/ghidra-456.sock", "pid": 456, "project": "also_other"},
+        ]
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=instances),
+            patch.object(bridge.discovery, "_scan_tcp_for_project") as scan,
+            patch.object(bridge.static_tools, "os") as mock_os,
+        ):
+            mock_os.getenv.return_value = None
+
+            result = asyncio.run(bridge.connect_instance("wanted"))
+
+        data = json.loads(result)
+        self.assertIn("error", data)
+        self.assertIn("No instance matching 'wanted'", data["error"])
+        self.assertEqual(data["available"], ["other", "also_other"])
+        scan.assert_not_called()
+
+    def test_uds_match_connects_via_uds_when_supported(self):
+        import bridge_mcp_ghidra as bridge
+
+        instances = [{"socket": "/tmp/ghidra-123.sock", "pid": 123, "project": "wanted"}]
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=instances),
+            patch.object(bridge.transport, "uds_supported", return_value=True),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+        ):
+            bridge.state._full_schema = []
+            bridge.state._loaded_groups.clear()
+
+            result = asyncio.run(bridge.connect_instance("wanted"))
+
+        data = json.loads(result)
+        self.assertTrue(data["connected"])
+        self.assertEqual(data["transport"], "uds")
+        self.assertEqual(data["socket"], "/tmp/ghidra-123.sock")
+
+    def test_windows_uds_match_routes_via_enriched_tcp_url(self):
+        """Windows CPython can't dial the socket it matched — the connection
+        must go to the TCP url discovery recorded for that exact instance,
+        with no port scan (the scan could pick a different instance)."""
+        import bridge_mcp_ghidra as bridge
+
+        instances = [
+            {
+                "socket": r"F:\tmp\ghidra-mcp-benam\ghidra-9020.sock",
+                "pid": 9020,
+                "project": "diablo2",
+                "url": "http://127.0.0.1:8089",
+            }
+        ]
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=instances),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+            patch.object(bridge.discovery, "_scan_tcp_for_project") as scan,
+            patch.object(bridge.static_tools, "validate_server_url", return_value=True),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+            patch.object(bridge.static_tools, "os") as mock_os,
+        ):
+            mock_os.getenv.return_value = None
+            bridge.state._full_schema = []
+            bridge.state._loaded_groups.clear()
+
+            result = asyncio.run(bridge.connect_instance("diablo2"))
+
+        data = json.loads(result)
+        self.assertTrue(data["connected"])
+        self.assertEqual(data["transport"], "tcp")
+        self.assertEqual(data["url"], "http://127.0.0.1:8089")
+        self.assertEqual(bridge.state._connected_project, "diablo2")
+        scan.assert_not_called()
+
+    def test_windows_uds_match_without_url_falls_back_to_scan(self):
+        """Matched instance but TCP enrichment found no port for it (e.g.
+        bound outside the scan range) — fall back to the project-name scan
+        rather than refusing outright."""
+        import bridge_mcp_ghidra as bridge
+
+        instances = [
+            {
+                "socket": r"F:\tmp\ghidra-mcp-benam\ghidra-9020.sock",
+                "pid": 9020,
+                "project": "diablo2",
+            }
+        ]
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=instances),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+            patch.object(bridge.discovery, "_scan_tcp_for_project", return_value="http://127.0.0.1:8093") as scan,
+            patch.object(bridge.static_tools, "validate_server_url", return_value=True),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+            patch.object(bridge.static_tools, "os") as mock_os,
+        ):
+            mock_os.getenv.return_value = None
+            bridge.state._full_schema = []
+            bridge.state._loaded_groups.clear()
+
+            result = asyncio.run(bridge.connect_instance("diablo2"))
+
+        data = json.loads(result)
+        self.assertTrue(data["connected"])
+        self.assertEqual(data["transport"], "tcp")
+        self.assertEqual(data["url"], "http://127.0.0.1:8093")
+        scan.assert_called_once_with("diablo2")
+
+
+class TestAutoConnectWindowsTcp(unittest.TestCase):
+    """_auto_connect with a single discovered instance on a host without
+    AF_UNIX must connect over the instance's enriched TCP url instead of
+    attempting (and failing) a UDS schema fetch."""
+
+    def tearDown(self):
+        import bridge_mcp_ghidra as bridge
+
+        bridge.state._active_socket = None
+        bridge.state._active_tcp = None
+        bridge.state._transport_mode = "none"
+        bridge.state._connected_project = None
+
+    def test_single_instance_auto_connects_via_enriched_url(self):
+        import bridge_mcp_ghidra as bridge
+
+        one = [
+            {
+                "socket": r"F:\tmp\ghidra-mcp-benam\ghidra-9020.sock",
+                "pid": 9020,
+                "project": "diablo2",
+                "url": "http://127.0.0.1:8089",
+            }
+        ]
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=one),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=7),
+        ):
+            bridge.state._active_socket = None
+            bridge.state._active_tcp = None
+            bridge.state._transport_mode = "none"
+
+            bridge._auto_connect()
+
+        self.assertEqual(bridge.state._transport_mode, "tcp")
+        self.assertEqual(bridge.state._active_tcp, "http://127.0.0.1:8089")
+        self.assertEqual(bridge.state._connected_project, "diablo2")
+        self.assertIsNone(bridge.state._active_socket)
+
+
+class TestTryReconnectTransportRouting(unittest.TestCase):
+    """dispatch._try_reconnect (the post-Ghidra-restart recovery path) must
+    route by transport capability: UDS when this Python can dial it, the
+    instance's enriched TCP url when it can't (Windows CPython), and give up
+    cleanly when neither is possible."""
+
+    def setUp(self):
+        import bridge_mcp_ghidra as bridge
+
+        bridge.state._active_socket = None
+        bridge.state._active_tcp = None
+        bridge.state._transport_mode = "none"
+        bridge.state._connected_project = "diablo2"
+
+    def tearDown(self):
+        import bridge_mcp_ghidra as bridge
+
+        bridge.state._active_socket = None
+        bridge.state._active_tcp = None
+        bridge.state._transport_mode = "none"
+        bridge.state._connected_project = None
+
+    def _instance(self, **extra):
+        return {
+            "socket": r"F:\tmp\ghidra-mcp-benam\ghidra-9020.sock",
+            "pid": 9020,
+            "project": "diablo2",
+            **extra,
+        }
+
+    def test_reconnects_via_uds_when_supported(self):
+        import bridge_mcp_ghidra as bridge
+
+        inst = self._instance(url="http://127.0.0.1:8089")
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=[inst]),
+            patch.object(bridge.transport, "uds_supported", return_value=True),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+        ):
+            self.assertTrue(bridge.dispatch._try_reconnect())
+
+        self.assertEqual(bridge.state._transport_mode, "uds")
+        self.assertEqual(bridge.state._active_socket, inst["socket"])
+        self.assertIsNone(bridge.state._active_tcp)
+
+    def test_a_reconnect_keeps_the_groups_the_session_loaded(self):
+        """Found live: after a server restart the bridge re-registered only the default
+        groups, and the next call to a load_tool_group()-ed tool returned "Unknown tool"."""
+        import bridge_mcp_ghidra as bridge
+
+        inst = self._instance(url="http://127.0.0.1:8089")
+        st = bridge.state
+        saved = (st._lazy_mode, set(st._default_groups), set(st._loaded_groups))
+        st._lazy_mode = True
+        # In place: other code holds these set objects.
+        st._default_groups.clear()
+        st._default_groups.update({"listing", "function", "program"})
+        st._loaded_groups.clear()
+        st._loaded_groups.update({"listing", "function", "program", "decompile-checkout"})
+        try:
+            with (
+                patch.object(bridge.discovery, "discover_instances", return_value=[inst]),
+                patch.object(bridge.transport, "uds_supported", return_value=True),
+                patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+                patch.object(bridge.registry, "register_tools_from_schema", return_value=0) as register,
+            ):
+                self.assertTrue(bridge.dispatch._try_reconnect())
+            self.assertEqual(register.call_args.kwargs["groups"],
+                             {"listing", "function", "program", "decompile-checkout"})
+        finally:
+            st._lazy_mode = saved[0]
+            st._default_groups.clear()
+            st._default_groups.update(saved[1])
+            st._loaded_groups.clear()
+            st._loaded_groups.update(saved[2])
+
+    def test_reconnects_via_tcp_url_when_uds_unsupported(self):
+        import bridge_mcp_ghidra as bridge
+
+        inst = self._instance(url="http://127.0.0.1:8089")
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=[inst]),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+            patch.object(bridge.registry, "_fetch_schema", return_value=[]),
+            patch.object(bridge.registry, "register_tools_from_schema", return_value=0),
+        ):
+            self.assertTrue(bridge.dispatch._try_reconnect())
+
+        self.assertEqual(bridge.state._transport_mode, "tcp")
+        self.assertEqual(bridge.state._active_tcp, "http://127.0.0.1:8089")
+        self.assertIsNone(bridge.state._active_socket)
+
+    def test_gives_up_when_uds_unsupported_and_no_url(self):
+        import bridge_mcp_ghidra as bridge
+
+        inst = self._instance()  # no url — TCP enrichment found nothing
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=[inst]),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+            patch.object(bridge.registry, "_fetch_schema") as fetch,
+        ):
+            self.assertFalse(bridge.dispatch._try_reconnect())
+
+        fetch.assert_not_called()
+        self.assertEqual(bridge.state._transport_mode, "none")
+
+    def test_request_reconnect_does_not_override_explicit_switch(self):
+        import bridge_mcp_ghidra as bridge
+
+        previous = bridge.state.set_connection_snapshot(
+            "tcp",
+            active_tcp="http://127.0.0.1:8089",
+            connected_project="diablo2",
+        )
+        bridge.state.set_connection_snapshot(
+            "tcp",
+            active_tcp="http://127.0.0.1:8090",
+            connected_project="other",
+        )
+        inst = self._instance(url="http://127.0.0.1:8089")
+
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=[inst]),
+            patch.object(bridge.transport, "uds_supported", return_value=False),
+        ):
+            rebound = bridge.dispatch._try_reconnect(previous)
+
+        self.assertIsNotNone(rebound)
+        self.assertEqual(rebound.active_tcp, "http://127.0.0.1:8089")
+        self.assertEqual(bridge.state._active_tcp, "http://127.0.0.1:8090")
+        self.assertEqual(bridge.state._connected_project, "other")
+
+
+class TestGetSocketDirCandidates(unittest.TestCase):
+    """Test multi-directory socket discovery (issue #170)."""
+
+    def test_candidates_includes_all_relevant_paths(self):
+        """When TMPDIR is set the candidate list must include both the
+        TMPDIR-derived path AND /tmp, so the bridge can find sockets
+        regardless of which side knows about TMPDIR (the Claude Desktop
+        spawn-without-TMPDIR case)."""
+        env = {k: v for k, v in os.environ.items() if k not in ("XDG_RUNTIME_DIR",)}
+        env["TMPDIR"] = "/custom/tmp"
+        env["USER"] = "testuser"
+        with patch.dict(os.environ, env, clear=True), patch("os.getuid", return_value=9_999_999, create=True):
+            from bridge_mcp_ghidra import get_socket_dir_candidates
+
+            # Use pathlib.Path equality, which normalizes separators across OSes.
+            paths = get_socket_dir_candidates()
+            self.assertIn(
+                Path("/custom/tmp/ghidra-mcp-testuser"),
+                paths,
+                f"TMPDIR-derived path missing: {paths}",
+            )
+            self.assertIn(
+                Path("/tmp/ghidra-mcp-testuser"),
+                paths,
+                f"/tmp fallback missing: {paths}",
+            )
+
+    def test_candidates_dedup(self):
+        """Adding the same path twice (via different env hints) must not
+        produce duplicates."""
+        from bridge_mcp_ghidra import get_socket_dir_candidates
+
+        paths = list(get_socket_dir_candidates())
+        self.assertEqual(len(paths), len(set(paths)), f"Duplicate paths: {paths}")
+
+    def test_macos_var_folders_glob_matches_real_layout(self):
+        """The macOS per-user temp lives at
+        /var/folders/<2-char>/<random>/T/ghidra-mcp-<user> -- two levels
+        before T, not one (Copilot review of #195 caught the original
+        glob was wrong). Fake the layout via Path.exists/Path.glob mocks
+        and assert the candidate list actually includes the hit. Without
+        this assertion the test could pass even if the glob never
+        matched, because /tmp/ghidra-mcp-<user> is always added too."""
+        env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+        env["USER"] = "testuser"
+
+        fake_hit = Path("/var/folders/xk/randomid123/T/ghidra-mcp-testuser")
+
+        # Patch Path.exists so /var/folders is reachable; Path.glob to
+        # return the canonical macOS layout. Leave /private/var/folders
+        # absent so we only assert the primary prefix.
+        orig_exists = Path.exists
+        orig_glob = Path.glob
+
+        def fake_exists(self):
+            if self == Path("/var/folders"):
+                return True
+            if self == Path("/private/var/folders"):
+                return False
+            return orig_exists(self)
+
+        def fake_glob(self, pattern):
+            if self == Path("/var/folders") and pattern == "*/*/T/ghidra-mcp-testuser":
+                return iter([fake_hit])
+            return orig_glob(self, pattern)
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(Path, "exists", fake_exists),
+            patch.object(Path, "glob", fake_glob),
+        ):
+            from bridge_mcp_ghidra import get_socket_dir_candidates
+
+            candidates = get_socket_dir_candidates()
+            self.assertIn(
+                fake_hit,
+                candidates,
+                f"macOS /var/folders glob hit must appear in candidates: {candidates}",
+            )
+            # And the POSIX /tmp fallback must still be there too.
+            self.assertIn(Path("/tmp/ghidra-mcp-testuser"), candidates)
+
+    def test_macos_glob_one_level_layout_does_not_match(self):
+        """Regression guard: the OLD glob was `*/T/...` (one level), which
+        would falsely match /var/folders/xk/T/... but miss the real macOS
+        layout. The NEW glob is `*/*/T/...` (two levels). Mock a fake
+        old-style layout and assert it does NOT appear in candidates."""
+        env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+        env["USER"] = "testuser"
+
+        one_level_hit = Path("/var/folders/xk/T/ghidra-mcp-testuser")
+        orig_exists = Path.exists
+        orig_glob = Path.glob
+
+        def fake_exists(self):
+            if self == Path("/var/folders"):
+                return True
+            if self == Path("/private/var/folders"):
+                return False
+            return orig_exists(self)
+
+        def fake_glob(self, pattern):
+            # No matches for the new two-level pattern.
+            if self == Path("/var/folders") and pattern == "*/*/T/ghidra-mcp-testuser":
+                return iter([])
+            # If anything still asked for the old one-level pattern,
+            # return a hit — we expect this branch never runs.
+            if self == Path("/var/folders") and pattern == "*/T/ghidra-mcp-testuser":
+                return iter([one_level_hit])
+            return orig_glob(self, pattern)
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(Path, "exists", fake_exists),
+            patch.object(Path, "glob", fake_glob),
+        ):
+            from bridge_mcp_ghidra import get_socket_dir_candidates
+
+            candidates = get_socket_dir_candidates()
+            self.assertNotIn(
+                one_level_hit,
+                candidates,
+                f"old one-level glob must not match: {candidates}",
+            )
+
+    def test_windows_drive_sweep_finds_cross_drive_socket(self):
+        """Backward-compat: plugin JARs without the java.io.tmpdir fallback
+        resolved the literal "/tmp" against the JVM's working drive (e.g.
+        F:\\tmp when Ghidra runs from F:). The mounted-drive sweep must
+        return a socket dir at <other-drive>:\\tmp\\ghidra-mcp-<user> and
+        exclude drive roots where the dir doesn't exist (exists-gated, so
+        the candidate list isn't flooded with 26 junk paths)."""
+        from bridge_mcp_ghidra import transport
+
+        cross_drive_dir = Path("F:\\") / "tmp" / "ghidra-mcp-testuser"
+        same_drive_dir = Path("C:\\") / "tmp" / "ghidra-mcp-testuser"
+        orig_exists = Path.exists
+
+        def fake_exists(self):
+            if self == cross_drive_dir:
+                return True
+            if self == same_drive_dir:
+                return False
+            return orig_exists(self)
+
+        with (
+            patch.object(os, "listdrives", create=True, return_value=["C:\\", "F:\\"]),
+            patch.object(Path, "exists", fake_exists),
+        ):
+            hits = transport._windows_drive_tmp_candidates("testuser")
+
+        self.assertIn(
+            cross_drive_dir,
+            hits,
+            f"cross-drive socket dir missing: {hits}",
+        )
+        self.assertNotIn(
+            same_drive_dir,
+            hits,
+            f"nonexistent drive-sweep dir must be excluded: {hits}",
+        )
+
+    @unittest.skipUnless(os.name == "nt", "drive sweep only wired on Windows")
+    def test_windows_candidates_include_drive_sweep_hits(self):
+        """On Windows, get_socket_dir_candidates() must include whatever
+        the drive sweep found."""
+        from bridge_mcp_ghidra import transport
+
+        sweep_hit = Path("Q:\\") / "tmp" / "ghidra-mcp-testuser"
+        with patch.object(transport, "_windows_drive_tmp_candidates", return_value=[sweep_hit]) as sweep:
+            candidates = transport.get_socket_dir_candidates()
+        sweep.assert_called_once()
+        self.assertIn(sweep_hit, candidates)
+
+    @unittest.skipUnless(os.name != "nt", "POSIX-only negative check")
+    def test_posix_does_not_probe_drive_letters(self):
+        """The drive sweep is Windows-only: on POSIX the helper must never
+        be consulted."""
+        from bridge_mcp_ghidra import transport
+
+        with patch.object(transport, "_windows_drive_tmp_candidates", return_value=[]) as sweep:
+            transport.get_socket_dir_candidates()
+        sweep.assert_not_called()
+
+    def test_macos_private_var_folders_also_covered(self):
+        """macOS symlinks /var → /private/var. If the resolved socket
+        appears under /private/var/folders/.../T/ghidra-mcp-<user>, the
+        scan must pick it up too."""
+        env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+        env["USER"] = "testuser"
+
+        private_hit = Path("/private/var/folders/xk/randomid123/T/ghidra-mcp-testuser")
+        orig_exists = Path.exists
+        orig_glob = Path.glob
+
+        def fake_exists(self):
+            if self == Path("/var/folders"):
+                return False  # only /private/var/folders this time
+            if self == Path("/private/var/folders"):
+                return True
+            return orig_exists(self)
+
+        def fake_glob(self, pattern):
+            if self == Path("/private/var/folders") and pattern == "*/*/T/ghidra-mcp-testuser":
+                return iter([private_hit])
+            return orig_glob(self, pattern)
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(Path, "exists", fake_exists),
+            patch.object(Path, "glob", fake_glob),
+        ):
+            from bridge_mcp_ghidra import get_socket_dir_candidates
+
+            candidates = get_socket_dir_candidates()
+            self.assertIn(
+                private_hit,
+                candidates,
+                f"/private/var/folders hit must appear in candidates: {candidates}",
+            )
+
+
+class TestDiscoverInstancesMultiDir(unittest.TestCase):
+    """End-to-end test of issue #170: discover_instances() must find sockets
+    that the plugin wrote under one candidate dir (e.g. $TMPDIR) even when the
+    bridge inherited a different effective socket dir.
+
+    Sets up two temp dirs, drops a fake `ghidra-<pid>.sock` in each, monkey-
+    patches get_socket_dir_candidates to return both, and verifies:
+      1. Both sockets are discovered.
+      2. Duplicate-path entries are deduped by absolute path.
+      3. The PID-alive check still works (uses the current process PID).
+    """
+
+    def test_finds_sockets_across_dirs_and_dedups(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            pid_alive = os.getpid()  # the current process is always alive
+            # Drop a socket file under each dir
+            (Path(d1) / f"ghidra-{pid_alive}.sock").touch()
+            (Path(d2) / f"ghidra-{pid_alive + 1000}.sock").touch()
+
+            # is_pid_alive(pid_alive + 1000) will likely be False; that socket
+            # should get cleaned up, not returned.
+            from bridge_mcp_ghidra import discover_instances
+            import bridge_mcp_ghidra as bridge
+
+            # Patch both `get_socket_dir_candidates` and the UDS info query so
+            # the test doesn't actually try to connect. Pin uds_supported to
+            # True so the UDS query path runs even on Windows CPython (which
+            # lacks AF_UNIX and would otherwise take the TCP enrichment path).
+            with (
+                patch.object(
+                    bridge.transport,
+                    "get_socket_dir_candidates",
+                    return_value=[Path(d1), Path(d2)],
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_supported",
+                    return_value=True,
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_request",
+                    return_value=("{}", 500),  # info query fails — that's fine
+                ),
+                patch.object(
+                    bridge.validation,
+                    "is_pid_alive",
+                    side_effect=lambda p: p == pid_alive,
+                ),
+            ):
+                instances = discover_instances()
+
+            # Exactly one alive socket should be returned; the bogus PID's
+            # socket should have been cleaned up.
+            self.assertEqual(len(instances), 1)
+            self.assertEqual(instances[0]["pid"], pid_alive)
+
+    def test_dedup_when_same_path_appears_twice(self):
+        """If two candidate dirs symlink to the same place (or if a symlink
+        produces the same absolute path), the same socket must be reported
+        only once."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            pid_alive = os.getpid()
+            (Path(d) / f"ghidra-{pid_alive}.sock").touch()
+
+            from bridge_mcp_ghidra import discover_instances
+            import bridge_mcp_ghidra as bridge
+
+            with (
+                patch.object(
+                    bridge.transport,
+                    "get_socket_dir_candidates",
+                    return_value=[Path(d), Path(d)],  # same dir twice
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_supported",
+                    return_value=True,
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_request",
+                    return_value=("{}", 500),
+                ),
+                patch.object(
+                    bridge.validation,
+                    "is_pid_alive",
+                    side_effect=lambda p: p == pid_alive,
+                ),
+            ):
+                instances = discover_instances()
+
+            self.assertEqual(len(instances), 1)
+
+
+class TestDiscoverInstancesWindowsTcpEnrichment(unittest.TestCase):
+    """On hosts where Python can't dial UDS (Windows CPython lacks AF_UNIX,
+    python/cpython#77589), discover_instances must enrich socket-file hits
+    with metadata fetched over the plugin's TCP listener, joined by PID —
+    otherwise list_instances shows projectless entries and connect_instance
+    can't match by project name."""
+
+    def test_enriches_by_pid_when_uds_unsupported(self):
+        import tempfile
+        import bridge_mcp_ghidra as bridge
+
+        with tempfile.TemporaryDirectory() as d:
+            pid_alive = os.getpid()
+            (Path(d) / f"ghidra-{pid_alive}.sock").touch()
+
+            tcp_info = {
+                pid_alive: {
+                    "url": "http://127.0.0.1:8089",
+                    "pid": pid_alive,
+                    "project": "diablo2",
+                }
+            }
+            with (
+                patch.object(
+                    bridge.transport,
+                    "get_socket_dir_candidates",
+                    return_value=[Path(d)],
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_supported",
+                    return_value=False,
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_request",
+                ) as uds_req,
+                patch.object(
+                    bridge.discovery,
+                    "_tcp_instances_by_pid",
+                    return_value=tcp_info,
+                ),
+                patch.object(
+                    bridge.validation,
+                    "is_pid_alive",
+                    side_effect=lambda p: p == pid_alive,
+                ),
+            ):
+                instances = bridge.discover_instances()
+
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["project"], "diablo2")
+        self.assertEqual(instances[0]["url"], "http://127.0.0.1:8089")
+        self.assertEqual(instances[0]["pid"], pid_alive)
+        uds_req.assert_not_called()
+
+    def test_no_tcp_scan_when_uds_supported(self):
+        """When AF_UNIX works, discovery must query over UDS and never pay
+        for a TCP port scan."""
+        import tempfile
+        import bridge_mcp_ghidra as bridge
+
+        with tempfile.TemporaryDirectory() as d:
+            pid_alive = os.getpid()
+            (Path(d) / f"ghidra-{pid_alive}.sock").touch()
+
+            with (
+                patch.object(
+                    bridge.transport,
+                    "get_socket_dir_candidates",
+                    return_value=[Path(d)],
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_supported",
+                    return_value=True,
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_request",
+                    return_value=(json.dumps({"project": "diablo2"}), 200),
+                ),
+                patch.object(
+                    bridge.discovery,
+                    "_tcp_instances_by_pid",
+                ) as tcp_scan,
+                patch.object(
+                    bridge.validation,
+                    "is_pid_alive",
+                    side_effect=lambda p: p == pid_alive,
+                ),
+            ):
+                instances = bridge.discover_instances()
+
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["project"], "diablo2")
+        tcp_scan.assert_not_called()
+
+    def test_unenriched_when_pid_not_in_tcp_scan(self):
+        """A socket whose PID has no TCP responder stays a bare
+        {socket, pid} record — discovery must not crash or misattribute."""
+        import tempfile
+        import bridge_mcp_ghidra as bridge
+
+        with tempfile.TemporaryDirectory() as d:
+            pid_alive = os.getpid()
+            (Path(d) / f"ghidra-{pid_alive}.sock").touch()
+
+            with (
+                patch.object(
+                    bridge.transport,
+                    "get_socket_dir_candidates",
+                    return_value=[Path(d)],
+                ),
+                patch.object(
+                    bridge.transport,
+                    "uds_supported",
+                    return_value=False,
+                ),
+                patch.object(
+                    bridge.discovery,
+                    "_tcp_instances_by_pid",
+                    return_value={},
+                ),
+                patch.object(
+                    bridge.validation,
+                    "is_pid_alive",
+                    side_effect=lambda p: p == pid_alive,
+                ),
+            ):
+                instances = bridge.discover_instances()
+
+        self.assertEqual(len(instances), 1)
+        self.assertNotIn("project", instances[0])
+        self.assertNotIn("url", instances[0])
+
+
+class TestAutoConnectMultiInstance(unittest.TestCase):
+    """When discover_instances() finds >1 UDS instance, _auto_connect must
+    log the choose-one message and STOP — not fall through to the TCP
+    fallback and silently connect to whatever's on port 8089."""
+
+    def test_multi_uds_does_not_fall_through_to_tcp(self):
+        import bridge_mcp_ghidra as bridge
+
+        two = [
+            {"project": "ProjA", "socket": "/tmp/a.sock", "pid": 111},
+            {"project": "ProjB", "socket": "/tmp/b.sock", "pid": 222},
+        ]
+        fetch_calls = []
+        # Patch the MODULE-QUALIFIED call sites _auto_connect actually uses
+        # (static_tools calls discovery.discover_instances() and
+        # registry._fetch_and_register_schema(); it reads/writes state._*).
+        # Patching the flat bridge.* re-exports would NOT intercept those, so
+        # the test would pass vacuously regardless of the code under test.
+        with (
+            patch.object(bridge.discovery, "discover_instances", return_value=two),
+            patch.object(
+                bridge.registry, "_fetch_and_register_schema", side_effect=lambda *a, **kw: fetch_calls.append(1) or 0
+            ),
+        ):
+            # Reset connection state so the test is hermetic.
+            bridge.state._active_socket = None
+            bridge.state._active_tcp = None
+            bridge.state._transport_mode = "none"
+            bridge._auto_connect()
+
+        self.assertEqual(
+            fetch_calls,
+            [],
+            "schema fetch was called — _auto_connect fell through to TCP " "after the multi-UDS warning",
+        )
+        self.assertEqual(bridge.state._transport_mode, "none")
+        self.assertIsNone(bridge.state._active_tcp)
+
+
+class TestDebuggerAttachAddressSync(unittest.TestCase):
+    """debugger_attach must read image_base directly from
+    /list_open_programs entries (not the plain-text /get_metadata
+    endpoint, where json.loads() always failed and the auto-sync
+    silently never fired)."""
+
+    def test_uses_image_base_from_list_open_programs(self):
+        import bridge_mcp_ghidra as bridge
+
+        programs_payload = json.dumps(
+            [
+                {"path": "/proj/Foo.exe", "name": "Foo.exe", "image_base": "0x400000"},
+                {"path": "/proj/Bar.dll", "name": "Bar.dll", "image_base": "0x10000000"},
+            ]
+        )
+        debugger_calls = []
+
+        def fake_debugger_request(method, path, body=None, **kw):
+            debugger_calls.append((method, path, body))
+            return '{"status":"ok"}'
+
+        def fake_dispatch_get(path, params=None):
+            if path == "/list_open_programs":
+                return programs_payload
+            raise AssertionError(
+                f"unexpected GET {path} — auto-sync must not call " "/get_metadata or any other endpoint"
+            )
+
+        with (
+            patch.object(bridge.debugger, "_debugger_request", side_effect=fake_debugger_request),
+            patch.object(bridge.dispatch, "dispatch_get", side_effect=fake_dispatch_get),
+            patch.object(bridge.state, "_transport_mode", "tcp"),
+        ):
+            bridge.debugger_attach("12345")
+
+        sync = [c for c in debugger_calls if c[1] == "/debugger/sync_modules"]
+        self.assertEqual(len(sync), 1, "auto-sync did not fire")
+        bases = sync[0][2].get("ghidra_bases", {})
+        self.assertEqual(bases.get("/proj/Foo.exe"), "0x400000")
+        self.assertEqual(bases.get("/proj/Bar.dll"), "0x10000000")
+
+
+class TestIsPidAlive(unittest.TestCase):
+    """Test PID liveness check."""
+
+    def test_current_pid_alive(self):
+        from bridge_mcp_ghidra import is_pid_alive
+
+        self.assertTrue(is_pid_alive(os.getpid()))
+
+    def test_nonexistent_pid(self):
+        from bridge_mcp_ghidra import is_pid_alive
+
+        self.assertFalse(is_pid_alive(4000000))
+
+
+class TestValidateServerUrl(unittest.TestCase):
+    """Test TCP server URL validation.
+
+    The contract must match how transport.tcp_request dials the URL: plain
+    http.client.HTTPConnection(hostname, port) — no TLS, no port inference.
+    """
+
+    def _validate(self, url):
+        from bridge_mcp_ghidra import validate_server_url
+
+        return validate_server_url(url)
+
+    def test_accepts_loopback_http_with_explicit_port(self):
+        self.assertTrue(self._validate("http://127.0.0.1:8089"))
+        self.assertTrue(self._validate("http://localhost:8089"))
+        self.assertTrue(self._validate("http://[::1]:8089"))
+
+    def test_rejects_https_scheme(self):
+        # The transport never negotiates TLS — https would pass then fail at
+        # connection time, so it must be rejected up front.
+        self.assertFalse(self._validate("https://127.0.0.1:8089"))
+
+    def test_rejects_missing_port(self):
+        # HTTPConnection silently defaults a missing port to 80, never the
+        # Ghidra server's actual port.
+        self.assertFalse(self._validate("http://127.0.0.1"))
+        self.assertFalse(self._validate("http://localhost"))
+
+    def test_rejects_non_local_host(self):
+        self.assertFalse(self._validate("http://192.0.2.10:8089"))
+        self.assertFalse(self._validate("http://evil.example.com:8089"))
+
+    def test_rejects_malformed_url(self):
+        self.assertFalse(self._validate("not a url"))
+        self.assertFalse(self._validate(""))
+
+
+class TestGetTimeout(unittest.TestCase):
+    """Test per-endpoint timeout calculation."""
+
+    def test_default_timeout(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/some_unknown_endpoint"), 30)
+
+    def test_decompile_timeout(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/get_functions"), 75)
+
+    def test_requested_decompile_timeout_includes_transport_grace(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/get_functions", {"timeout": "120"}), 135)
+
+    def test_timeout_seconds_alias_uses_same_grace(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/run_ghidra_script", {"timeout_seconds": "120"}), 1800)
+
+    def test_requested_timeout_is_capped_with_grace_preserved(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/get_functions", {"timeout": "1800"}), 1815)
+
+    def test_script_timeout(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        self.assertEqual(get_timeout("/run_ghidra_script"), 1800)
+
+    def test_batch_rename_scaling(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        payload = {"variable_renames": {f"var_{i}": f"new_{i}" for i in range(10)}}
+        timeout = get_timeout("/rename_variables", payload)
+        self.assertGreater(timeout, 120)
+
+    def test_batch_comments_scaling(self):
+        from bridge_mcp_ghidra import get_timeout
+
+        payload = {
+            "decompiler_comments": [{"addr": "0x1000", "comment": "test"}] * 5,
+            "disassembly_comments": [],
+        }
+        timeout = get_timeout("/batch_set_comments", payload)
+        self.assertGreater(timeout, 120)
+
+
+class TestBuildToolFunction(unittest.TestCase):
+    """Test dynamic tool function builder."""
+
+    def test_builds_callable(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {
+                "address": {"type": "string"},
+                "offset": {"type": "integer", "default": 0},
+            },
+            "required": ["address"],
+        }
+        fn = _build_tool_function("/get_functions", "GET", schema)
+        self.assertTrue(callable(fn))
+
+    def test_signature_has_correct_params(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {
+                "address": {"type": "string"},
+                "limit": {"type": "integer", "default": 100},
+            },
+            "required": ["address"],
+        }
+        fn = _build_tool_function("/test", "GET", schema)
+        sig = inspect.signature(fn)
+        self.assertIn("address", sig.parameters)
+        self.assertIn("limit", sig.parameters)
+        self.assertEqual(sig.parameters["limit"].default, 100)
+
+    def test_required_params_no_default(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        fn = _build_tool_function("/test", "GET", schema)
+        sig = inspect.signature(fn)
+        self.assertEqual(sig.parameters["name"].default, inspect.Parameter.empty)
+
+    def test_optional_params_default_none(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {"name": {"type": "string"}},
+            "required": [],
+        }
+        fn = _build_tool_function("/test", "GET", schema)
+        sig = inspect.signature(fn)
+        self.assertIsNone(sig.parameters["name"].default)
+
+    def test_type_annotations(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"},
+                "enabled": {"type": "boolean"},
+                "ratio": {"type": "number"},
+            },
+            "required": ["name", "count", "enabled", "ratio"],
+        }
+        fn = _build_tool_function("/test", "GET", schema)
+        annotations = fn.__annotations__
+        self.assertEqual(annotations["name"], str)
+        self.assertEqual(annotations["count"], int)
+        self.assertEqual(annotations["enabled"], bool)
+        self.assertEqual(annotations["ratio"], float)
+
+    def test_empty_schema(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {"type": "object", "properties": {}}
+        fn = _build_tool_function("/test", "GET", schema)
+        sig = inspect.signature(fn)
+        self.assertEqual(len(sig.parameters), 0)
+
+    def test_post_query_params_are_not_sent_in_body(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        schema = {
+            "properties": {
+                "function_address": {
+                    "type": "string",
+                    "source": "body",
+                    "param_type": "address",
+                },
+                "prototype": {"type": "string", "source": "body"},
+                "program": {"type": "string", "source": "query", "default": ""},
+            },
+            "required": ["function_address", "prototype"],
+        }
+        fn = _build_tool_function("/set_function_prototype", "POST", schema)
+
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_post") as mock_dispatch_post:
+            mock_dispatch_post.return_value = "ok"
+            result = fn(
+                function_address="0x6FA26FD0",
+                prototype="undefined4 __fastcall FUN_6fa26fd0(int param_1, uint param_2)",
+                program="/Vanilla/1.13d/D2MCPClient.dll",
+            )
+
+        self.assertEqual(result, "ok")
+        mock_dispatch_post.assert_called_once_with(
+            "/set_function_prototype",
+            data={
+                "function_address": "0x6fa26fd0",
+                "prototype": "undefined4 __fastcall FUN_6fa26fd0(int param_1, uint param_2)",
+            },
+            query_params={"program": "/Vanilla/1.13d/D2MCPClient.dll"},
+        )
+
+
+class TestParamAliases(unittest.TestCase):
+    """Back-compat parameter spellings, end to end through the bridge.
+
+    ``@Param(aliases = {...})`` names spellings the Ghidra plugin genuinely
+    serves. Until 7.0.0 ``ParamDescriptor.toJson`` never emitted them, so
+    ``/mcp/schema`` understated the contract; and even with the schema fixed the
+    bridge would have dropped an alias argument on the floor, because FastMCP
+    validates against the built signature with a pydantic model that ignores
+    extras. Both halves are pinned here.
+    """
+
+    def test_parse_schema_carries_aliases_through(self):
+        from bridge_mcp_ghidra import _parse_schema
+
+        schema = _parse_schema(
+            {
+                "tools": [
+                    {
+                        "path": "/get_function_labels",
+                        "method": "GET",
+                        "params": [
+                            {
+                                "name": "name",
+                                "type": "string",
+                                "required": True,
+                                "aliases": ["function", "address", "function_address"],
+                            },
+                            {"name": "limit", "type": "integer", "default": "20"},
+                        ],
+                    }
+                ]
+            }
+        )
+        props = schema[0]["input_schema"]["properties"]
+        self.assertEqual(
+            ["function", "address", "function_address"], props["name"]["aliases"]
+        )
+        self.assertNotIn("aliases", props["limit"])
+
+    def test_alias_is_declared_in_the_signature(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_function_labels",
+            "GET",
+            {
+                "properties": {
+                    "name": {"type": "string", "aliases": ["function", "address"]},
+                },
+                "required": ["name"],
+            },
+        )
+        sig = inspect.signature(fn)
+        # Without these, FastMCP's arg model silently discards the argument.
+        self.assertIn("function", sig.parameters)
+        self.assertIn("address", sig.parameters)
+        self.assertIsNone(sig.parameters["address"].default)
+        # A required param that has aliases must not stay required in the
+        # signature -- an alias may be the one carrying the value.
+        self.assertIsNone(sig.parameters["name"].default)
+
+    def test_alias_argument_is_sent_under_the_canonical_name(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_function_labels",
+            "GET",
+            {
+                "properties": {
+                    "name": {"type": "string", "aliases": ["function", "address"]},
+                },
+                "required": ["name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(address="DrawFrame")
+        mock_get.assert_called_once_with(
+            "/get_function_labels", params={"name": "DrawFrame"}
+        )
+
+    def test_canonical_wins_when_both_are_supplied(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_function_labels",
+            "GET",
+            {
+                "properties": {
+                    "name": {"type": "string", "aliases": ["function", "address"]},
+                },
+                "required": ["name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(name="DrawFrame", address="0x401000")
+        mock_get.assert_called_once_with(
+            "/get_function_labels", params={"name": "DrawFrame"}
+        )
+
+    def test_first_alias_in_declaration_order_wins(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_function_labels",
+            "GET",
+            {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "aliases": ["function", "address", "function_address"],
+                    },
+                },
+                "required": ["name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(function="DrawFrame", function_address="0x401000")
+        mock_get.assert_called_once_with(
+            "/get_function_labels", params={"name": "DrawFrame"}
+        )
+
+    def test_missing_required_still_fails_loudly(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/get_function_labels",
+            "GET",
+            {
+                "properties": {
+                    "name": {"type": "string", "aliases": ["function", "address"]},
+                },
+                "required": ["name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            result = json.loads(fn())
+        mock_get.assert_not_called()
+        self.assertIn("Missing required parameter", result["error"])
+        # The message must name every accepted spelling, not just the canonical.
+        self.assertIn("`address`", result["error"])
+
+    def test_alias_never_shadows_a_real_parameter(self):
+        """A collision would bind one value to two parameters.
+
+        /rename_symbol declared `old_name` as a parameter AND as an alias of
+        `target`. The Java side no longer does; the bridge refuses to honour it
+        either, so a stale or hand-written schema cannot resurrect the bug.
+        """
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/rename_symbol",
+            "POST",
+            {
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "source": "body",
+                        "aliases": ["address", "old_name"],
+                    },
+                    "old_name": {"type": "string", "source": "body", "default": ""},
+                    "new_name": {"type": "string", "source": "body"},
+                },
+                "required": ["target", "new_name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_post") as mock_post:
+            mock_post.return_value = "ok"
+            fn(target="0x401000", old_name="LAB_00401000", new_name="loop_top")
+        _, kwargs = mock_post.call_args
+        self.assertEqual(
+            {
+                "target": "0x401000",
+                "old_name": "LAB_00401000",
+                "new_name": "loop_top",
+            },
+            kwargs["data"],
+        )
+
+    def test_address_aliases_are_sanitized_like_the_canonical(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/rename_symbol",
+            "POST",
+            {
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "source": "body",
+                        "param_type": "address",
+                        "aliases": ["address", "function_address"],
+                    },
+                    "new_name": {"type": "string", "source": "body"},
+                },
+                "required": ["target", "new_name"],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_post") as mock_post:
+            mock_post.return_value = "ok"
+            fn(function_address="0x6FA26FD0", new_name="DrawFrame")
+        _, kwargs = mock_post.call_args
+        self.assertEqual("0x6fa26fd0", kwargs["data"]["target"])
+
+    def test_a_function_name_through_an_address_alias_reaches_the_server_intact(self):
+        """A name passed through an address alias used to arrive as "0xsyna_..." and miss."""
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/analyze_function_completeness",
+            "GET",
+            {
+                "properties": {
+                    "function": {
+                        "type": "string",
+                        "source": "query",
+                        "param_type": "function_ref",
+                        "aliases": ["address", "name", "function_address", "function_name"],
+                    },
+                },
+                "required": [],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(name="syna_helper_180001000")
+        _, kwargs = mock_get.call_args
+        self.assertEqual("syna_helper_180001000", kwargs["params"]["function"])
+
+    def test_a_function_ref_is_not_rewritten_even_when_it_looks_like_an_address(self):
+        """function_ref values reach the server exactly as given; only param_type=address is normalised."""
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/analyze_function_completeness",
+            "GET",
+            {
+                "properties": {
+                    "function": {"type": "string", "source": "query", "param_type": "function_ref"},
+                },
+                "required": [],
+            },
+        )
+        with patch("bridge_mcp_ghidra.dispatch.dispatch_get") as mock_get:
+            mock_get.return_value = "ok"
+            fn(function="0xABCDEF")
+        _, kwargs = mock_get.call_args
+        self.assertEqual("0xABCDEF", kwargs["params"]["function"])
+
+    def test_tools_without_aliases_are_untouched(self):
+        from bridge_mcp_ghidra import _build_tool_function
+
+        fn = _build_tool_function(
+            "/test", "GET", {"properties": {"name": {"type": "string"}}, "required": ["name"]}
+        )
+        sig = inspect.signature(fn)
+        self.assertEqual(["name"], list(sig.parameters))
+        self.assertEqual(inspect.Parameter.empty, sig.parameters["name"].default)
+
+
+class TestToolNameSanitization(unittest.TestCase):
+    """Test MCP tool name normalization for strict clients."""
+
+    def test_sanitize_tool_name_replaces_invalid_separators(self):
+        from bridge_mcp_ghidra import sanitize_tool_name
+
+        self.assertEqual(sanitize_tool_name("/Debugger.Status "), "debugger_status")
+        self.assertEqual(sanitize_tool_name("server/status"), "server_status")
+        self.assertEqual(sanitize_tool_name("A::B...C"), "a_b_c")
+
+    def test_sanitize_tool_name_truncates_to_claude_limit(self):
+        from bridge_mcp_ghidra import MAX_TOOL_NAME_LENGTH, sanitize_tool_name
+
+        raw = "/" + ("VeryLongToolNameSegment_" * 6)
+        sanitized = sanitize_tool_name(raw)
+
+        self.assertLessEqual(len(sanitized), MAX_TOOL_NAME_LENGTH)
+        self.assertRegex(sanitized, r"^[a-zA-Z0-9_-]{1,64}$")
+
+    def test_sanitize_tool_name_rejects_empty_names(self):
+        from bridge_mcp_ghidra import sanitize_tool_name
+
+        with self.assertRaises(ValueError):
+            sanitize_tool_name("///")
+
+    def test_parse_schema_normalizes_nested_endpoint_paths(self):
+        from bridge_mcp_ghidra import _parse_schema
+
+        schema = _parse_schema(
+            {
+                "tools": [
+                    {
+                        "path": "/server/status",
+                        "method": "GET",
+                        "params": [],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(schema[0]["name"], "server_status")
+        self.assertEqual(schema[0]["endpoint"], "/server/status")
+
+    def test_parse_schema_suffixes_static_name_collisions(self):
+        from bridge_mcp_ghidra import _parse_schema
+
+        # Use a management tool name (always static on every platform) so the
+        # collision is independent of debugger gating.
+        schema = _parse_schema(
+            {
+                "tools": [
+                    {
+                        "path": "/check/tools",
+                        "method": "GET",
+                        "params": [],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(schema[0]["name"], "check_tools_2")
+        self.assertEqual(schema[0]["sanitized_name"], "check_tools")
+        self.assertTrue(schema[0]["name_collided"])
+
+    def test_parse_schema_suffixes_dynamic_name_collisions(self):
+        from bridge_mcp_ghidra import _parse_schema
+
+        schema = _parse_schema(
+            {
+                "tools": [
+                    {"path": "/foo.bar", "method": "GET", "params": []},
+                    {"path": "/foo/bar", "method": "GET", "params": []},
+                ]
+            }
+        )
+        self.assertEqual([tool["name"] for tool in schema], ["foo_bar", "foo_bar_2"])
+
+    def test_parse_schema_suffixes_truncated_name_collisions_within_limit(self):
+        from bridge_mcp_ghidra import MAX_TOOL_NAME_LENGTH, _parse_schema
+
+        raw = "/" + ("LongEndpointSegment_" * 5)
+        schema = _parse_schema(
+            {
+                "tools": [
+                    {"path": raw, "method": "GET", "params": []},
+                    {"path": raw + "/v2", "method": "GET", "params": []},
+                ]
+            }
+        )
+
+        self.assertLessEqual(len(schema[0]["name"]), MAX_TOOL_NAME_LENGTH)
+        self.assertLessEqual(len(schema[1]["name"]), MAX_TOOL_NAME_LENGTH)
+        self.assertNotEqual(schema[0]["name"], schema[1]["name"])
+        self.assertRegex(schema[0]["name"], r"^[a-zA-Z0-9_-]{1,64}$")
+        self.assertRegex(schema[1]["name"], r"^[a-zA-Z0-9_-]{1,64}$")
+
+    def test_active_registry_tool_names_are_valid(self):
+        import bridge_mcp_ghidra as bridge
+
+        pattern = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+        invalid = [name for name in bridge.mcp._tool_manager._tools if not pattern.fullmatch(name)]
+        self.assertEqual(invalid, [])
+
+    def test_registered_dynamic_tool_names_are_valid(self):
+        import bridge_mcp_ghidra as bridge
+
+        schema = bridge._parse_schema(
+            {
+                "tools": [
+                    {"path": "/server/status", "method": "GET", "params": []},
+                    {"path": "/check/tools", "method": "GET", "params": []},
+                    {"path": "/foo.bar", "method": "GET", "params": []},
+                    {"path": "/foo/bar", "method": "GET", "params": []},
+                ]
+            }
+        )
+
+        bridge.register_tools_from_schema(schema, groups=None)
+        pattern = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+        try:
+            invalid = [name for name in bridge.mcp._tool_manager._tools if not pattern.fullmatch(name)]
+            self.assertEqual(invalid, [])
+            self.assertIn("server_status", bridge.mcp._tool_manager._tools)
+            # /check/tools collides with the static management tool check_tools
+            self.assertIn("check_tools_2", bridge.mcp._tool_manager._tools)
+            self.assertIn("foo_bar", bridge.mcp._tool_manager._tools)
+            self.assertIn("foo_bar_2", bridge.mcp._tool_manager._tools)
+        finally:
+            bridge.register_tools_from_schema([], groups=None)
+
+
+class TestRegisterToolsFromSchema(unittest.TestCase):
+    """Test dynamic tool registration from schema."""
+
+    def test_registers_tools(self):
+        from bridge_mcp_ghidra import register_tools_from_schema, _dynamic_tool_names
+
+        schema = [
+            {
+                "name": "test_tool_reg_1",
+                "description": "A test tool",
+                "endpoint": "/test1",
+                "http_method": "GET",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "test_tool_reg_2",
+                "description": "Another test tool",
+                "endpoint": "/test2",
+                "http_method": "POST",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"data": {"type": "string"}},
+                    "required": ["data"],
+                },
+            },
+        ]
+        count = register_tools_from_schema(schema)
+        self.assertEqual(count, 2)
+        self.assertIn("test_tool_reg_1", _dynamic_tool_names)
+        self.assertIn("test_tool_reg_2", _dynamic_tool_names)
+
+    def test_register_skips_bad_tool_and_continues(self):
+        import bridge_mcp_ghidra as bridge
+
+        schema = [
+            {
+                "name": "issue_212_valid_before",
+                "description": "",
+                "endpoint": "/issue_212_valid_before",
+                "http_method": "GET",
+                "category": "listing",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "issue_212_bad_signature",
+                "description": "",
+                "endpoint": "/issue_212_bad_signature",
+                "http_method": "GET",
+                "category": "listing",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"bad-param": {"type": "string"}},
+                },
+            },
+            {
+                "name": "issue_212_valid_after",
+                "description": "",
+                "endpoint": "/issue_212_valid_after",
+                "http_method": "GET",
+                "category": "listing",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+
+        try:
+            with patch("sys.stderr") as mock_stderr:
+                count = bridge.register_tools_from_schema(schema)
+
+            self.assertEqual(count, 2)
+            self.assertIn("issue_212_valid_before", bridge.state._dynamic_tool_names)
+            self.assertIn("issue_212_valid_after", bridge.state._dynamic_tool_names)
+            self.assertNotIn("issue_212_bad_signature", bridge.state._dynamic_tool_names)
+            message = mock_stderr.write.call_args.args[0]
+            self.assertIn("1 tool(s) failed to register", message)
+            self.assertIn("issue_212_bad_signature", message)
+            self.assertIn("bad-param", message)
+        finally:
+            bridge.register_tools_from_schema([])
+
+    def test_clears_previous_tools(self):
+        from bridge_mcp_ghidra import register_tools_from_schema, _dynamic_tool_names
+
+        schema1 = [
+            {
+                "name": "old_tool_clear",
+                "description": "",
+                "endpoint": "/old",
+                "http_method": "GET",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ]
+        schema2 = [
+            {
+                "name": "new_tool_clear",
+                "description": "",
+                "endpoint": "/new",
+                "http_method": "GET",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ]
+        register_tools_from_schema(schema1)
+        self.assertIn("old_tool_clear", _dynamic_tool_names)
+        register_tools_from_schema(schema2)
+        self.assertNotIn("old_tool_clear", _dynamic_tool_names)
+        self.assertIn("new_tool_clear", _dynamic_tool_names)
+
+
+class TestDispatchErrors(unittest.TestCase):
+    """Test dispatch functions when no instance connected."""
+
+    def test_dispatch_get_no_connection(self):
+        import bridge_mcp_ghidra as bridge
+
+        old = bridge.state._transport_mode
+        bridge.state._transport_mode = "none"
+        try:
+            result = bridge.dispatch_get("/test")
+            data = json.loads(result)
+            self.assertIn("error", data)
+            self.assertIn("connect_instance", data["error"])
+        finally:
+            bridge.state._transport_mode = old
+
+    def test_dispatch_post_no_connection(self):
+        import bridge_mcp_ghidra as bridge
+
+        old = bridge.state._transport_mode
+        bridge.state._transport_mode = "none"
+        try:
+            result = bridge.dispatch_post("/test", {"key": "value"})
+            data = json.loads(result)
+            self.assertIn("error", data)
+        finally:
+            bridge.state._transport_mode = old
+
+
+class TestUnixHTTPConnection(unittest.TestCase):
+    """Test UnixHTTPConnection class."""
+
+    def test_sets_socket_path(self):
+        from bridge_mcp_ghidra import UnixHTTPConnection
+
+        conn = UnixHTTPConnection("/tmp/test.sock", timeout=10)
+        self.assertEqual(conn.socket_path, "/tmp/test.sock")
+        self.assertEqual(conn.timeout, 10)
+
+
+class TestDebuggerEnabled(unittest.TestCase):
+    """_debugger_enabled gates the 22 debugger proxy tools. OFF BY DEFAULT.
+
+    The proxies forward to an external dbgeng debugger server that is not part
+    of this repo, so they register only when the operator asks for them:
+    GHIDRA_DEBUGGER_URL explicitly set, or GHIDRA_DEBUGGER_TOOLS truthy.
+    GHIDRA_DEBUGGER_TOOLS, when non-blank, decides outright. The host platform
+    plays no part -- being on Windows is not evidence a debugger server runs.
+    """
+
+    def test_disabled_with_nothing_set(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertFalse(_debugger_enabled(url_explicit=False, override=None))
+
+    def test_disabled_on_windows_with_nothing_set(self):
+        """Windows used to enable the proxies by default. It no longer does."""
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        with patch.object(sys, "platform", "win32"), patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(_debugger_enabled(url_explicit=False))
+
+    def test_enabled_when_url_explicitly_set(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertTrue(_debugger_enabled(url_explicit=True, override=None))
+
+    def test_tools_flag_enables_without_url(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertTrue(_debugger_enabled(url_explicit=False, override="1"))
+
+    def test_explicit_remote_url_does_not_register(self):
+        """A remote URL is refused at call time (loopback only), so it must not register."""
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertFalse(_debugger_enabled(url_explicit=True, url="http://winbox.lan:8099", override=None))
+
+    def test_override_enables_a_tunnelled_loopback_url(self):
+        """The supported route to another machine: forward the port to loopback, then opt in."""
+        from bridge_mcp_ghidra import _debugger_enabled
+        from bridge_mcp_ghidra.validation import validate_server_url
+
+        url = "http://127.0.0.1:18099"
+        self.assertTrue(_debugger_enabled(url_explicit=True, url=url, override=None))
+        self.assertTrue(_debugger_enabled(url_explicit=False, url=url, override="1"))
+        self.assertTrue(validate_server_url(url), "the call path must accept what registration enables")
+
+    def test_tools_flag_accepts_truthy_spellings(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        for value in ("1", "true", "TRUE", "yes", "on", " On "):
+            with self.subTest(value=value):
+                self.assertTrue(_debugger_enabled(url_explicit=False, override=value))
+
+    def test_tools_flag_zero_wins_over_explicit_url(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertFalse(_debugger_enabled(url_explicit=True, override="0"))
+
+    def test_tools_flag_falsy_spellings_force_off(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        for value in ("0", "false", "no", "off", "nonsense"):
+            with self.subTest(value=value):
+                self.assertFalse(_debugger_enabled(url_explicit=True, override=value))
+
+    def test_blank_tools_flag_is_ignored(self):
+        """An empty/whitespace GHIDRA_DEBUGGER_TOOLS falls back to the URL rule."""
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        self.assertFalse(_debugger_enabled(url_explicit=False, override=""))
+        self.assertTrue(_debugger_enabled(url_explicit=True, override="   "))
+
+    def test_reads_tools_flag_from_environment(self):
+        from bridge_mcp_ghidra import _debugger_enabled
+
+        with patch.dict(os.environ, {"GHIDRA_DEBUGGER_TOOLS": "1"}):
+            self.assertTrue(_debugger_enabled(url_explicit=False))
+        with patch.dict(os.environ, {"GHIDRA_DEBUGGER_TOOLS": "0"}):
+            self.assertFalse(_debugger_enabled(url_explicit=True))
+
+
+def _bridge_in_subprocess(env_overrides: dict) -> dict:
+    """Import the bridge in a fresh interpreter and report what it registered.
+
+    Registration happens once, at import, from the environment -- so the only
+    honest way to test "the env var turns the tools on" is a new process.
+    """
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if k not in {"GHIDRA_DEBUGGER_URL", "GHIDRA_DEBUGGER_TOOLS"}}
+    env.update(env_overrides)
+    python_dir = str(Path(__file__).resolve().parent.parent.parent / "python")
+    env["PYTHONPATH"] = python_dir + os.pathsep + env.get("PYTHONPATH", "")
+    probe = (
+        "import json, bridge_mcp_ghidra as b\n"
+        "tools = b.mcp._tool_manager._tools\n"
+        "dbg = sorted(n for n in b.DEBUGGER_TOOL_NAMES if n in tools)\n"
+        "unannotated = sorted(n for n in dbg if tools[n].annotations is None\n"
+        "                     or tools[n].annotations.readOnlyHint is None)\n"
+        "print(json.dumps({'active': b._DEBUGGER_ACTIVE, 'registered': dbg,\n"
+        "  'in_static': sorted(b.DEBUGGER_TOOL_NAMES & b.STATIC_TOOL_NAMES),\n"
+        "  'url': b.DEBUGGER_URL, 'unannotated': unannotated}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"bridge import failed:\n{result.stderr}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+class TestDebuggerToolRegistration(unittest.TestCase):
+    """Debugger proxy tools register only on request; their functions always exist."""
+
+    def test_debugger_function_always_defined(self):
+        """The proxy functions stay importable/callable even when not registered."""
+        import bridge_mcp_ghidra as bridge
+
+        self.assertTrue(callable(bridge.debugger_attach))
+
+    def test_all_static_names_superset_of_active(self):
+        import bridge_mcp_ghidra as bridge
+
+        self.assertTrue(bridge.DEBUGGER_TOOL_NAMES.issubset(bridge._ALL_STATIC_TOOL_NAMES))
+        self.assertTrue(bridge.STATIC_TOOL_NAMES.issubset(bridge._ALL_STATIC_TOOL_NAMES))
+
+    def test_in_process_registration_matches_active_flag(self):
+        """Whatever this process decided, the tool table agrees with it."""
+        import bridge_mcp_ghidra as bridge
+
+        registered = bridge.DEBUGGER_TOOL_NAMES & set(bridge.mcp._tool_manager._tools)
+        if bridge._DEBUGGER_ACTIVE:
+            self.assertEqual(registered, bridge.DEBUGGER_TOOL_NAMES)
+            self.assertTrue(bridge.DEBUGGER_TOOL_NAMES.issubset(bridge.STATIC_TOOL_NAMES))
+        else:
+            self.assertEqual(registered, set())
+            self.assertFalse(bridge.DEBUGGER_TOOL_NAMES & bridge.STATIC_TOOL_NAMES)
+
+    def test_management_tools_always_registered(self):
+        import bridge_mcp_ghidra as bridge
+
+        self.assertIn("list_instances", bridge.mcp._tool_manager._tools)
+        self.assertIn("list_instances", bridge.STATIC_TOOL_NAMES)
+
+    @unittest.skipIf(
+        __import__("bridge_mcp_ghidra")._DEBUGGER_ACTIVE,
+        "debugger proxies enabled by this environment",
+    )
+    def test_inactive_proxy_frees_clean_name_for_trace_rmi_tool(self):
+        """With the WinDbg proxies off (the default), Ghidra's own TraceRmi
+        /debugger/status gets the clean name, not _2."""
+        import bridge_mcp_ghidra as bridge
+
+        schema = bridge._parse_schema({"tools": [{"path": "/debugger/status", "method": "GET", "params": []}]})
+        self.assertEqual(schema[0]["name"], "debugger_status")
+        self.assertFalse(schema[0]["name_collided"])
+
+    def test_active_proxy_suffixes_trace_rmi_tool_so_both_stay_reachable(self):
+        """With the WinDbg proxies on, a TraceRmi tool sharing a proxy's name
+        registers as <name>_2, so both stay reachable (#554). Real /mcp/schema
+        entries carry no `name`, so the raw name is the path ("debugger/status"),
+        which is never an exact match for a static tool."""
+        import bridge_mcp_ghidra as bridge
+
+        active = set(bridge.MANAGEMENT_TOOL_NAMES) | set(bridge.DEBUGGER_TOOL_NAMES)
+        with (
+            patch.object(bridge.schema, "STATIC_TOOL_NAMES", active),
+            patch.object(bridge.registry, "STATIC_TOOL_NAMES", active),
+        ):
+            schema = bridge._parse_schema(
+                {"tools": [{"path": "/debugger/status", "method": "GET", "params": []}]}
+            )
+            self.assertEqual(schema[0]["name"], "debugger_status_2")
+            self.assertTrue(schema[0]["name_collided"])
+            try:
+                self.assertTrue(bridge.registry._register_tool_def(schema[0]))
+                self.assertIn("debugger_status_2", bridge.mcp._tool_manager._tools)
+            finally:
+                bridge.mcp._tool_manager._tools.pop("debugger_status_2", None)
+                if "debugger_status_2" in bridge.state._dynamic_tool_names:
+                    bridge.state._dynamic_tool_names.remove("debugger_status_2")
+
+    def test_exact_management_name_is_still_left_to_the_bridge_tool(self):
+        """A server endpoint named exactly like a bridge management tool keeps
+        the clean name and is skipped at registration — the bridge's own
+        wrapper (e.g. import_file) is the one clients should see."""
+        import bridge_mcp_ghidra as bridge
+
+        schema = bridge._parse_schema(
+            {"tools": [{"path": "/import_file", "method": "POST", "params": []}]}
+        )
+        self.assertEqual(schema[0]["name"], "import_file")
+        self.assertFalse(bridge.registry._register_tool_def(schema[0]))
+
+    def test_nothing_set_registers_no_debugger_tools(self):
+        """The default, on every platform including Windows: zero proxy tools."""
+        report = _bridge_in_subprocess({})
+        self.assertFalse(report["active"])
+        self.assertEqual(report["registered"], [])
+        self.assertEqual(report["in_static"], [])
+
+    def test_explicit_url_registers_all_22(self):
+        report = _bridge_in_subprocess({"GHIDRA_DEBUGGER_URL": "http://127.0.0.1:9123"})
+        self.assertTrue(report["active"])
+        self.assertEqual(len(report["registered"]), 22)
+        self.assertEqual(len(report["in_static"]), 22)
+        self.assertEqual(report["url"], "http://127.0.0.1:9123")
+        # Every registered proxy must carry access annotations, or plan mode
+        # prompts for each one. Only checkable here, where they are registered.
+        self.assertEqual(report["unannotated"], [])
+
+    def test_tools_flag_registers_with_default_url(self):
+        report = _bridge_in_subprocess({"GHIDRA_DEBUGGER_TOOLS": "1"})
+        self.assertTrue(report["active"])
+        self.assertEqual(len(report["registered"]), 22)
+        self.assertEqual(report["url"], "http://127.0.0.1:8099")
+
+    def test_tools_flag_zero_overrides_explicit_url(self):
+        report = _bridge_in_subprocess(
+            {"GHIDRA_DEBUGGER_URL": "http://127.0.0.1:9123", "GHIDRA_DEBUGGER_TOOLS": "0"}
+        )
+        self.assertFalse(report["active"])
+        self.assertEqual(report["registered"], [])
+
+    def test_blank_url_counts_as_unset(self):
+        """`GHIDRA_DEBUGGER_URL=` (present but empty) must not switch the tools on."""
+        report = _bridge_in_subprocess({"GHIDRA_DEBUGGER_URL": "  "})
+        self.assertFalse(report["active"])
+        self.assertEqual(report["url"], "http://127.0.0.1:8099")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,169 @@
+[project]
+name = "ghidra-mcp-bridge"
+version = "7.0.0"
+description = "GhidraMCP bridge — a thin MCP↔HTTP multiplexer exposing Ghidra reverse-engineering tools to AI clients."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "xebyte" }]
+keywords = ["ghidra", "mcp", "reverse-engineering", "model-context-protocol"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    # Core MCP server framework. The upper bound is load-bearing, not caution:
+    # the bridge imports `mcp.server.fastmcp`, which 2.x removed when FastMCP
+    # became MCPServer, so an installed wheel that resolves 2.x dies at import.
+    # uv.lock pins 1.28.1, so nothing in this repo exercises the range -- only
+    # `pip install ghidra-mcp-bridge` does. Widen it with the 2.x migration,
+    # not before; test_mcp_requirement_excludes_the_2x_sdk holds the line.
+    "mcp>=1.28.1,<2.0.0",
+    # registry.py annotates generated tool parameters with Annotated[T, Field(...)]
+    # directly -- mcp pulls this in transitively, but the bridge imports it by
+    # name now and should declare it rather than rely on a dependency's dependency.
+    "pydantic>=2.0.0",
+]
+# NOTE: the bridge package talks to Ghidra over stdlib http.client, so the wheel
+# has no `requests` runtime dependency. `requests` is only needed by the repo's
+# unshipped tooling (the test suite) and is declared in those
+# dependency groups instead — see [dependency-groups] below.
+
+[project.scripts]
+bridge-mcp-ghidra = "bridge_mcp_ghidra.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bethington/ghidra-mcp"
+Repository = "https://github.com/bethington/ghidra-mcp"
+Changelog = "https://github.com/bethington/ghidra-mcp/blob/main/CHANGELOG.md"
+
+# ---------------------------------------------------------------------------
+# Build backend — the wheel ships ONLY the bridge package, which lives under
+# python/ rather than the repo root.
+# ---------------------------------------------------------------------------
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/bridge_mcp_ghidra"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "python/bridge_mcp_ghidra",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
+
+# ---------------------------------------------------------------------------
+# Dependency groups (PEP 735). Install with: uv sync --group <name>.
+# uv installs the `dev` group by default.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+test = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-mock>=3.15.1",
+    "pytest-asyncio>=1.4.0",
+    # requests drives the HTTP integration/perf tests; 2.32.0 floors CVE-2024-35195.
+    "requests>=2.32.0,<3.0.0",
+    "responses>=0.26.1",
+    "requests-mock>=1.12.1",
+    "coverage>=7.15.0",
+    "pytest-json-report>=1.5.0",
+    "pyyaml>=6.0.0",
+    # clang (bindings) and libclang (bundled DLL) must track the same LLVM
+    # major: the libclang wheel tops out at 18.1.1 on PyPI, and 19+ bindings
+    # call symbols (e.g. clang_getOffsetOfBase) the 18.x DLL doesn't export.
+    "clang>=18.1.8,<22",
+    "libclang>=18.1.1,<19",
+]
+# dbgeng bindings for Ghidra's TraceRmi debugger backend (Windows-only bits).
+debugger = [
+    "pybag==2.2.16 ; sys_platform == 'win32'",
+    "comtypes==1.4.17 ; sys_platform == 'win32'",
+    "protobuf>=7.35.1",
+]
+dev = [
+    { include-group = "test" },
+    "flake8>=6.0.0",
+    "black>=24.0.0",
+]
+
+# ---------------------------------------------------------------------------
+# pytest configuration (migrated from pytest.ini)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = """
+-ra
+-q
+--strict-markers
+--strict-config
+--tb=short
+--cov=bridge_mcp_ghidra
+--cov=tools
+--cov-report=term-missing:skip-covered
+--cov-report=html:tests/coverage
+--cov-report=xml:tests/coverage.xml
+--junit-xml=tests/junit.xml
+"""
+testpaths = ["tests"]
+# Repo root on sys.path before plugins load. `-p tests.offline.replay_plugin`
+# (the no-Ghidra replay of the integration tier, #112) is imported during
+# pre-parse, well before pytest's rootdir insertion, so without this it works
+# under `python -m pytest` -- which puts cwd on the path itself -- and fails
+# under a plain `uv run pytest` with "No module named 'tests'".
+pythonpath = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "functional: marks tests as functional tests",
+    "unit: marks tests as unit tests",
+    "api: marks tests as API endpoint tests",
+    "requires_ghidra: marks tests that require Ghidra server to be running",
+    "requires_binary: marks tests that require a loaded binary in Ghidra",
+    "readonly: marks tests that only read data and do not modify Ghidra state",
+    "safe_write: marks tests that write data but use identity operations (write same value back)",
+    "requires_program: mark test as requiring a loaded program",
+    "requires_server: mark test as requiring server connection",
+    "write: mark test as performing write operations",
+    "destructive: e2e tests that start workers or write config (revert themselves)",
+    "benchmark_e2e: undocumented -> documented pass over Benchmark.dll (tests/benchmark_e2e)",
+    "real_provider: benchmark_e2e tests that spend real provider tokens (opt in with --real-provider)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.uv]
+# The bridge package is the project's distribution; install it editable.
+package = true
+
+[tool.coverage.run]
+# Excluded from ALL coverage ratios:
+#   1. Vendored third-party code -- not ours to test.
+#   2. Standalone operational scripts the offline tier cannot execute at all:
+#      one-shot CLIs that drive a live Ghidra instance end-to-end. Keeping
+#      their 0% in the denominator makes the ratchet measure "how many
+#      live-only scripts exist" instead of "how tested is the runtime code."
+# Importable runtime modules deliberately stay IN the denominator even when
+# poorly covered -- that is the test debt the ratchet exists to squeeze. Do not
+# add runtime modules here.
+omit = [
+    "*/vendored/*",
+]
