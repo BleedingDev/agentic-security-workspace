@@ -1,0 +1,97 @@
+/* ###
+ * IP: GHIDRA
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package ghidra.pcode.emu.linux;
+
+import java.io.IOException;
+import java.util.Collection;
+import java.util.List;
+
+import generic.jar.ResourceFile;
+import ghidra.framework.Application;
+import ghidra.pcode.emu.PcodeMachine;
+import ghidra.pcode.emu.unix.EmuUnixFileSystem;
+import ghidra.pcode.emu.unix.EmuUnixUser;
+import ghidra.pcode.exec.SleighPcodeUseropDefinition;
+import ghidra.pcode.exec.SleighPcodeUseropDefinition.BuilderStage1;
+import ghidra.program.database.dtarchive.DataTypeArchiveFactory;
+import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.dtarchive.FileDataTypeArchive;
+import ghidra.program.model.listing.Program;
+import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.VersionException;
+import ghidra.util.task.TaskMonitor;
+
+/**
+ * A system call library simulating Linux for amd64 / x86_64
+ *
+ * @param <T> the type of values processed by the library
+ */
+public class EmuLinuxAmd64SyscallUseropLibrary<T> extends AbstractEmuLinuxSyscallUseropLibrary<T> {
+
+	protected FileDataTypeArchive clib64;
+
+	/**
+	 * Construct the system call library for Linux-amd64
+	 * 
+	 * @param machine the machine emulating the hardware
+	 * @param fs the file system to export to the user-space program
+	 * @param program a program containing syscall definitions and conventions, likely the target
+	 *            program
+	 */
+	public EmuLinuxAmd64SyscallUseropLibrary(PcodeMachine<T> machine, EmuUnixFileSystem<T> fs,
+			Program program) {
+		super(machine, fs, program);
+	}
+
+	/**
+	 * Construct the system call library for Linux-amd64
+	 * 
+	 * @param machine the machine emulating the hardware
+	 * @param fs the file system to export to the user-space program
+	 * @param program a program containing syscall definitions and conventions, likely the target
+	 *            program
+	 * @param user the "current user" to simulate
+	 */
+	public EmuLinuxAmd64SyscallUseropLibrary(PcodeMachine<T> machine, EmuUnixFileSystem<T> fs,
+			Program program, EmuUnixUser user) {
+		super(machine, fs, program, user);
+	}
+
+	@Override
+	protected Collection<DataTypeManager> getAdditionalArchives() {
+		try {
+			ResourceFile file =
+				Application.findDataFileInAnyModule("typeinfo/generic/generic_clib_64.gdt");
+			clib64 = DataTypeArchiveFactory.openReadOnly(file, this, TaskMonitor.DUMMY);
+			return List.of(clib64.getDataTypeManager());
+		}
+		catch (IOException | VersionException | CancelledException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	@Override
+	protected void disposeAdditionalArchives() {
+		clib64.release(this);
+	}
+
+	@PcodeUserop
+	public SleighPcodeUseropDefinition syscall(BuilderStage1 builder) {
+		return builder.params().body(_ -> """
+				RAX = emu_syscall(RAX);
+				""").build();
+	}
+}
