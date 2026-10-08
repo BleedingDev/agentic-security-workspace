@@ -1,0 +1,53 @@
+---
+title: "Semgrep Guardian"
+description: "Semgrep Guardian integrates with AI coding agents to catch security issues in generated code before it ships."
+sidebarTitle: Overview
+---
+
+Semgrep Guardian integrates natively with AI coding agents to catch security issues before they ship. It bundles the Semgrep MCP server, Hooks, and Skills into a single install, and scans every file an agent generates using Semgrep Code, Supply Chain, and Secrets.
+
+When findings are detected, Guardian returns them to the agent, which decides whether to regenerate the code.
+
+## How Guardian works
+
+Guardian runs at authoring time, on the developer's machine, rather than in CI:
+
+1. Your coding agent writes or edits a file.
+2. A hook (or an MCP tool call, depending on the integration) triggers a Semgrep scan of what the agent just generated.
+3. If Semgrep returns findings, the agent receives them and is prompted to regenerate the code.
+4. The agent decides whether to regenerate. If it does, the new code is scanned again.
+
+Because the scan happens before the code is committed, Guardian complements rather than replaces your CI and platform scans. For scanning repositories in CI, see [Set up and deploy scans](/deployment/checklist).
+
+## Two setup paths
+
+Guardian has two materially different integration paths. Which one you use changes how you authenticate, whether you need a local Semgrep CLI, and which rules Guardian scans with:
+
+* **Claude Code or Codex with the Guardian plugin (recommended).** Uses Semgrep's hosted remote server and authenticates through OAuth. No local Semgrep CLI required.
+* **All other agents, and the local Claude Code plugin.** Runs Semgrep through a locally installed CLI.
+
+See [Choose your setup](/semgrep-guardian/choose-your-setup) for a full comparison, or go straight to the [Quickstart](/semgrep-guardian/quickstart) if you use Claude Code or Codex.
+
+These paths don't scan with the same rules. The recommended Claude Code and Codex plugins run a fixed ruleset and don't apply your organization's Policies. The local CLI integrations do. See [Rules and configuration](/semgrep-guardian/rules-and-configuration).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/semgrep-guardian/quickstart">
+    Set up Guardian with Claude Code or Codex in a few minutes.
+  </Card>
+  <Card title="Choose your setup" icon="code-branch" href="/semgrep-guardian/choose-your-setup">
+    Compare the remote and local CLI paths before you install.
+  </Card>
+  <Card title="Rules and configuration" icon="list-check" href="/semgrep-guardian/rules-and-configuration">
+    Which rules Guardian scans with, and when that differs.
+  </Card>
+  <Card title="Deploy across your organization" icon="building" href="/semgrep-guardian/enterprise-deployment">
+    Roll Guardian out to a fleet with marketplace controls or MDM.
+  </Card>
+</CardGroup>
+
+## Additional resources
+
+* Semgrep's `#mcp` [Slack community](https://go.semgrep.dev/slack)
+* The [Semgrep MCP server repo on GitHub](https://github.com/semgrep/semgrep/tree/develop/cli/src/semgrep/mcp)

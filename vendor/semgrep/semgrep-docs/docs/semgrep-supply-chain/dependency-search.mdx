@@ -1,0 +1,120 @@
+---
+title: "View and search for dependencies"
+---
+
+Semgrep Supply Chain's dependency search allows you to query for and view any <Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">dependency</Tooltip> in your project. This feature detects all transitive and direct dependencies across all of your projects in Semgrep AppSec Platform. Additionally, the dependency search results list all versions of a dependency and the projects that use it.
+
+You can use dependency search even for newly discovered vulnerabilities that might not yet have a formal CVE or Supply Chain rule. You can also use dependency search to view all versions of a dependency, which can be useful for standardization.
+
+<Info>
+**PREREQUISITE**
+
+At least one project (a repository or subfolder in a monorepo) that scans for dependencies through Semgrep Supply Chain. See [Scan third-party dependencies](/semgrep-supply-chain/set-up-and-configure).
+
+</Info>
+
+## Enable and use dependency search
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+</Step>
+<Step>
+Go to **Settings > General > Supply Chain**.
+</Step>
+<Step>
+Click <Icon icon="toggle-large-on" iconType="solid"/> **<Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip> search** if it's not already enabled.
+</Step>
+<Step>
+Navigate to **Supply Chain > Dependencies**.
+</Step>
+</Steps>
+
+Semgrep displays the manifest files or lockfiles that it used to determine dependency information and the dependencies included in each of the manifest files or lockfiles.
+
+### View additional manifest files or lockfiles
+
+By default, Semgrep only displays dependencies listed in a given project's first **10** manifest files or lockfiles. To load information from additional files:
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+</Step>
+<Step>
+Navigate to **Supply Chain > Dependencies**, and scroll to the bottom of the page.
+</Step>
+<Step>
+Click **Fetch more lockfiles**.
+</Step>
+</Steps>
+
+## Search for dependencies
+
+<Steps>
+<Step>
+Sign in to [Semgrep AppSec Platform](https://semgrep.dev/login).
+</Step>
+<Step>
+Navigate to **Supply Chain > Dependencies**.
+</Step>
+<Step>
+Using the **<Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip>** search bar, enter the name of the dependency you are searching for.
+</Step>
+<Step>
+Optional: Apply filters as necessary for your search.
+</Step>
+</Steps>
+
+### Filter results by version number
+
+To filter your results by version number, enter the dependency name and press **Enter** or **Return**. This returns a list of matches, but you can then filter your results further by version number:
+
+   <Steps>
+      <Step>
+      Click the name of your dependency to open the **<Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip>** dialog:
+         <Steps>
+            <Step>To search for a **specific version** of a package, click **Exact match**, then enter the **version** number.</Step>
+            <Step>To search for a **range of versions**, click **Range**, then enter the minimum and maximum versions.</Step>
+         </Steps>
+      </Step>
+      <Step>Click **Apply** to save your changes and see your results.</Step>
+   </Steps>
+
+You can also use the **Advanced search** to search for specific versions of dependencies:
+
+<Steps>
+   <Step>
+   Click **Advanced search**.
+   </Step>
+   
+   <Step>
+   Enter the **<Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip>** name.
+   </Step>
+   
+   <Step>
+   To specify a **version** number, click **Exact match**. For a range, click **Range** and provide the minimum and maximum versions.
+      <Steps>
+         <Step>
+         **Optional**: to search for a **specific version** of a package, click **Exact match**, then enter the **version** number.
+         </Step>
+         <Step>
+         **Optional**: to search for a **range of versions**, click **Range**, then enter the minimum and maximum versions.
+         </Step>
+      </Steps>
+   </Step>
+</Steps>
+
+You can search for multiple packages simultaneously.
+
+## Search filters
+
+<Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip> search provides the following filters, which correspond to the data points displayed by Semgrep about each dependency:
+
+| Filter | Description |
+| :--- | :--- |
+| <Tooltip tip="Publicly available code used as part of your application. Dependencies are listed in registries such as npm for JavaScript and PyPI for Python." cta="See full definition." href="/semgrep-supply-chain/glossary#dependency">Dependency</Tooltip> | The name and version of the dependency. |
+| Projects | The projects where the dependency can be found. |
+| <Tooltip tip="Describes a dependency's relationship to your codebase or first-party code. Semgrep uses Direct, Transitive, and Undetermined transitivity." cta="See full definition." href="/semgrep-supply-chain/glossary#transitivity">Transitivity</Tooltip>| The relationship of the dependency to your codebase. |
+| License <Tooltip tip="A policy defines the set of rules that Semgrep runs and the workflow actions it undertakes when a rule from the policy generates a finding. The workflow action can include notifying Slack channels or posting a comment in the pull request or merge request that generated the finding. Not to be confused with policy-as-code." cta="See full definition." href="/semgrep-code/glossary#policy">Policy</Tooltip> | The License <Tooltip tip="A policy defines the set of rules that Semgrep runs and the workflow actions it undertakes when a rule from the policy generates a finding. The workflow action can include notifying Slack channels or posting a comment in the pull request or merge request that generated the finding. Not to be confused with policy-as-code." cta="See full definition." href="/semgrep-code/glossary#policy">Policy</Tooltip> you set. Determines whether a dependency can be used based on its license. |
+| License | The dependency's license type. |
+| Language | The language of the dependency. |

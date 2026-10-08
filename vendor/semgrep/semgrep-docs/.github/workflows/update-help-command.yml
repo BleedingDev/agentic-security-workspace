@@ -1,0 +1,71 @@
+# Name of this GitHub Actions workflow.
+name: Update semgrep help command
+
+on:
+  repository_dispatch:
+    types: [new_release]
+  workflow_dispatch: {}
+
+jobs:
+  update-output:
+    name: Update CLI reference help output
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Authenticate as semgrep-autoapprover
+        id: generate-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ vars.SEMGREP_DOCS_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SEMGREP_DOCS_RELEASE_PRIVATE_KEY }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Resolve latest Semgrep release tag
+        run: |
+          LATEST_VERSION=$(gh release view -R semgrep/semgrep --json tagName -q .tagName | sed 's/^v//g')
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+
+      - name: Update CLI reference help snippets
+        run: |
+          SNIPPET_DIR=docs/snippets/cli-reference
+          mkdir -p "$SNIPPET_DIR"
+
+          # The opening fence is required. Without it, Mintlify renders the
+          # help dump as prose (line breaks collapse). Angle brackets inside
+          # the fence do not need escaping.
+          write_help() {
+            local out="$1"
+            shift
+            {
+              echo '```bash expandable'
+              if [ "$#" -eq 0 ]; then
+                docker run --rm "semgrep/semgrep:${LATEST_VERSION}" semgrep --help
+              else
+                docker run --rm "semgrep/semgrep:${LATEST_VERSION}" semgrep "$@" --help
+              fi | sed -r 's/\x1B\[[0-9;]*[a-zA-Z]//g'
+              echo '```'
+            } > "$out"
+          }
+
+          write_help "$SNIPPET_DIR/help-main.mdx"
+          write_help "$SNIPPET_DIR/help-scan.mdx" scan
+          write_help "$SNIPPET_DIR/help-ci.mdx" ci
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          sign-commits: true
+          branch: update_help_commands_${{ env.LATEST_VERSION }}
+          commit-message: Updated CLI reference help output for Semgrep ${{ env.LATEST_VERSION }}
+          title: Update CLI reference help output for Semgrep ${{ env.LATEST_VERSION }}
+          body: This is an automatically generated PR that updates `docs/snippets/cli-reference/*.mdx`.
+          delete-branch: true
