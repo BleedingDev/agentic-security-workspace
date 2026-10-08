@@ -1,0 +1,24 @@
+---
+source: tui/src/bottom_pane/footer.rs
+expression: terminal.backend()
+---
+"  Keyboard shortcuts                                                            "
+"                                                                                "
+"  Compose                       Session                                         "
+"  /        Commands             tab   Send message                              "
+"  @        Mention files        ⇧tab  Change mode                               "
+"  !        Shell command        ⌥,    Less reasoning                            "
+"  ⌃j       New line             ⌥.    More reasoning                            "
+"  ⌃v       Paste image          f8    Voice                                     "
+"  ⌃g       External editor      f4    Inspect activity                          "
+"  ⌃r       Search history       ⌃c    Quit                                      "
+"  esc esc  Edit last message                                                    "
+"                                Transcript (open first)                         "
+"                                ⌃t            Open transcript                   "
+"                                f3            Find text                         "
+"                                pgup / pgdn   Scroll                            "
+"                                ⌃space        Start selection                   "
+"                                ⌃home / ⌃end  Top / latest                      "
+"                                ⇧⌥, / ⇧⌥.     Top / latest                      "
+"                                                                                "
+"  /keymap customize                                                             "
