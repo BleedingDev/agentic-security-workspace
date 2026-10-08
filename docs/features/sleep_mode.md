@@ -1,0 +1,193 @@
+# Sleep Mode
+
+vLLM's Sleep Mode allows you to temporarily release most GPU memory used by a model, including model weights and KV cache, without stopping the server or unloading the Docker container. This is especially useful for RLHF, training, or cost-saving scenarios where GPU resources need to be freed between inference workloads.
+
+Key benefits:
+
+- **Frees GPU memory**: Offloads model weights to CPU RAM and discards KV cache, releasing up to 90%+ of GPU memory for other tasks.
+- **Fast resume**: Quickly wake up the engine and resume inference without full model reload.
+- **API endpoints**: Control sleep/wake_up state via HTTP endpoints or Python API.
+- **Supports distributed workloads**: Works with tensor parallelism, pipeline parallelism, etc.
+- **Fine-grained control**: Optionally wake up only model weights or KV cache to avoid OOM during weight updates.
+
+!!! note
+    This feature is now supported on CUDA and ROCm platform.
+
+!!! note
+    For more information, see this [Blog Post](https://blog.vllm.ai/2025/10/26/sleep-mode.html).
+
+## Sleep levels
+
+Level 1 sleep will offload the model weights and discard the KV cache. The content of KV cache is forgotten. Level 1 sleep is good for sleeping and waking up the engine to run the same model again. The model weights are backed up in CPU memory. Please make sure there's enough CPU memory to store the model weights. Level 2 sleep will discard both the model weights and the KV cache (while the model's buffers are kept in CPU, like rope scaling tensors). The content of both the model weights and KV cache is forgotten. Level 2 sleep is good for sleeping and waking up the engine to run a different model or update the model, where previous model weights are not needed, e.g. RLHF weight update. Level 2 sleep is also useful when there is not enough CPU memory to back up the model weights, e.g. when a colocated trainer already uses CPU memory for offloading its own state; since nothing is backed up, restore the weights after waking up with `collective_rpc("reload_weights")`.
+
+## Usage
+
+### Offline inference
+
+Enable sleep mode by passing `enable_sleep_mode=True` to the `LLM` class.
+
+```python
+from vllm import LLM
+llm = LLM("Qwen/Qwen3-0.6B", enable_sleep_mode=True)
+```
+
+#### Python API
+
+```python
+# Sleep level 1
+# Put the engine to sleep (level=1: offload weights to CPU RAM, discard KV cache)
+llm.sleep(level=1)
+
+# Wake up the engine (restore weights)
+llm.wake_up()
+```
+
+```python
+# Sleep level 2
+# Put the engine to sleep (level=2: discard both weights and KV cache)
+llm.sleep(level=2)
+
+# Reallocate weights memory only
+llm.wake_up(tags=["weights"])
+
+# Load weights in-place
+llm.collective_rpc("reload_weights")
+
+# Reallocate KV cache
+llm.wake_up(tags=["kv_cache"])
+```
+
+#### RLHF weight updates
+
+During RLHF training, vLLM allows you to selectively wake up only the model weights or the KV cache using the tags argument in wake_up(). This fine-grained control is especially useful when updating model weights: by waking up just the weights (e.g., llm.wake_up(tags=["weights"])), you avoid allocating memory for the KV cache until after the weight update is complete. This approach helps prevent GPU out-of-memory (OOM) errors, particularly with large models, by minimizing peak memory usage during weight synchronization and update operations.
+
+Use `tags=["weights"]` or `tags=["kv_cache"]` to control which resources are restored, useful for RLHF and weight updates. **Note** that `is_sleeping` will report `true` until all components are awake.
+
+```python
+# Put engine to deep sleep (level=2)
+llm.sleep(level=2)
+# ... Get the new weights
+# Wake up only weights to avoid OOM
+llm.wake_up(tags=["weights"])
+# ... Update the weights
+# wake up KV cache after weights are updated
+llm.wake_up(tags=["kv_cache"])
+```
+
+#### Retaining frozen weights during RLHF updates
+
+Set `sleep_preserve_parameter_names` (CLI: `--sleep-preserve-parameter-names`)
+to runtime parameter-name glob
+patterns for weights that stay frozen during training. Each pattern must match
+`model.named_parameters()`; checkpoint names and `requires_grad` are not used.
+
+Level-2 sleep backs up selected GPU parameters to pageable CPU memory; weights
+wake-up restores them in place and releases the backups. CPU parameters need no
+copy. Allow enough host memory for backups. Level-1 behavior is unchanged.
+
+The trainer must omit these parameters from updates, and reload/post-processing
+must preserve their values and storage (including avoiding replacement with meta
+tensors). This option does not filter updates and applies only to the target model.
+
+#### Release only KV cache memory
+
+`LLM.release_kv_cache_memory()` discards KV cache physical memory while keeping model weights resident. It requires a completed pause and all executor memory to be resident: full sleep, partial wake-up, and repeated release without restoring memory are rejected. Requests retained with `mode="keep"` are recomputed after wake-up.
+
+Use the default `cumem` backend with managed allocations: `enable_cumem_allocator=True` on CUDA/ROCm (also enabled by `enable_sleep_mode=True`), or `enable_sleep_mode=True` on XPU. Other backends must implement selective discard; CPU and unmanaged allocations are unsupported.
+
+```python
+llm.sleep(level=0, mode="keep")  # Wait for the pause to complete.
+llm.release_kv_cache_memory()
+llm.wake_up(tags=["kv_cache"])  # Reallocate KV cache and resume scheduling.
+```
+
+#### Offloading CUDA graph memory
+
+By default, CUDA graph memory stays on the GPU while asleep. With
+`sleep_mode_offload_cudagraph=True` (off by default), CUDA graphs are captured
+into a cuMem pool that sleep backs up to CPU memory at both levels and any wake
+restores in place, so graphs are replayed, not recaptured. It needs the default
+`cumem` backend, CUDA and CUDA graphs; otherwise it has no effect.
+
+```python
+llm = LLM("Qwen/Qwen3-8B", enable_sleep_mode=True, sleep_mode_offload_cudagraph=True)
+```
+
+or `vllm serve <model> --enable-sleep-mode --sleep-mode-offload-cudagraph`.
+
+The cost is pinned host memory for the pool's backup, also at level 2, and one
+extra copy per captured custom allreduce (about 3% decode latency at batch
+size 1). `NCCL_GRAPH_REGISTER` defaults to `0`, since NCCL graph registration
+would pin the pool; an explicit value is kept with a warning. Graph executables
+outside PyTorch pools stay resident.
+
+#### Releasing NCCL communicator memory
+
+By default, NCCL communicators keep their GPU buffers while asleep. With
+`enable_nccl_comm_suspend=True` (off by default, experimental), sleep releases
+them with `ncclCommSuspend` and wake restores them with `ncclCommResume`. The
+communicators keep their topology, so they are not re-created. It needs NCCL
+2.29.7 or newer; with an older library, a warning is logged and the memory stays
+on the GPU.
+
+```python
+llm = LLM("Qwen/Qwen3-8B", enable_sleep_mode=True, enable_nccl_comm_suspend=True)
+```
+
+or `vllm serve <model> --enable-sleep-mode --enable-nccl-comm-suspend`.
+
+### Online Serving
+
+To enable sleep mode in a vLLM server you need to initialize it with the flag `VLLM_SERVER_DEV_MODE=1` and pass `--enable-sleep-mode` to the vLLM server.
+
+#### Server in development mode
+
+When using the flag `VLLM_SERVER_DEV_MODE=1` you enable development endpoints, and these endpoints should not be exposed to users.
+
+```bash
+VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+  --enable-sleep-mode \
+  --port 8000
+```
+
+Below is an example of how to sleep and wake up a model in level 1.
+
+```bash
+curl -X POST 'http://localhost:8000/sleep?level=1'
+curl -X POST 'http://localhost:8000/wake_up'
+```
+
+And this is an example of how to sleep and wake up a model in level 2.
+
+```bash
+curl -X POST 'http://localhost:8000/sleep?level=2'
+# Reallocate weights memory only
+curl -X POST 'http://localhost:8000/wake_up?tags=weights'
+# Load weights in-place
+curl -X POST 'http://localhost:8000/collective_rpc' -H 'Content-Type: application/json' -d '{"method":"reload_weights"}'
+# Reallocate KV cache
+curl -X POST 'http://localhost:8000/wake_up?tags=kv_cache'
+```
+
+To release only KV cache memory, wait for the level 0 pause to complete before calling the release endpoint. The same resident-memory and backend requirements as the Python API apply.
+
+```bash
+curl -X POST 'http://localhost:8000/sleep?level=0&mode=keep'
+curl -X POST 'http://localhost:8000/release_kv_cache_memory'
+curl -X POST 'http://localhost:8000/wake_up?tags=kv_cache'
+```
+
+#### HTTP endpoints
+
+- `POST /sleep?level=1` — Put the model to sleep (`level=1`).
+- `POST /release_kv_cache_memory` — Discard KV cache memory after a completed pause, while all executor memory is resident.
+- `POST /wake_up` — Wake up the model. Supports optional `tags` query parameters for partial wake-up (e.g., `?tags=weights`).
+- `POST /collective_rpc` — Perform a collective remote procedure call (RPC).
+- `GET /is_sleeping` — Check if the model is sleeping.
+
+!!! note
+    These endpoints are only available when passing `VLLM_SERVER_DEV_MODE=1`.
+
+## Limitation
+
+On ROCm, the virtual memory allocation on ROCm is done through chunked memory allocation. You can control the chunk size through `VLLM_ROCM_SLEEP_MEM_CHUNK_SIZE` (in MB). The default value is set at 256MB. The larger the chunk size the faster the performance. However, setting it too large will cause OOM. So if you encounter OOM when using sleep mode. Try reducing the chunk size. It is recommended to define the chunk size as a power of 2.
