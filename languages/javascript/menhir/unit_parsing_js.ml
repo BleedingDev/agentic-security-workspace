@@ -1,0 +1,96 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+open Fpath_.Operators
+
+let t = Testo.create
+
+(*****************************************************************************)
+(* Unit tests *)
+(*****************************************************************************)
+
+(* ran from the root of the semgrep repository *)
+let tests_path = Fpath.v "tests"
+
+let tests =
+  Testo.categorize "parsing_js"
+    [
+      t "regression files" (fun () ->
+          let dir = tests_path / "js" / "parsing" in
+          let files =
+            Common2.glob (dir / "*.js")
+            @ Common2.glob (dir / "jsx" / "*.js")
+            @ []
+          in
+          files
+          |> List.iter (fun file ->
+              try
+                let _ = Parse_js.parse_program file in
+                ()
+              with
+              | Parsing_error.Syntax_error _
+              | Common.Todo ->
+                  Alcotest.failf "it should correctly parse %a" Fpath.pp file));
+      t "regression files typescript" (fun () ->
+          let dir = tests_path / "typescript" / "parsing" in
+          let files =
+            Common2.glob (dir / "*.js") @ Common2.glob (dir / "*.ts") @ []
+          in
+          files
+          |> List.iter (fun file ->
+              try
+                let _ = Parse_js.parse_program file in
+                ()
+              with
+              | Parsing_error.Syntax_error _
+              | Common.Todo ->
+                  Alcotest.failf "it should correctly parse %a" Fpath.pp file));
+      t "rejecting bad code" (fun () ->
+          try
+            Hook.with_hook_set Flag_parsing.show_parsing_error false (fun () ->
+                let _ = Parse_js.program_of_string "echo 1+" in
+                Alcotest.fail "it should have thrown a Parse_error exception")
+          with
+          | Parsing_error.Syntax_error _ -> ())
+      (*
+    "the javascript AST mapper", (fun () ->
+      let js_ex = "foo(42, 101);" in
+      Common2.with_tmp_file ~str:js_ex ~ext:".js" (fun file ->
+        let prog = Parse_js.parse_program file in
+        let map_visitor = M.mk_visitor { M.default_visitor with
+          M.kexpr = (fun (k, _) x ->
+            match x with
+            | L (Num (s, tok)) ->
+                let i = s_to_i s in
+                L (Num (i_to_s (i+1), Ast.fakeInfo()))
+            | _ -> k x
+          );
+        }
+        in
+        let transformed_ast = map_visitor (Program prog) in
+
+        let integers =
+          V.do_visit_with_ref (fun aref -> { V.default_visitor with
+            V.kexpr = (fun (k, _) x ->
+              match x with
+              | L (Num (s, tok)) ->
+                  Common.push2 (s_to_i s) aref
+              | _ -> k x
+            );
+          }) transformed_ast in
+        assert_equal
+          ~msg:"it should increment all the integers in the program"
+          [43; 102] integers;
+      )
+    );
+*);
+    ]

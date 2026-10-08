@@ -1,0 +1,285 @@
+(*
+   Copyright (c) 2024-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+open Common
+module Out = Semgrep_output_v1_t
+module J = JSON
+
+(*****************************************************************************)
+(* Prelude *)
+(*****************************************************************************)
+(* Output findings compatible with GitLab SAST JSON format.
+
+   - Written based on:
+     https://github.com/semgrep/semgrep-action/blob/678eff1a4269ed04b76631771688c8be860ec4e9/src/semgrep_agent/findings.py#L137-L165
+   - Docs:
+     https://docs.gitlab.com/ee/user/application_security/sast/#reports-json-format
+   - Schema:
+     https://gitlab.com/gitlab-org/security-products/security-report-schemas/-/blob/master/dist/sast-report-format.json
+
+   Ported from cli/.../formatter/gitlab_sast.py
+*)
+
+(*****************************************************************************)
+(* Helpers *)
+(*****************************************************************************)
+
+type report_type = Sast | Secret
+
+let to_gitlab_severity = function
+  | `Info -> "Info"
+  | `Low -> "Low"
+  | `Warning
+  | `Medium ->
+      "Medium"
+  | `Error
+  | `High ->
+      "High"
+  | `Critical -> "Critical"
+  | `Experiment
+  | `Inventory ->
+      "Unknown"
+
+let format_cli_match (cli_match : Out.cli_match) : (string * JSON.yojson) list =
+  let metadata = JSON.from_yojson cli_match.extra.metadata in
+  let source =
+    match JSON.member "source" metadata with
+    | Some (J.String s) -> s
+    | Some _
+    | None ->
+        "not available"
+  in
+  let confidence_details, confidence_flags =
+    match JSON.member "confidence" metadata with
+    | Some (J.String c) ->
+        ( [
+            ( "confidence",
+              `Assoc
+                [
+                  ("type", `String "text");
+                  ("name", `String "confidence");
+                  ("value", `String c);
+                ] );
+          ],
+          if String.equal c "LOW" then
+            [
+              `Assoc
+                [
+                  ("type", `String "flagged-as-likely-false-positive");
+                  ("origin", `String "Semgrep");
+                  ( "description",
+                    `String "This finding is from a low confidence rule." );
+                ];
+            ]
+          else [] )
+    | Some _
+    | None ->
+        ([], [])
+  in
+  let exposure_details, exposure_flags =
+    match Exposure.of_cli_match_opt cli_match with
+    | None -> ([], [])
+    | Some exposure ->
+        ( [
+            ( "exposure",
+              `Assoc
+                [
+                  ("type", `String "text");
+                  ("name", `String "exposure");
+                  ("value", `String (Exposure.string_of exposure));
+                ] );
+          ],
+          match exposure with
+          | Unreachable ->
+              [
+                `Assoc
+                  [
+                    ("type", `String "flagged-as-likely-false-positive");
+                    ("origin", `String "Semgrep Supply Chain");
+                    ( "description",
+                      `String
+                        "Semgrep found no way to reach this vulnerability \
+                         while scanning your code." );
+                  ];
+              ]
+          | Reachable
+          | Undetermined ->
+              [] )
+  in
+  let id =
+    Semgrep_hashing_functions.syntactic_id cli_match
+    |> Uuidm.of_binary_string |> Option.get |> Uuidm.to_string
+  in
+  let r =
+    [
+      ("id", `String id);
+      (* CVE is a required field from Gitlab schema.
+         It also is part of the determination for uniqueness
+         of a detected secret
+         /regardless/ of differentiated ID. See issue 262648.
+         https://gitlab.com/gitlab-org/gitlab/-/issues/262648
+         Gitlab themselves mock a CVE for findings that lack a CVE
+         Format: path:hash-of-file-path:check_id *)
+      ( "cve",
+        `String
+          (spf "%s:%s:%s"
+             (Fpath.to_string cli_match.path)
+             Digestif.SHA256.(
+               to_hex (digest_string (Fpath.to_string cli_match.path)))
+             (Rule_ID.to_string cli_match.check_id)) );
+      ("message", `String cli_match.extra.message);
+      (* added to the GitLab SAST schema in 16.x, c.f.
+         https://gitlab.com/gitlab-org/gitlab/-/issues/339812
+         The above "message" field should be unused in 16.x and later! *)
+      ("description", `String cli_match.extra.message);
+      ("severity", `String (to_gitlab_severity cli_match.extra.severity));
+      ( "scanner",
+        `Assoc
+          [
+            ("id", `String "semgrep");
+            ("name", `String "Semgrep");
+            ("vendor", `Assoc [ ("name", `String "Semgrep") ]);
+          ] );
+      ( "location",
+        `Assoc
+          [
+            ("file", `String (Fpath.to_string cli_match.path));
+            (* Gitlab only uses line identifiers *)
+            ("start_line", `Int cli_match.start.line);
+            ("end_line", `Int cli_match.end_.line);
+          ] );
+      ( "identifiers",
+        `List
+          [
+            `Assoc
+              [
+                ("type", `String "semgrep_type");
+                ( "name",
+                  `String ("Semgrep - " ^ Rule_ID.to_string cli_match.check_id)
+                );
+                ("value", `String (Rule_ID.to_string cli_match.check_id));
+                ("url", `String source);
+              ];
+          ] );
+      ("flags", `List (confidence_flags @ exposure_flags));
+      ("details", `Assoc (confidence_details @ exposure_details));
+    ]
+  in
+  r
+
+let sast_format_cli_match (cli_match : Out.cli_match) =
+  let r = format_cli_match cli_match in
+  ("category", `String "sast") :: r
+
+let secrets_format_cli_match (cli_match : Out.cli_match) =
+  let r = format_cli_match cli_match in
+  ("category", `String "secret_detection")
+  :: (r
+     |> List.map (function
+       | "location", `Assoc locs ->
+           let commit =
+             ( "commit",
+               `Assoc
+                 [
+                   (* Even the native Gitleaks based Gitlab secret detection
+                         only provides a dummy value for now on relevant hash. *)
+                   ("sha", `String "0000000");
+                 ] )
+           in
+           ("location", `Assoc (commit :: locs))
+       | __else__ -> __else__))
+
+(*****************************************************************************)
+(* Entry points *)
+(*****************************************************************************)
+
+let output report_type (matches : Out.cli_match list) : JSON.yojson =
+  let cli_match_formatter, header, type_ =
+    match report_type with
+    | Sast ->
+        let header =
+          [
+            ( "$schema",
+              `String
+                "https://gitlab.com/gitlab-org/security-products/security-report-schemas/-/blob/master/dist/sast-report-format.json"
+            );
+            ("version", `String "15.0.4");
+          ]
+        in
+        (sast_format_cli_match, header, "sast")
+    | Secret ->
+        let header =
+          [
+            ( "$schema",
+              `String
+                "https://gitlab.com/gitlab-org/security-products/security-report-schemas/-/blob/master/dist/secret-detection-report-format.json"
+            );
+            ("version", `String "15.0.4");
+          ]
+        in
+        (secrets_format_cli_match, header, "secret_detection")
+  in
+
+  let tool =
+    `Assoc
+      [
+        ("id", `String "semgrep");
+        ("name", `String "Semgrep");
+        ("url", `String "https://semgrep.dev");
+        ("version", `String Version.version);
+        ("vendor", `Assoc [ ("name", `String "Semgrep") ]);
+      ]
+  in
+  let start_time = Metrics_.g.payload.started_at in
+  let end_time = Timedesc.Timestamp.now () in
+  (* bugfix: gitlab does not use the RFC 3339 date format but instead a
+   * yyyy-mm-ddThh:mm:ss custom format.
+   * See https://gitlab.com/gitlab-org/security-products/security-report-schemas/-/blob/941f497a3824d4393eb8a7efced497f738895ab4/dist/sast-report-format.json#L710
+   *)
+  let format = "{year}-{mon:0X}-{day:0X}T{hour:0X}:{min:0X}:{sec:0X}" in
+  let scan =
+    `Assoc
+      [
+        ("start_time", `String (Timedesc.Timestamp.to_string ~format start_time));
+        ("end_time", `String (Timedesc.Timestamp.to_string ~format end_time));
+        ("analyzer", tool);
+        ("scanner", tool);
+        ("version", `String Version.version);
+        ("status", `String "success");
+        ("type", `String type_);
+      ]
+  in
+  let vulnerabilities =
+    List.filter_map
+      (fun (cli_match : Out.cli_match) ->
+        match cli_match.extra.severity with
+        | `Experiment
+        | `Inventory ->
+            None
+        | `Critical
+        | `High
+        | `Medium
+        | `Low
+        | `Info
+        | `Warning
+        | `Error ->
+            Some (`Assoc (cli_match_formatter cli_match)))
+      matches
+  in
+  `Assoc
+    (header @ [ ("scan", scan); ("vulnerabilities", `List vulnerabilities) ])
+
+let sast_output (matches : Out.cli_match list) : JSON.yojson =
+  output Sast matches
+
+let secrets_output (matches : Out.cli_match list) : JSON.yojson =
+  output Secret matches

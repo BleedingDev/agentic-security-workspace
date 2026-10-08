@@ -1,0 +1,19 @@
+(library
+  (public_name spacegrep)
+  (name spacegrep)
+  (libraries
+     ANSITerminal
+     base
+     unix
+     commons
+     parallelism
+  )
+  (preprocess
+   (pps
+     ppx_deriving.show
+     ppx_deriving.eq
+     commons.ppx
+   ))
+)
+
+(ocamllex Lexer)

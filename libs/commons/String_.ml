@@ -1,0 +1,151 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+let unit_str ?(pad = false) count str =
+  let str = if count <> 1 then str ^ "s" else if pad then str ^ " " else str in
+  Printf.sprintf "%d %s" count str
+
+let search ~term str =
+  try Some (Str.search_forward (Str.regexp_string term) str 0) with
+  | Not_found -> None
+
+let contains ~term str = search ~term str <> None
+let empty s = s = ""
+let split ~sep s = Str.split (Str.regexp sep) s
+
+let safe_sub str virtual_start virtual_sublen =
+  let len = String.length str in
+  (* Treat negative length as zero length *)
+  let virtual_sublen = max 0 virtual_sublen in
+  (* Convert possibly out-of-range start and end to legal start and end. *)
+  let virtual_end = virtual_start + virtual_sublen in
+  let virtual_end =
+    if virtual_end < virtual_start then
+      (* int overflow from the addition above *)
+      max_int
+    else virtual_end
+  in
+  let real_start = max 0 (min virtual_start len) in
+  let real_end = max 0 (min len virtual_end) in
+  let real_sublen = real_end - real_start in
+  (* It should be safe now *)
+  String.sub str real_start real_sublen
+
+let show ?(max_len = 200) ?(keep_end = false) str =
+  let len = String.length str in
+  if len > max_len then
+    if keep_end then
+      Printf.sprintf "(%i bytes) %S" (String.length str)
+        ("..." ^ safe_sub str (len - max_len) len)
+    else
+      Printf.sprintf "%S (%i bytes)"
+        (safe_sub str 0 max_len ^ "...")
+        (String.length str)
+  else Printf.sprintf "%S" str
+
+(* Adapted from Testo Style.truncate_text: https://github.com/semgrep/testo/blob/c1d8c15007f29f37a4c781516676cf8721133e74/util/lib/Style.ml#L82-L118 *)
+let show_ends ?(max_len = 200) str =
+  let orig_len = String.length str in
+  let max_len = max 0 max_len in
+  let truncated =
+    if orig_len <= max_len then str
+    else
+      (* Let's keep the beginning and the end of the text since they're
+          more likely to contain useful information than the middle.
+
+          We don't care about breaking multibyte characters.
+          UTF-8 decoders are expected to recover from broken multibyte
+          sequences. *)
+      let head_len = max_len / 2 in
+      let tail_len = max_len - head_len in
+      if head_len <= 0 || tail_len <= 0 then str
+      else
+        let mid_len = orig_len - head_len - tail_len in
+        let head = safe_sub str 0 head_len in
+        let tail = safe_sub str (head_len + mid_len) tail_len in
+        let mid =
+          Printf.sprintf "\n###### [hidden: %d bytes] ######\n" mid_len
+        in
+        let warning =
+          Printf.sprintf
+            "###### Warning: bytes %d-%d below were omitted ######\n" head_len
+            (head_len + mid_len - 1)
+        in
+        String.concat "" [ warning; head; mid; tail ]
+  in
+  Printf.sprintf "%S" truncated
+
+let trim_cr s =
+  let len = String.length s in
+  if len > 0 && s.[len - 1] = '\r' then String.sub s 0 (len - 1) else s
+
+let lines_of_range (start_offset, end_offset) str =
+  let len = String.length str in
+  if
+    start_offset > end_offset || end_offset > len || start_offset < 0 || len = 0
+  then []
+  else
+    (* Search left for a '\n' char so we can determine the start of the first
+     * line in the range. *)
+    let start_offset =
+      (* Consider start_offset here:
+       * "foo\nbar\n"
+       *     ^
+       * We want to include "foo" in the result, so we move the cursor left one
+       * character in this case.
+       *
+       * NB: This can result in a start_offset of -1. That is acceptable to
+       * rindex_from_opt and the unit tests exercise that case.
+       *)
+      if str.[start_offset] = '\n' then start_offset - 1 else start_offset
+    in
+    let start_line_offset =
+      match String.rindex_from_opt str start_offset '\n' with
+      | None -> 0
+      | Some x ->
+          (* We want to start the resulting substring at the beginning of the
+           * line and not include the newline character itself, so add one. Note
+           * that this can set `start_line_offset` to `len`, but that is an
+           * acceptable second argument to `String.sub`. *)
+          x + 1
+    in
+    (* Search right for a '\n' char so we can determine the end of the last line
+     * in the range. *)
+    let end_line_offset =
+      match String.index_from_opt str end_offset '\n' with
+      | None -> len
+      | Some x -> x
+    in
+    let substr =
+      String.sub str start_line_offset (end_line_offset - start_line_offset)
+    in
+    let lines = String.split_on_char '\n' substr in
+    List.map trim_cr lines
+
+let is_capitalized s =
+  String.length s <> 0
+  &&
+  match s.[0] with
+  (* https://ocaml.org/manual/5.2/patterns.html#sss:pat-range *)
+  | 'A' .. 'Z' -> true
+  | _ -> false
+
+let truncate_with_message max_len fmt s =
+  if String.length s > max_len then
+    let truncated_length = String.length s - max_len in
+    let trunc_s = Str.first_chars s max_len in
+    fmt trunc_s truncated_length
+  else s
+
+let take_last ~max_len s =
+  let len = String.length s in
+  if len > max_len then "..." ^ safe_sub s (len - max_len) max_len else s

@@ -1,0 +1,10 @@
+Test name: without git > scan explicit target
+--- Files not added to git ---
+.semgrepignore
+a.py
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+--- Selected targets ---
+selected a.py
+--- Skipped targets ---

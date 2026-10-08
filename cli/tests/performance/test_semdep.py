@@ -1,0 +1,67 @@
+#
+# Copyright (c) 2023-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+from pathlib import Path
+from time import time
+
+import pytest
+
+from semdep.parsers.gem import parse_gemfile
+from semdep.parsers.go_mod import parse_go_mod
+from semdep.parsers.gradle import parse_gradle
+from semdep.parsers.pipfile import parse_pipfile
+from semdep.parsers.poetry import parse_poetry
+from semdep.parsers.pom_tree import parse_pom_tree
+from semdep.parsers.requirements import parse_requirements
+from semdep.parsers.util import DependencyParser
+from semdep.parsers.yarn import parse_yarn
+
+
+@pytest.mark.kinda_slow
+@pytest.mark.parametrize(
+    "file_size,target,max_time,parser",
+    [
+        (file_size, target, max_time, parser)
+        # These times are set relative to Github Actions, they should be lower when
+        # running locally.
+        # Local time expectation is more like 1, 5, 10
+        # update: 10k is actually taking more time locally, 3.5 on pad's Linux machine
+        for file_size, max_time in [("10k", 4), ("50k", 15), ("100k", 30)]
+        for target, parser in [
+            ("Gemfile.lock", DependencyParser(parse_gemfile)),
+            ("go.mod", DependencyParser(parse_go_mod)),
+            ("gradle.lockfile", DependencyParser(parse_gradle)),
+            ("maven_dep_tree.txt", DependencyParser(parse_pom_tree)),
+            ("poetry.lock", DependencyParser(parse_poetry)),
+            ("requirements.txt", DependencyParser(parse_requirements)),
+            ("yarn.lock", DependencyParser(parse_yarn)),
+            ("Pipfile.lock", DependencyParser(parse_pipfile)),
+        ]
+    ],
+)
+def test_dependency_aware_timing(
+    lockfile_path_in_tmp_for_perf,
+    file_size: str,
+    target: str,
+    max_time: int,
+    parser: DependencyParser,
+):
+    start = time()
+
+    lockfile_path = Path(f"targets_perf_sca/{file_size}/{target}")
+    _, error = parser(lockfile_path=lockfile_path, manifest_path=None)
+
+    end = time()
+
+    assert len(error) == 0
+    exec_time = end - start
+    assert exec_time < max_time

@@ -1,0 +1,25 @@
+(library
+ (public_name semgrep.legacy_language_server.server)
+ (name osemgrep_language_server_server)
+ (wrapped false)
+ (libraries
+   base
+
+   lsp
+   lwt
+
+   semgrep_core_cli
+   osemgrep_core
+   osemgrep_core_runner
+   osemgrep_networking
+   ppx_deriving_yojson
+ )
+ (preprocess
+  (pps
+    lwt_ppx
+    profiling.ppx
+    ppx_deriving.show
+    ppx_deriving_yojson
+  )
+ )
+)

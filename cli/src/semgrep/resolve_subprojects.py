@@ -1,0 +1,600 @@
+#
+# Copyright (c) 2024-2025 Semgrep Inc.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public License
+# version 2.1 as published by the Free Software Foundation.
+#
+# This library is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+# LICENSE for more details.
+#
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict
+from typing import FrozenSet
+from typing import List
+from typing import Optional
+from typing import Set
+from typing import Tuple
+from typing import Union
+
+from rich.progress import MofNCompleteColumn
+from rich.progress import Progress
+from rich.progress import SpinnerColumn
+from rich.progress import TextColumn
+
+import semgrep.semgrep_interfaces.semgrep_output_v1 as out
+from semdep.subproject_matchers import get_all_subproject_identifying_glob_filters
+from semdep.subproject_matchers import MATCHERS
+from semdep.subproject_matchers import SubprojectMatcher
+from semgrep import telemetry
+from semgrep.console import console
+from semgrep.resolve_dependency_source import resolve_dependency_source
+from semgrep.rpc import RpcSession
+from semgrep.rule import Rule
+from semgrep.semgrep_interfaces.semgrep_output_v1 import Ecosystem
+from semgrep.semgrep_types import Language
+from semgrep.simple_profiling import profiling
+from semgrep.simple_profiling import simple_profiling
+from semgrep.subproject import ClosestSubprojectFinder
+from semgrep.subproject import DependencyResolutionConfig
+from semgrep.subproject import from_resolved_dependencies
+from semgrep.subproject import generate_dependency_source_id
+from semgrep.subproject import get_all_source_files
+from semgrep.subproject import subproject_to_plan_output
+from semgrep.target_manager import SCA_PRODUCT
+from semgrep.target_manager import TargetManager
+from semgrep.types import fpaths_of_targets
+from semgrep.types import Target
+from semgrep.verbose_logging import getLogger
+
+logger = getLogger(__name__)
+
+
+def to_sca_error(
+    err: Union[out.DependencyParserError, out.ScaResolutionError],
+) -> out.ScaError:
+    if isinstance(err, out.DependencyParserError):
+        return out.ScaError(out.SCAParse(err))
+    elif isinstance(err, out.ScaResolutionError):
+        return out.ScaError(out.SCAResol(err))
+    else:
+        raise TypeError(f"Unexpected error variant: {type(err)}")
+
+
+@dataclass(frozen=True)
+class HashableSubproject:
+    """
+    A wrapper around Subproject that implements __hash__ and __eq__ to only
+    consider root_dir and ecosystem, making it safe to use in sets even when
+    the underlying Subproject contains unhashable types like lists.
+    Indeed subproject dependency_source field can contain a
+    MultilockfileDependencySource with an unhashable list inside.
+    """
+
+    subproject: out.Subproject
+
+    def __hash__(self) -> int:
+        # Only hash the root_dir and ecosystem
+        return hash((self.subproject.root_dir, self.subproject.ecosystem))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, HashableSubproject):
+            return NotImplemented
+        return (self.subproject.root_dir, self.subproject.ecosystem) == (
+            other.subproject.root_dir,
+            other.subproject.ecosystem,
+        )
+
+
+@simple_profiling
+@telemetry.trace(owner=telemetry.TraceOwner.SSC)
+def match_subprojects(
+    dependency_source_files: FrozenSet[Target], matchers: List[SubprojectMatcher]
+) -> List[out.Subproject]:
+    """
+    Using the given dependency source files and the given list of matchers,
+    return all the subprojects that could be created. Note that each dependency
+    source file will be used by at most one matcher, and matching will be
+    attempted in the order that the matchers are provided.
+    """
+    span = telemetry.get_current_span()
+    span.set_attribute("num_dependency_source_files", len(dependency_source_files))
+    span.set_attribute("num_matchers", len(matchers))
+
+    unresolved_subprojects: List[out.Subproject] = []
+    remaining_dep_source_files: FrozenSet[Target] = dependency_source_files
+    for matcher in matchers:
+        # for each matcher, pass only those files that have not yet been used
+        # by another matcher.
+        new_subprojects, new_used_files = matcher.make_subprojects(
+            remaining_dep_source_files
+        )
+        remaining_dep_source_files = frozenset(
+            target
+            for target in dependency_source_files
+            if target.fpath not in new_used_files
+        )
+        unresolved_subprojects.extend(new_subprojects)
+    return unresolved_subprojects
+
+
+@simple_profiling
+@telemetry.trace(owner=telemetry.TraceOwner.SSC)
+def filter_subprojects_by_rule_ecosystems(
+    dependency_aware_rules: List[Rule],
+    subprojects: List[out.Subproject],
+) -> Tuple[List[out.Subproject], List[out.UnresolvedSubproject]]:
+    """
+    Partition subprojects into those worth resolving given the rules being run
+    and those that are not.
+
+    Marks the latter subprojects' unresolved reason as "skipped".
+
+    This is used for partial scans, which run a restricted set of rules (see
+    --x-partial-scan-rule-id): resolving a subproject that no rule can produce a
+    finding for is pure overhead, and can be expensive when local builds are
+    allowed.
+
+    A subproject is worth resolving when its ecosystem is evaluated by at least
+    one of the given rules. Two kinds of subproject are kept regardless:
+    - those with no ecosystem, since resolution is not attempted for them anyway
+      and they are reported with the more precise "unsupported" reason
+      downstream;
+    - those carrying a precomputed SBOM, since "resolving" them only means
+      reading a file that is already on disk. Their inventory is worth reporting
+      even when no rule can match against it, so this function must run after
+      `attach_auxillary_sboms`.
+    """
+    span = telemetry.get_current_span()
+    span.set_attribute("num_dependency_aware_rules", len(dependency_aware_rules))
+    span.set_attribute("num_subprojects", len(subprojects))
+
+    rule_ecosystems = {
+        ecosystem for rule in dependency_aware_rules for ecosystem in rule.ecosystems
+    }
+    span.set_attribute("num_rule_ecosystems", len(rule_ecosystems))
+
+    relevant: List[out.Subproject] = []
+    irrelevant: List[out.UnresolvedSubproject] = []
+    for subproject in subprojects:
+        if (
+            subproject.ecosystem is None
+            or subproject.ecosystem in rule_ecosystems
+            or isinstance(subproject.dependency_source.value, out.AuxillarySBOM)
+        ):
+            relevant.append(subproject)
+        else:
+            irrelevant.append(
+                out.UnresolvedSubproject(
+                    info=subproject,
+                    reason=out.UnresolvedReason(out.UnresolvedSkipped()),
+                    errors=[],
+                )
+            )
+    return relevant, irrelevant
+
+
+@telemetry.trace(telemetry.TraceOwner.SSC)
+def find_subprojects(
+    target_manager: TargetManager,
+    resolve_untargeted_subprojects: bool,
+    dependency_aware_rules: list[Rule],
+) -> tuple[list[out.Subproject], list[out.UnresolvedSubproject]]:
+    # First, find all subprojects. We ignore the baseline handler because we want
+    # to _identify_, but not necessarily resolve, even unchanged subprojects.
+    #
+    # Attention: we want to inspect even Gitignored untracked files because
+    # some of them may be lockfiles that are generated as part of a CI
+    # workflow or some other build process. Such lockfiles allow us
+    # to identify a subproject root. This is a legacy behavior which we
+    # may stop supporting in the future but for now, we have to support it.
+    #
+    # Here, we override targeting_conf.respect_gitignore and disable Gitignore
+    # filtering so as to find all possible manifests and lockfiles, including
+    # those that are not under Git control (possibly generated during a CI job).
+    #
+    # Passing 'extra_glob_patterns_to_include_git_untracked_files' is optional
+    # but by prefiltering the list of project files directly
+    # with 'git ls-files --others ...', it can result in much fewer files being
+    # listed by Git (but still very fast), allowing the subsequent Semgrepignore
+    # filter pass to be much faster. This is important to speed up subproject
+    # discovery especially when scanning just a few project files such as
+    # in a typical diff scan.
+    # TODO: This trick only applies to untracked files so Semgrepignore still has
+    #  to filter all the tracked paths (because Git's exclude options only work
+    #  on untracked files). If this is still not fast enough, we could add
+    #  an independent filtering pass after 'git ls-files' and
+    #  CLI includes/excludes and before Semgrepignore (suggestion: add
+    #  a pair of internal options include2/exclude2 to take place after
+    #  the CLI include/exclude but otherwise identical to include/exclude).
+    dependency_source_files = target_manager.get_all_dependency_source_files(
+        ignore_baseline_handler=True,
+        respect_gitignore=False,
+        extra_glob_patterns_to_include_git_untracked_files=get_all_subproject_identifying_glob_filters(),
+    )
+    found_subprojects = match_subprojects(dependency_source_files, MATCHERS)
+
+    # A subproject is relevant if one of its dependency source files is a target
+    # or there exist a code target for which find_closest_subproject is that
+    # subproject.
+    if resolve_untargeted_subprojects:
+        relevant_subprojects = found_subprojects
+        irrelevant_subprojects: List[out.UnresolvedSubproject] = []
+    else:
+        relevant_subprojects, irrelevant_subprojects = filter_changed_subprojects(
+            target_manager, dependency_aware_rules, found_subprojects
+        )
+
+    return relevant_subprojects, irrelevant_subprojects
+
+
+@telemetry.trace(owner=telemetry.TraceOwner.SSC)
+def attach_auxillary_sboms(
+    subprojects: list[out.Subproject],
+    dependency_resolution_config: DependencyResolutionConfig,
+    dependency_aware_rules: List[Rule],
+) -> list[out.Subproject]:
+    """
+    For each subproject, look up a precomputed CycloneDX SBOM in the
+    precomputed dependencies directory and, if found, wrap the subproject's
+    dependency_source in an AuxillarySBOM variant.
+
+    Files are expected at ``<dir>/head/<subproject_id>.cdx.json`` or
+    ``<dir>/base/<subproject_id>.cdx.json`` depending on whether this is a
+    baseline scan.
+    """
+    precomputed_dir = dependency_resolution_config.precomputed_dependencies_dir
+    if precomputed_dir is None:
+        return subprojects
+
+    subdir = "base" if dependency_resolution_config.is_baseline_scan else "head"
+    result: list[out.Subproject] = []
+    unmatched: list[tuple[out.Subproject, str]] = []
+    rule_ecosystems = {
+        ecosystem for rule in dependency_aware_rules for ecosystem in rule.ecosystems
+    }
+    # subprojects with no ecosystem are never resolved (see resolve_dependencies),
+    # so no precomputed SBOM will exist for them and they should not count as
+    # missing.
+    resolvable_count = 0
+    for subproject in subprojects:
+        if subproject.ecosystem is None:
+            result.append(subproject)
+            continue
+        dep_source_id = generate_dependency_source_id(subproject.dependency_source)
+        sbom_path = precomputed_dir / subdir / (dep_source_id + ".cdx.json")
+        if sbom_path.exists():
+            resolvable_count += 1
+            sbom = out.Sbom(
+                kind=out.SbomKind(out.CycloneDXJson()),
+                is_ephemeral=True,
+                path=out.Fpath(str(sbom_path)),
+            )
+            new_dep_source = out.DependencySource(
+                out.AuxillarySBOM((sbom, subproject.dependency_source))
+            )
+            subproject = out.Subproject(
+                root_dir=subproject.root_dir,
+                dependency_source=new_dep_source,
+                ecosystem=subproject.ecosystem,
+            )
+            logger.verbose(f"Using precomputed SBOM for {subproject.root_dir}")
+        elif (
+            not dependency_resolution_config.restrict_resolution_to_rule_ecosystems
+            or subproject.ecosystem in rule_ecosystems
+        ):
+            resolvable_count += 1
+            unmatched.append((subproject, sbom_path.name))
+        result.append(subproject)
+    if unmatched:
+        logger.warning(
+            f"Precomputed dependencies directory {precomputed_dir / subdir} was "
+            f"provided, but no SBOM was found for {len(unmatched)} of "
+            f"{resolvable_count} subprojects selected for dependency resolution; "
+            f"falling back to local dependency resolution for those. Run with "
+            f"--verbose to see the affected subprojects."
+        )
+        for subproject, expected_name in unmatched:
+            logger.verbose(
+                f"No precomputed SBOM for subproject at {subproject.root_dir} "
+                f"(expected file name: {expected_name})"
+            )
+    return result
+
+
+@simple_profiling
+@telemetry.trace(owner=telemetry.TraceOwner.SSC)
+def filter_changed_subprojects(
+    target_manager: TargetManager,
+    dependency_aware_rules: List[Rule],
+    subprojects: List[out.Subproject],
+) -> Tuple[List[out.Subproject], List[out.UnresolvedSubproject]]:
+    """
+    Partition subprojects into those that are relevant for the targets in
+    `target_manager` and those that are not.
+    This allows skipping resolution of unchanged subprojects in diff scans.
+
+    Marks irrelevant subprojects' unresolved reason as "skipped".
+
+    Note that the logic used here to determine changed subprojects must be
+    consistent with the logic used at finding-generation time in
+    `dependency_aware_rule.py` to associate code files with subproject. If we
+    do not resolve a subproject because it is deemed irrelevant in this
+    function, we will not consider that subproject when generating findings.
+    """
+    span = telemetry.get_current_span()
+    span.set_attribute("num_dependency_aware_rules", len(dependency_aware_rules))
+    span.set_attribute("num_subprojects", len(subprojects))
+
+    relevant_subprojects: Set[HashableSubproject] = set()
+
+    # first, mark any subprojects whose dependency source files were directly
+    # modified as relevant
+    all_dependency_source_targets = target_manager.get_all_dependency_source_files(
+        ignore_baseline_handler=False
+    )
+    all_dependency_source_fpaths = fpaths_of_targets(all_dependency_source_targets)
+    for subproject in subprojects:
+        source_files = get_all_source_files(subproject.dependency_source)
+        if not all_dependency_source_fpaths.isdisjoint(source_files):
+            # one of the source files for this subproject changed, so we should keep it
+            relevant_subprojects.add(HashableSubproject(subproject))
+
+    if len(relevant_subprojects) == len(subprojects):
+        # all subproject are already relevant, so there is no need to look at code files
+        # (this should cover the full scan case and prevent extra work)
+        # need to refer to the original list for deterministic ordering
+        return subprojects, []
+
+    # make language -> ecosystem mapping from the rules that we are given
+    ecosystems_by_language: Dict[Language, List[Ecosystem]] = {}
+    for rule in dependency_aware_rules:
+        for language in rule.languages:
+            if language not in ecosystems_by_language:
+                ecosystems_by_language[language] = []
+            for ecosystem in rule.ecosystems:
+                # inefficient lookup, but we need to use a list rather than a set to preserve order and
+                # the number of ecosystems per language is small (<10)
+                if ecosystem not in ecosystems_by_language[language]:
+                    ecosystems_by_language[language].append(ecosystem)
+
+    closest_subproject_finder = ClosestSubprojectFinder(subprojects)
+
+    # note that this logic re-implements the logic in `dependency_aware_rule.py`
+    for language, ecosystems in ecosystems_by_language.items():
+        for code_file in target_manager.get_files_for_language(
+            lang=language, product=SCA_PRODUCT
+        ).kept:
+            # there may be multiple ecosystems for a single language, and the finding-generation
+            # logic will find a different closest subproject for each one. So we need to mark
+            # the closest subproject for each relevant ecosystem as potentially changed
+            for ecosystem in ecosystems:
+                # This is nondeterministic need to fix
+                closest_subproject = closest_subproject_finder.find_closest_subproject(
+                    code_file, ecosystem
+                )
+                if closest_subproject is not None:
+                    relevant_subprojects.add(HashableSubproject(closest_subproject))
+
+                if len(relevant_subprojects) == len(subprojects):
+                    # all subprojects already relevant, no need to continue
+                    return subprojects, []
+
+    # we refer to the original list for ordering, ensuring that the output order
+    # is deterministic.
+    ordered_relevant = []
+    ordered_irrelevant = []
+    for s in subprojects:
+        if HashableSubproject(s) in relevant_subprojects:
+            ordered_relevant.append(s)
+        else:
+            ordered_irrelevant.append(s)
+
+    unresolved_subprojects = [
+        out.UnresolvedSubproject(
+            info=s, reason=out.UnresolvedReason(out.UnresolvedSkipped()), errors=[]
+        )
+        for s in ordered_irrelevant
+    ]
+    return ordered_relevant, unresolved_subprojects
+
+
+@telemetry.trace(telemetry.TraceOwner.SSC)
+@simple_profiling
+def resolve_subprojects(
+    target_manager: TargetManager,
+    dependency_aware_rules: List[Rule],
+    config: DependencyResolutionConfig,
+    rpc_session: Optional[RpcSession] = None,
+) -> Tuple[
+    List[out.UnresolvedSubproject],
+    Dict[Ecosystem, List[out.ResolvedSubproject]],
+    List[Path],
+]:
+    """
+    Identify subprojects based on lockfiles and manifests and resolve their
+    dependency information.
+
+    The `config` argument controls the behavior of the
+    dependency resolver:
+
+    When `allow_local_builds` is False, dependencies are resolved only by
+    parsing existing files (lockfiles and manifests).
+    If `allow_local_builds` is True, this function may cause projects that
+    are scanned to be built. This may involve:
+    - Downloading packages from the internet
+    - Executing code that is included in the scanned project or in downloaded
+      packages
+
+    If `ptt_enabled` is True, dependency resolvers that support dependency
+    path will be prioritized.
+
+    If `resolve_untargeted_subprojects` is False, only subprojects with
+    dependency source files or relevant code files are resolved and the
+    remaining subprojects are skipped.
+    If `resolve_untargeted_subprojects` is True, this filtering is disabled and
+    resolution is attempted for every found subproject.
+    The list of rules is required in order to choose which subprojects to
+    resolve and which can be skipped based
+    on the set of targets reported by the `target_manager`.
+
+    If `restrict_resolution_to_rule_ecosystems` is True, resolution is
+    additionally restricted to the ecosystems that the given rules evaluate;
+    subprojects in any other ecosystem are skipped.
+
+    If `download_source` is True, dependency resolvers will attempt to download
+    source code for each subproject's dependencies. For all currently supported
+    package managers, this requires that `allow_dynamic_resolution` is also True.
+
+    Returns a tuple with the following items:
+        1. Unresolved subprojects
+        2. Resolved subprojects, grouped by ecosystem
+        4. Dependency source paths that were used in the resolution process
+    """
+    relevant_subprojects, irrelevant_subprojects = find_subprojects(
+        target_manager, config.resolve_untargeted_subprojects, dependency_aware_rules
+    )
+
+    # attach precomputed SBOMs to relevant subprojects
+    relevant_subprojects = attach_auxillary_sboms(
+        relevant_subprojects, config, dependency_aware_rules
+    )
+
+    # Subprojects in an ecosystem that none of the rules look at cannot produce
+    # a finding, so they are not worth resolving. This runs after the SBOMs are
+    # attached so that a subproject with a precomputed one is still resolved.
+    if config.restrict_resolution_to_rule_ecosystems:
+        (
+            relevant_subprojects,
+            unevaluated_subprojects,
+        ) = filter_subprojects_by_rule_ecosystems(
+            dependency_aware_rules, relevant_subprojects
+        )
+        irrelevant_subprojects = irrelevant_subprojects + unevaluated_subprojects
+
+    # targets that were considered in generating the dependency tree
+    dependency_targets: List[Path] = []
+
+    resolved: Dict[Ecosystem, List[out.ResolvedSubproject]] = {}
+    unresolved: List[out.UnresolvedSubproject] = irrelevant_subprojects
+
+    with profiling("Resolve dependencies"):
+        # Dispatch each subproject to a resolver for resolution
+        with Progress(
+            SpinnerColumn(style="green"),
+            TextColumn("[bold]{task.description}[/bold]"),
+            MofNCompleteColumn(),
+            TextColumn("({task.fields[subproject_dir]})"),
+            transient=True,
+            console=console,
+            disable=(not sys.stderr.isatty() or len(relevant_subprojects) == 0),
+        ) as progress:
+            task_id = progress.add_task(
+                "Resolving dependencies",
+                total=len(relevant_subprojects),
+                subproject_dir="",
+            )
+            for item_i, subproject in enumerate(relevant_subprojects):
+                progress.update(task_id, subproject_dir=subproject.root_dir.value)
+                if subproject.ecosystem is None:
+                    # no reason to resolve subprojects that we don't support. We only recognize them
+                    # for tracking purposes
+                    unresolved.append(
+                        out.UnresolvedSubproject(
+                            info=subproject,
+                            reason=out.UnresolvedReason(out.UnresolvedUnsupported()),
+                            errors=[],
+                        )
+                    )
+                    continue
+                res = resolve_dependency_source(
+                    subproject.dependency_source,
+                    config,
+                    rpc_session=rpc_session,
+                )
+                resolved_info = res.deps
+                errors = res.errors
+                targets = res.targets
+                dependency_targets.extend(targets)
+
+                if not isinstance(resolved_info, out.UnresolvedReason):
+                    # resolved_info is an UnresolvedReason when dependency resolution failed in some way
+                    resolution_method, deps = resolved_info
+                    resolved_subproject = out.ResolvedSubproject(
+                        info=subproject,
+                        resolution_method=resolution_method,
+                        ecosystem=subproject.ecosystem,
+                        resolved_dependencies=from_resolved_dependencies(deps),
+                        errors=[to_sca_error(e) for e in errors],
+                    )
+
+                    if resolved_subproject.ecosystem not in resolved:
+                        resolved[resolved_subproject.ecosystem] = []
+                    resolved[resolved_subproject.ecosystem].append(resolved_subproject)
+                else:
+                    # we were not able to resolve the subproject, so track it as an
+                    # unresolved subproject
+                    unresolved.append(
+                        out.UnresolvedSubproject(
+                            info=subproject,
+                            reason=resolved_info,
+                            errors=[to_sca_error(e) for e in errors],
+                        )
+                    )
+
+                progress.update(task_id, completed=item_i + 1)
+
+            progress.remove_task(task_id)
+
+    telemetry.record_phase_data(
+        telemetry.get_current_span(),
+        dependency_targets,
+        dependency_aware_rules,
+    )
+    return unresolved, resolved, dependency_targets
+
+
+@telemetry.trace(telemetry.TraceOwner.SSC)
+def dump_subprojects_and_exit(
+    target_manager: TargetManager,
+    rules: list[Rule],
+    dump_subprojects_to_path: Path,
+    resolve_untargeted_subprojects: bool,
+    restrict_resolution_to_rule_ecosystems: bool = False,
+) -> None:
+    dependency_aware_rules: List[Rule] = [r for r in rules if r.project_depends_on]
+
+    relevant_subprojects, irrelevant_subprojects = find_subprojects(
+        target_manager, resolve_untargeted_subprojects, dependency_aware_rules
+    )
+
+    # Note that, unlike resolve_subprojects, this plan does not model precomputed
+    # SBOMs, so a subproject that would be resolved from one is reported here as
+    # skipped.
+    if restrict_resolution_to_rule_ecosystems:
+        (
+            relevant_subprojects,
+            unevaluated_subprojects,
+        ) = filter_subprojects_by_rule_ecosystems(
+            dependency_aware_rules, relevant_subprojects
+        )
+        irrelevant_subprojects = irrelevant_subprojects + unevaluated_subprojects
+
+    output = out.SubprojectResolutionPlan(
+        subprojects=[
+            subproject_to_plan_output(sub, True) for sub in relevant_subprojects
+        ]
+        + [subproject_to_plan_output(sub.info, False) for sub in irrelevant_subprojects]
+    )
+
+    with open(dump_subprojects_to_path, "w") as f:
+        f.write(output.to_json_string())
+
+    logger.info(
+        f"Successfully dumped subproject resolution plan to {dump_subprojects_to_path}"
+    )
+    sys.exit(0)

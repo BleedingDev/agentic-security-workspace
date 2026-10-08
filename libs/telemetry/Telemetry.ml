@@ -1,0 +1,328 @@
+(* Austin Theriault
+ *
+ * Copyright (C) Semgrep, Inc.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation, with the
+ * special exception on linking described in file LICENSE.
+ *
+ * This library is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the file
+ * LICENSE for more details.
+ *)
+
+module Otel = Opentelemetry
+module Log = Log_telemetry.Log
+
+(*****************************************************************************)
+(* Prelude *)
+(*****************************************************************************)
+(* This module includes any functions/types that are used for telemetry, so OTel
+   scopes, attributes, and more. This module is basically just a lot of setup
+   stuff for OTel and some shared types*)
+(*****************************************************************************)
+(* Types *)
+(*****************************************************************************)
+
+type scope = Otel.Span.t
+
+(* coupling: added to every metric in Ometrics.ml, so cannot contain spaces or
+   special chars etc *)
+let show_scope (sp : scope) = Otel.Span.trace_id sp |> Otel.Trace_id.to_hex
+let pp_scope fmt (sp : scope) = Format.fprintf fmt "%s" (show_scope sp)
+
+type user_data = Otel.value
+
+let show_user_data (ud : user_data) =
+  match ud with
+  | `String s -> Format.sprintf "`String %s" s
+  | `Int i -> Format.sprintf "`Int %d" i
+  | `Float f -> Format.sprintf "`Float %f" f
+  | `Bool b -> Format.sprintf "`Bool %b" b
+  | `None -> "`None"
+
+let pp_user_data fmt (ud : user_data) =
+  Format.fprintf fmt "%s" (show_user_data ud)
+
+type config = {
+  endpoint : Uri.t;
+  env : string option;
+  (* To add data to our opentelemetry top level span, so easier to filter *)
+  top_level_scope : scope option;
+}
+[@@deriving show]
+
+(*****************************************************************************)
+(* Constants *)
+(*****************************************************************************)
+(* The endpoint that otel traces will be sent to. This should only ever be set
+   in configure_otel, which is called once, at the beginning. The ref isn't
+   nice, but we need it to start and stop tracing without having to pass around
+   an env. See [with_otel_paused]
+
+   TODO(SAF-1938): This is a Domain-local value in order to more closely match
+   with ParMap (which re-creates its own endpoint after forking in order to
+   pull random seeds - see [restart_otel]).  Once we are using multicore by
+   default, we should revisit this.
+   *)
+let active_endpoint = Domain.DLS.new_key (Fun.const None)
+
+(* [Sdk.remove] returns before the queue drains, each client's
+   [remove_exporter] blocks until it has. Remember which one to call. *)
+let active_remove_exporter = Domain.DLS.new_key (Fun.const None)
+
+(* Service related attributes *)
+module Attributes = struct
+  open Opentelemetry.Conventions
+
+  let version = Attributes.Service.version
+  let instance_id = Attributes.Service.instance_id
+  let deployment_environment_name = "deployment.environment.name"
+  let vcs_ref_head_revision = "vcs.ref.head.revision"
+  let vcs_ref_head_name = "vcs.ref.head.name"
+
+  (* These are semgrep specific and technically shouldn't be in this library but
+     these will be applied to all metrics *)
+  let scan_engine = "scan.engine"
+  let scan_source = "scan.source"
+  let experiment_name = "experiment.name"
+  let eio = "scan.eio"
+end
+
+(*****************************************************************************)
+(* Helper Functions *)
+(*****************************************************************************)
+
+let ( let@ ) = ( @@ )
+
+(* The [Random.State.t] below is shared across domains. *)
+let rand_mutex = Mutex.create ()
+
+(* Needed so we can reset scope id's randomness on telemetry restart *)
+(* See restart_otel for more detail *)
+let mk_rand_bytes_8 rand_ () : bytes =
+  let@ () = Mutex.protect rand_mutex in
+  let b = Bytes.create 8 in
+  for i = 0 to 1 do
+    let r = Random.State.bits rand_ in
+    (* 30 bits, of which we use 24 *)
+    Bytes.set b (i * 3) (Char.chr (r land 0xff));
+    Bytes.set b ((i * 3) + 1) (Char.chr ((r lsr 8) land 0xff));
+    Bytes.set b ((i * 3) + 2) (Char.chr ((r lsr 16) land 0xff))
+  done;
+  let r = Random.State.bits rand_ in
+  Bytes.set b 6 (Char.chr (r land 0xff));
+  Bytes.set b 7 (Char.chr ((r lsr 8) land 0xff));
+  b
+
+let mk_rand_bytes_16 rand_ () : bytes =
+  let@ () = Mutex.protect rand_mutex in
+  let b = Bytes.create 16 in
+  for i = 0 to 4 do
+    let r = Random.State.bits rand_ in
+    (* 30 bits, of which we use 24 *)
+    Bytes.set b (i * 3) (Char.chr (r land 0xff));
+    Bytes.set b ((i * 3) + 1) (Char.chr ((r lsr 8) land 0xff));
+    Bytes.set b ((i * 3) + 2) (Char.chr ((r lsr 16) land 0xff))
+  done;
+  let r = Random.State.bits rand_ in
+  Bytes.set b 15 (Char.chr (r land 0xff));
+  (* last byte *)
+  b
+
+let get_current_scope () = Otel.Ambient_span.get ()
+
+let with_opt_scope scope_opt f =
+  match scope_opt with
+  | None -> f ()
+  | Some scope -> Otel.Ambient_span.with_ambient scope f
+
+let force_curr_scope f =
+  let current_scope_opt = get_current_scope () in
+  let f x = with_opt_scope current_scope_opt (fun () -> f x) in
+  f
+
+(* Python and other otel libraries % encode their values, so let's do that here
+   too instead of using the default OTEL kv parser *)
+(* TODO: upstream *)
+let set_global_attr_from_env () =
+  let global_attributes : Otel.Proto.Common.key_value list =
+    let parse_pair s =
+      match String.split_on_char '=' s with
+      | [ a; b ] ->
+          let value = Uri.pct_decode b in
+          Otel.Proto.Common.make_key_value ~key:a ~value:(String_value value) ()
+      | _ -> failwith (Printf.sprintf "invalid attribute: %S" s)
+    in
+    try
+      Sys.getenv "OTEL_RESOURCE_ATTRIBUTES"
+      |> String.split_on_char ',' |> List.map parse_pair
+    with
+    | _ -> []
+  in
+  Otel.Globals.global_attributes := global_attributes
+
+let get_global_attr_opt key =
+  List.find_map
+    (fun (kv : Otel.Proto.Common.key_value) ->
+      if String.equal kv.key key then Some (Otel.Key_value.of_otel kv) else None)
+    !Otel.Globals.global_attributes
+
+let find_global_attrs attr_keys = List.filter_map get_global_attr_opt attr_keys
+
+(*****************************************************************************)
+(* Entry points for setting up telemetry *)
+(*****************************************************************************)
+(* The exporter workers must belong to the shutdown race's switch: timing out
+   remove_exporter alone leaves the caller's switch waiting for HTTP requests.
+   Start the deadline only when shutdown is requested, not during the scan. *)
+let create_eio_exporter ~(config : Opentelemetry_client_cohttp_eio.Config.t)
+    ~(sw : Eio.Switch.t) ~(env : Eio_unix.Stdenv.base) () :
+    Otel.Exporter.t * (unit -> unit) =
+  let exporter, publish_exporter = Eio.Promise.create () in
+  let stop, request_stop = Eio.Promise.create () in
+  let drained, finish_drain = Eio.Promise.create () in
+  let stopped, finish_stop = Eio.Promise.create () in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Fiber.first
+        (fun () ->
+          Eio.Switch.run (fun sw ->
+              let exporter =
+                Opentelemetry_client_cohttp_eio.create_exporter ~config ~sw ~env
+                  ()
+              in
+              Eio.Promise.resolve publish_exporter exporter;
+              Eio.Promise.await drained))
+        (fun () ->
+          Eio.Promise.await stop;
+          Eio.Time.Mono.sleep env#mono_clock
+            (float_of_int (max 0 config.timeout_ms) /. 1000.);
+          Log.debug (fun m ->
+              m "Tracing shutdown timed out; dropping remaining telemetry"));
+      Eio.Promise.resolve finish_stop ());
+  let remove_exporter () : unit =
+    (* Detach the SDK before starting the deadline, including a zero timeout. *)
+    Otel.Sdk.remove ~on_done:(Eio.Promise.resolve finish_drain) ();
+    Eio.Promise.resolve request_stop ();
+    Eio.Promise.await stopped
+  in
+  (Eio.Promise.await exporter, remove_exporter)
+
+(* Safe to call whenever *)
+let stop_otel () =
+  if Otel.Sdk.present () then (
+    Log.info (fun m -> m "Stopping tracing");
+    match Domain.DLS.get active_remove_exporter with
+    | Some remove_exporter -> remove_exporter ()
+    | None -> Otel.Sdk.remove ~on_done:Fun.id ())
+
+(* setup_otel sets the Otel tracing backend and Trace_core tracing backend *)
+let setup_otel ?eio_sw_base trace_endpoint =
+  let url = Uri.to_string trace_endpoint in
+  Log.info (fun m -> m "Tracing endpoint set to %s" url);
+  let ( exporter,
+        remove_exporter,
+        (common : Opentelemetry_client.Exporter_config.t) ) =
+    match eio_sw_base with
+    | None ->
+        let config = Opentelemetry_client_ocurl.Config.make ~url () in
+        ( Opentelemetry_client_ocurl.create_exporter ~config (),
+          Opentelemetry_client_ocurl.remove_exporter,
+          config.common )
+    | Some (sw, base) ->
+        (* If we are provided an eio switch + base let's use the eio backend
+           since the curl backend has been known to segfault *)
+        let config = Opentelemetry_client_cohttp_eio.Config.make ~url () in
+        let exporter, remove_exporter =
+          create_eio_exporter ~config ~sw ~env:base ()
+        in
+        (exporter, remove_exporter, config)
+  in
+  (* hack: let's just keep track of the endpoint for if we restart tracing
+     instead of having to pass it down everywhere. We will assume that we will
+     only ever report to one endpoint for the lifetime of the program *)
+  Domain.DLS.set active_endpoint (Some trace_endpoint);
+  Domain.DLS.set active_remove_exporter (Some remove_exporter);
+  (* We bypass the client's setup helper, so pass its batching config through
+     ourselves; it carries the OTEL_* env var settings. *)
+  Otel.Sdk.set ~traces:common.traces ~metrics:common.metrics ~logs:common.logs
+    exporter
+
+(* We wrap [Ambient_context_eio.storage]. In ambient-context 0.2 they fixed a
+   bug(?) where ambient context was per thread, and so in new threads it would
+   fall back from eio to a thread level storage mechanism. unfortunately for us
+   in non main threads we do secret validation via lwt which means the eio
+   effect handler isnt set. this ensures even if we are in a non eio context we
+   still get some ambient context even if its empty, so we can do things like
+   send logs (although this means spans from lwt contexts might not work
+   well) *)
+let eio_ambient_storage : Opentelemetry_ambient_context.Storage.t =
+  let eio : Opentelemetry_ambient_context.Storage.t =
+    Ambient_context_eio.storage
+  in
+  let in_fiber () =
+    match eio.get_context () with
+    | _ -> true
+    | exception Effect.Unhandled _ -> false
+  in
+  {
+    name = "eio-or-empty";
+    get_context =
+      (fun () ->
+        match eio.get_context () with
+        | ctx -> ctx
+        | exception Effect.Unhandled _ ->
+            Opentelemetry_ambient_context.Context.empty);
+    with_context =
+      (fun ctx f -> if in_fiber () then eio.with_context ctx f else f ());
+  }
+
+(* Set according to README of https://github.com/ocaml-tracing/ocaml-opentelemetry/ *)
+let configure_otel ?eio_sw_base ?(attrs : (string * user_data) list = [])
+    service_name trace_endpoint =
+  set_global_attr_from_env ();
+  Otel.Globals.service_name := service_name;
+  Otel.Globals.default_span_kind := Otel.Span.Span_kind_internal;
+  (* Disable self tracing, e.g. tracing the otel library *)
+  Opentelemetry_client.Self_trace.set_enabled false;
+  let attrs = attrs @ Otel.Globals.get_runtime_attributes () in
+  List.iter
+    (fun (key, value) -> Otel.Globals.add_global_attribute key value)
+    attrs;
+  Log.info (fun m -> m "Setting up tracing with service name %s" service_name);
+  Otel.Gc_metrics.basic_setup ();
+  let ambient_storage_provider =
+    match eio_sw_base with
+    (* If we are provided an eio switch + base we know we are going to use eio,
+       so let's use that as our ambient context storage provider *)
+    | None -> Ambient_context_lwt.storage
+    | Some _ -> eio_ambient_storage
+  in
+  Opentelemetry_ambient_context.set_current_storage ambient_storage_provider;
+  setup_otel ?eio_sw_base trace_endpoint
+
+let restart_otel () =
+  (* We must re-initialize the randomness on restart since this usually happens
+     after a parmap fork. If we don't do this then all parmap forks will have
+     the same randomness and use duplicate span ids! This behavior is fine in
+     jaeger but duplicates don't show up in datadog *)
+  let new_random_state = Random.State.make_self_init () in
+  Otel.Core.Rand_bytes.rand_bytes_8_ref := mk_rand_bytes_8 new_random_state;
+  Otel.Core.Rand_bytes.rand_bytes_16_ref := mk_rand_bytes_16 new_random_state;
+  Domain.DLS.get active_endpoint
+  |> Option.iter (fun endpoint ->
+      Log.info (fun m -> m "Restarting tracing");
+      setup_otel endpoint)
+
+(* Otel SOMETIMES segfaults if the traced process forks while the collector is running. So we
+   need to stop the backends before forking, then continue after forking is
+   done.
+
+   See https://github.com/ocaml-tracing/ocaml-opentelemetry/issues/68
+*)
+let with_otel_paused f =
+  (* Don't exit current spans here since we only want to pause *)
+  stop_otel ();
+  Telemetry_commons.protect ~finally:restart_otel f

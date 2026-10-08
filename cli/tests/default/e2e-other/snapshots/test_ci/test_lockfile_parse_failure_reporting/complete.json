@@ -1,0 +1,157 @@
+{
+  "exit_code": 1,
+  "stats": {
+    "findings": 10,
+    "errors": [],
+    "total_time": 0.5,
+    "unsupported_exts": {
+      ".txt": 1
+    },
+    "lockfile_scan_info": {},
+    "parse_rate": {
+      "python": {
+        "targets_parsed": 1,
+        "num_targets": 1,
+        "bytes_parsed": 366,
+        "num_bytes": 366
+      }
+    },
+    "engine_requested": "OSS",
+    "findings_by_product": {
+      "code": 10,
+      "supply-chain": 1
+    },
+    "supply_chain_stats": {
+      "subprojects_stats": [
+        {
+          "subproject_id": "51e4f558fae534656963876761c95b83b6ef5da5103c4adef6768219ed76c2de",
+          "dependency_sources": [
+            {
+              "kind": [
+                "Lockfile",
+                "YarnLock"
+              ],
+              "path": "yarn.lock"
+            }
+          ],
+          "resolved_stats": {
+            "resolution_method": "LockfileParsing",
+            "dependency_count": 1,
+            "ecosystem": "npm"
+          },
+          "errors": []
+        },
+        {
+          "subproject_id": "a86c67a0a29ed0e95909b9b7c420140f302d17399ee6dcce4e1a51a14d27fd51",
+          "dependency_sources": [
+            {
+              "kind": [
+                "Lockfile",
+                "PipfileLock"
+              ],
+              "path": "Pipfile.lock"
+            }
+          ],
+          "resolved_stats": {
+            "resolution_method": "LockfileParsing",
+            "dependency_count": 0,
+            "ecosystem": "pypi"
+          },
+          "errors": [
+            [
+              "SCAParse",
+              {
+                "path": "Pipfile.lock",
+                "parser": "jsondoc",
+                "reason": "expected one of ['\"', '-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?', '[', 'false', 'null', 'true', '{']",
+                "line": 2,
+                "col": 1,
+                "text": "invalid"
+              }
+            ]
+          ]
+        },
+        {
+          "subproject_id": "f53a023eedfa3fbf2925ec7dc76eecdc954ea94b7e47065393dbad519613dc89",
+          "dependency_sources": [
+            {
+              "kind": [
+                "Lockfile",
+                "PoetryLock"
+              ],
+              "path": "poetry.lock"
+            }
+          ],
+          "resolved_stats": {
+            "resolution_method": "LockfileParsing",
+            "dependency_count": 3,
+            "ecosystem": "pypi"
+          },
+          "errors": []
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "yarn.lock": [
+      {
+        "package": "lodash",
+        "version": "4.17.20",
+        "ecosystem": "npm",
+        "allowed_hashes": {
+          "sha512": [
+            "6aee0bd6ad0729c69a6b7eea39da565a1c330e707fb5a6097d188a50b9da4fe325f5468122327648e24c78bb5279e2d3fb351dc85326d3eb6cfa3e1e7ae52920"
+          ]
+        },
+        "transitivity": "unknown",
+        "resolved_url": "https://registry.yarnpkg.com/lodash/-/lodash-4.17.18.tgz",
+        "lockfile_path": "yarn.lock",
+        "line_number": 5,
+        "children": []
+      }
+    ],
+    "poetry.lock": [
+      {
+        "package": "badlib",
+        "version": "99.99.99",
+        "ecosystem": "pypi",
+        "allowed_hashes": {},
+        "transitivity": "unknown",
+        "lockfile_path": "poetry.lock",
+        "line_number": 2,
+        "children": []
+      },
+      {
+        "package": "mypy",
+        "version": "0.950",
+        "ecosystem": "pypi",
+        "allowed_hashes": {},
+        "transitivity": "unknown",
+        "lockfile_path": "poetry.lock",
+        "line_number": 10,
+        "children": []
+      },
+      {
+        "package": "python-dateutil",
+        "version": "2.8.2",
+        "ecosystem": "pypi",
+        "allowed_hashes": {},
+        "transitivity": "unknown",
+        "lockfile_path": "poetry.lock",
+        "line_number": 18,
+        "children": []
+      }
+    ]
+  },
+  "dependency_parser_errors": [
+    {
+      "path": "Pipfile.lock",
+      "parser": "jsondoc",
+      "reason": "expected one of ['\"', '-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?', '[', 'false', 'null', 'true', '{']",
+      "line": 2,
+      "col": 1,
+      "text": "invalid"
+    }
+  ],
+  "task_id": "00000000-0000-0000-0000-000000000000"
+}

@@ -1,0 +1,46 @@
+(*
+   Copyright (c) 2021-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+open Fpath_.Operators
+
+let readdir handle = Unix.readdir handle |> Fpath.v
+
+(* helpers *)
+
+let with_dir_handle (path : Fpath.t) func =
+  let dir = Unix.opendir !!path in
+  Common.protect ~finally:(fun () -> Unix.closedir dir) (fun () -> func dir)
+
+(* Read the names found in a directory, excluding "." and "..". *)
+let read_dir_entries path =
+  with_dir_handle path (fun dir ->
+      let rec loop acc =
+        (* alt: use Sys.readdir which already filters "." and ".." *)
+        match readdir dir with
+        | name
+          when Fpath.is_current_dir name (* "." *)
+               || Fpath.is_parent_dir name (* ".." *) ->
+            loop acc
+        | name -> loop (name :: acc)
+        | exception End_of_file -> List.rev acc
+      in
+      loop [])
+
+let is_empty_dir (path : Fpath.t) : bool =
+  (* note that Sys.readdir already filters the "." and ".." entries *)
+  Array.length (Sys.readdir !!path) = 0
+
+(* also in Testo.ml, Testutil_files.ml and autofix-printing-stats *)
+let with_chdir (path : Fpath.t) func =
+  let orig_cwd = Unix.getcwd () in
+  Sys.chdir !!path;
+  Common.protect ~finally:(fun () -> Sys.chdir orig_cwd) func

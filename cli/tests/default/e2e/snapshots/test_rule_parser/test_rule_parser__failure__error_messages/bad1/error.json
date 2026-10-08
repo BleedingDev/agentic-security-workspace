@@ -1,0 +1,41 @@
+{
+  "engine_requested": "OSS",
+  "errors": [
+    {
+      "code": 4,
+      "level": "error",
+      "long_msg": "Additional properties are not allowed ('pattern-inside' was unexpected)",
+      "short_msg": "Invalid rule schema",
+      "spans": [
+        {
+          "end": {
+            "col": 1,
+            "line": 16,
+            "offset": -1
+          },
+          "file": "rules/syntax/bad1.yaml",
+          "source_hash": "58787bea35443f02072f84af73a97dc567e47abfd67214fe739bebf7cf138c2f",
+          "start": {
+            "col": 5,
+            "line": 2,
+            "offset": -1
+          }
+        }
+      ],
+      "type": "InvalidRuleSchemaError"
+    },
+    {
+      "code": 7,
+      "level": "error",
+      "message": "invalid configuration file found (1 configs were invalid)",
+      "type": "SemgrepError"
+    }
+  ],
+  "paths": {
+    "scanned": []
+  },
+  "profiling_results": [],
+  "results": [],
+  "skipped_rules": [],
+  "version": "0.42"
+}

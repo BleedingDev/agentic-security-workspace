@@ -1,0 +1,30 @@
+(*
+   Copyright (c) 2024 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(** Input environments for taint analysis. *)
+
+val mk_fun_input_env :
+  OSS_taint_rule_inst.t ->
+  ?glob_env:OSS_taint_lval_env.t ->
+  IL.param list ->
+  OSS_taint_lval_env.t * OSS_taint_effects.Effects.t
+(** Constructs the initial taint environment for a given function definition.
+    Essentially, it records the parameters that are taint sources, or whose
+    default value is a taint source.
+    It is exposed to be used by inter-file taint analysis in Pro.  *)
+
+val mk_file_env :
+  OSS_taint_rule_inst.t ->
+  AST_generic.program ->
+  OSS_taint_lval_env.t * OSS_taint_effects.Effects.t
+(** Constructs the global taint environment for a given file: it finds global-
+  and class- variable definitions that are final, and checks if they are tainted. *)

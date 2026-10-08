@@ -1,0 +1,194 @@
+=== exit code
+0
+=== end of exit code
+
+=== stdout - plain
+{
+  "engine_requested": "OSS",
+  "errors": [],
+  "paths": {
+    "scanned": [
+      "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/foo.py",
+      "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/prod.txt",
+      "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt",
+      "targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt"
+    ]
+  },
+  "profiling_results": [],
+  "results": [
+    {
+      "check_id": "rules.dependency_aware.python-requirements-sca",
+      "end": {
+        "col": 6,
+        "line": 1,
+        "offset": 5
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "0x42",
+        "lines": "requires login",
+        "message": "oh no",
+        "metadata": {},
+        "sca_info": {
+          "dependency_match": {
+            "dependency_pattern": {
+              "ecosystem": "pypi",
+              "package": "pandas",
+              "semver_range": "<= 1.4.2"
+            },
+            "found_dependency": {
+              "allowed_hashes": {},
+              "ecosystem": "pypi",
+              "line_number": 1,
+              "lockfile_path": "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/prod.txt",
+              "package": "pandas",
+              "transitivity": "unknown",
+              "version": "1.4.2"
+            },
+            "lockfile": "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/prod.txt"
+          },
+          "reachability_rule": true,
+          "reachable": true,
+          "sca_finding_schema": 20220913
+        },
+        "severity": "WARNING",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/foo.py",
+      "start": {
+        "col": 1,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "check_id": "rules.dependency_aware.python-requirements-sca",
+      "end": {
+        "col": 1,
+        "line": 37,
+        "offset": 0
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "0x42",
+        "lines": "requires login",
+        "message": "oh no",
+        "metadata": {},
+        "sca_info": {
+          "dependency_match": {
+            "dependency_pattern": {
+              "ecosystem": "pypi",
+              "package": "pandas",
+              "semver_range": "<= 1.4.2"
+            },
+            "found_dependency": {
+              "allowed_hashes": {},
+              "ecosystem": "pypi",
+              "line_number": 37,
+              "lockfile_path": "targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt",
+              "package": "pandas",
+              "transitivity": "unknown",
+              "version": "1.4.2"
+            },
+            "lockfile": "targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt"
+          },
+          "reachability_rule": true,
+          "reachable": false,
+          "sca_finding_schema": 20220913
+        },
+        "severity": "WARNING"
+      },
+      "path": "targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt",
+      "start": {
+        "col": 1,
+        "line": 37,
+        "offset": 0
+      }
+    }
+  ],
+  "skipped_rules": [],
+  "time": "<masked in tests>",
+  "version": "0.42"
+}
+=== end of stdout - plain
+
+=== stderr - plain
+
+
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 4 files tracked by git with 1 Supply Chain rule:
+
+
+  CODE RULES
+  No code rules to run.
+
+  SUPPLY CHAIN RULES
+
+  Dependency Sources                                               Resolution Method   Ecosystem   Dependencies   Rules
+ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  targets/dependency_aware/requirements_nested_folder_dep_dupes/   Lockfile            Pypi        40                 1
+  a/b/requirements/prod.txt,
+  targets/dependency_aware/requirements_nested_folder_dep_dupes/
+  a/b/requirements/stage.txt
+  targets/dependency_aware/requirements_nested_folder_dep_dupes/   Lockfile            Pypi        40                 1
+  requirements.txt
+
+
+  Analysis   Rules
+ ──────────────────
+  Unknown        1
+
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]86[/bold] - Skipping dependency 'pytest' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]87[/bold] - Skipping dependency 'pytest-cov' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]88[/bold] - Skipping dependency 'beautifulsoup4' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]93[/bold] - Skipping dependency 'eqeq-star' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]106[/bold] - Skipping dependency './downloads/numpy-1.9.2-cp34-none-win32.whl' because it is not pinned to an
+  exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/a/b/requirements/stage.txt[/bold]
+  at [bold]109[/bold] - Skipping dependency
+  'http://wxpython.org/Phoenix/snapshot-builds/wxPython_Phoenix-3.0.3.dev1820+49a8884-cp34-none-win_amd64.whl' because
+  it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]88[/bold] - Skipping dependency 'pytest' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]89[/bold] - Skipping dependency 'pytest-cov' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]90[/bold] - Skipping dependency 'beautifulsoup4' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]95[/bold] - Skipping dependency 'eqeq-star' because it is not pinned to an exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]108[/bold] - Skipping dependency './downloads/numpy-1.9.2-cp34-none-win32.whl' because it is not pinned to an
+  exact version
+  Failed to parse [bold]targets/dependency_aware/requirements_nested_folder_dep_dupes/requirements.txt[/bold] at
+  [bold]111[/bold] - Skipping dependency
+  'http://wxpython.org/Phoenix/snapshot-builds/wxPython_Phoenix-3.0.3.dev1820+49a8884-cp34-none-win_amd64.whl' because
+  it is not pinned to an exact version
+
+
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 2 (1 blocking)
+ • Rules run: 1
+ • Targets scanned: 4
+ • Parsed lines: ~100.0%
+ • No ignore information available
+Ran 1 rule on 4 files: 2 findings.
+
+=== end of stderr - plain
+
+=== stdout - color
+<same as above: stdout - plain>
+=== end of stdout - color
+
+=== stderr - color
+<same as above: stderr - plain>
+=== end of stderr - color

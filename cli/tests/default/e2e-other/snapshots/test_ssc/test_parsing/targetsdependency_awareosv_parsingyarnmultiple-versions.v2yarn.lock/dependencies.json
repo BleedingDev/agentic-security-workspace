@@ -1,0 +1,32 @@
+[
+  {
+    "package": "debug",
+    "version": "4.3.3",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/multiple-versions.v2/yarn.lock",
+    "line_number": 8,
+    "children": []
+  },
+  {
+    "package": "debug",
+    "version": "2.6.9",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/multiple-versions.v2/yarn.lock",
+    "line_number": 20,
+    "children": []
+  },
+  {
+    "package": "debug",
+    "version": "3.2.7",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/multiple-versions.v2/yarn.lock",
+    "line_number": 29,
+    "children": []
+  }
+]

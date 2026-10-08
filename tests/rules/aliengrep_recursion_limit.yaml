@@ -1,0 +1,11 @@
+# If this test starts segfaulting or hanging instead of failing gracefully,
+# check that the PCRE2 depth limit (Pcre2_.depth_limit) is still in place.
+rules:
+- id: aliengrep-recursion-limit
+  languages:
+  - generic
+  options:
+    generic_engine: aliengrep
+  pattern: "(...)"
+  message: found something
+  severity: WARNING

@@ -1,0 +1,84 @@
+[
+  {
+    "package": "@my-scope/my-first-package",
+    "version": "0.0.6",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 8,
+    "children": []
+  },
+  {
+    "package": "my-second-package",
+    "version": "0.2.2",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 12,
+    "children": []
+  },
+  {
+    "package": "@typegoose/typegoose",
+    "version": "7.2.0",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 21,
+    "children": []
+  },
+  {
+    "package": "vuejs",
+    "version": "2.5.0",
+    "ecosystem": "npm",
+    "allowed_hashes": {
+      "sha512": [
+        "34739eba9e89a7368f833e52e8d0219c1adb7f9e63ab52b862534b8cafcee8f70e2053e28fe6065a66d5ea78b6e852347d377dfde85083f2ecf1ea642e7a3ad4"
+      ]
+    },
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 37,
+    "children": []
+  },
+  {
+    "package": "my-third-package",
+    "version": "0.16.1-dev",
+    "ecosystem": "npm",
+    "allowed_hashes": {},
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 44,
+    "children": []
+  },
+  {
+    "package": "my-node-sdk",
+    "version": "1.1.0",
+    "ecosystem": "npm",
+    "allowed_hashes": {
+      "sha512": [
+        "0c5f2734e71e8284d97e2c3dd89c366c8e1603b0934006aed6b4a6247f1448033e8a71aff5c67c9b96307b76e911cbac9961d9865f760013c4f0b27e3906f1c4"
+      ]
+    },
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 48,
+    "children": []
+  },
+  {
+    "package": "is-really-great",
+    "version": "1.0.0",
+    "ecosystem": "npm",
+    "allowed_hashes": {
+      "sha512": [
+        "bf868a7451379998b2e2b777ab96e3c13c496f100cb7bf92ce44a425c91c8f1a2d5aed9a77a75bb62a9967c435e51e762b93afcc3f9c4650ca1042f5994756d1"
+      ]
+    },
+    "transitivity": "unknown",
+    "lockfile_path": "targets/dependency_aware/osv_parsing/yarn/commits.v2/yarn.lock",
+    "line_number": 55,
+    "children": []
+  }
+]

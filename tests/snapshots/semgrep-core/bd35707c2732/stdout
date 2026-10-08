@@ -1,0 +1,10 @@
+Test name: without git > scanning root as a symlink to a folder
+--- Files not added to git ---
+link-to-src
+src/a.py
+--- begin input files ---
+--- end input files ---
+--- Errors ---
+--- Selected targets ---
+selected link-to-src/a.py
+--- Skipped targets ---

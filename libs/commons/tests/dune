@@ -1,0 +1,11 @@
+(library
+ (public_name commons.tests)
+ (name commons_tests)
+ (wrapped false)
+ (libraries
+   alcotest
+   testo
+   commons
+   eio_main
+ )
+)

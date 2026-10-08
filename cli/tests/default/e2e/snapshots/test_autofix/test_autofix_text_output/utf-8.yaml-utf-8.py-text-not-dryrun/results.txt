@@ -1,0 +1,20 @@
+
+
+┌─────────────────┐
+│ 3 Code Findings │
+└─────────────────┘
+
+    targets/autofix/utf-8.py
+    ❯❱ rules.autofix.replace-with-smiley
+          ❰❰ Blocking ❱❱
+          Unnecessary parameter which matches the default
+
+           ▶▶┆ Autofix ▶ print('😊')
+           12┆ print('a')
+            ⋮┆----------------------------------------
+           ▶▶┆ Autofix ▶ print('😊')
+           16┆ y = '😊'; print('a'); print('a')
+            ⋮┆----------------------------------------
+           ▶▶┆ Autofix ▶ print('😊')
+           16┆ y = '😊'; print('a'); print('a')
+

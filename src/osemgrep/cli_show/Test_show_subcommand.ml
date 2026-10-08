@@ -1,0 +1,266 @@
+(* Yoann Padioleau
+ *
+ * Copyright (C) 2024 Semgrep, Inc.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation, with the
+ * special exception on linking described in file LICENSE.
+ *
+ * This library is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the file
+ * LICENSE for more details.
+ *)
+open Common
+open Fpath_.Operators
+module F = Testutil_files
+
+let t = Testo.create ?skipped:Testutil.skip_on_windows
+
+(*****************************************************************************)
+(* Prelude *)
+(*****************************************************************************)
+(* Testing end-to-end (e2e) the show subcommand.
+
+   TODO: run true end-to-end tests by creating a fresh process running the
+   'semgrep' command. By not creating a new process, we inherit a dirty
+   global state and leave another dirty state behind.
+ *)
+
+(*****************************************************************************)
+(* Helpers *)
+(*****************************************************************************)
+(* Mask this field that is populated using a global counter *)
+let mask_id_info_id =
+  Testo.mask_pcre_pattern {|id_info_id\s*=\s*[0-9]+|} ~replace:(fun _ ->
+      "id_info_id = <MASKED NUM>")
+
+(* Due to smart formatting by the Format module and IDs
+   of variable lengths, the output can vary from one test run
+   to another even after masking the variable IDs.
+   Here, we remove all whitespace and reinsert some line breaks.
+   The unmasked original can always be consulted (see testo output).
+*)
+let normalize_whitespace =
+  let remove_whitespace =
+    Testo.mask_pcre_pattern "[ \t\n]+" ~replace:(fun _ -> "")
+  in
+  let insert_some_line_breaks =
+    (* insert newlines after this or that punctuation symbol
+       so as to make the output more diffable *)
+    Testo.mask_pcre_pattern {re|[(){}\[\],;:="']|re}
+      ~replace:(fun punctuation -> punctuation ^ "\n")
+  in
+  fun str -> str |> remove_whitespace |> insert_some_line_breaks
+
+(* for dump-config test *)
+let eqeq_basic_content =
+  {|
+rules:
+  - id: eqeq-bad
+    patterns:
+      - pattern: $X == $X
+    message: "useless comparison"
+    languages: [python]
+    severity: ERROR
+|}
+
+let foo_py_content = {|
+def foo():
+    return 42
+|}
+
+(* for dump-identity *)
+let with_fake_login settings_content f =
+  let files = [ F.File ("settings.yml", settings_content) ] in
+  F.with_tempfiles ~chdir:true ~verbose:true files (fun cwd ->
+      Semgrep_envvars.with_envvar "SEMGREP_SETTINGS_FILE"
+        !!(cwd / "settings.yml")
+        f)
+
+let fake_settings =
+  {|
+has_shown_metrics_notification: true
+anonymous_user_id: f96a240e-13df-40d6-93a8-44b7fed7a569
+api_token: deaddead007
+|}
+
+(* for dump-identity *)
+let with_fake_identity_response return_value f =
+  let make_response_fn (req : Cohttp.Request.t) _body =
+    match Uri.path (Cohttp.Request.uri req) with
+    | "/api/agent/identity" ->
+        Http_mock_client.check_method `GET req.meth;
+        let response_body = return_value |> Cohttp_lwt.Body.of_string in
+        Lwt.return Http_mock_client.(basic_response response_body)
+    | url -> Alcotest.fail (spf "unexpected request: %s" url)
+  in
+  Http_mock_client.with_mocked_http make_response_fn f ()
+
+let fake_identity = {|{"identity":"cli_fake_user_valid-from-fake-date"}|}
+
+(* for dump-deployment
+ * coupling: copy-paste of Test_login_subcommand.with_fake_deployment ...
+ * but simpler to avoid a dependency to cli_login/ here.
+ *)
+let with_fake_deployment_response return_value f =
+  let make_response_fn (req : Cohttp.Request.t) _body =
+    match Uri.path (Cohttp.Request.uri req) with
+    | "/api/agent/deployments/current" ->
+        Http_mock_client.check_method `GET req.meth;
+        let response_body = return_value |> Cohttp_lwt.Body.of_string in
+        Lwt.return Http_mock_client.(basic_response response_body)
+    | url -> Alcotest.fail (spf "unexpected request: %s" url)
+  in
+  Http_mock_client.with_mocked_http make_response_fn f ()
+
+let fake_deployment = {|{"deployment":{"id":42,"name":"fake_deployment"}}|}
+
+(*****************************************************************************)
+(* Tests *)
+(*****************************************************************************)
+let test_error_no_arguments : Testo.t =
+  t __FUNCTION__ (fun () ->
+      try
+        let _exit = Show_subcommand.main [| "semgrep-show" |] in
+        failwith "semgrep show should return an exn and not reached here"
+      with
+      | Error.Semgrep_error
+          ( "'semgrep show' expects a subcommand. Try 'semgrep show --help'.",
+            None ) ->
+          ())
+
+(* TODO: how to just check that the ouptut matches Semgrep.version?
+ * I don't want to create a snapshot file for it that anyway I will
+ * have to mask.
+ *)
+(*
+let test_version : Testo.t =
+  t ~checked_output:(Testo.stdout ()) __FUNCTION__ (fun () ->
+      let exit_code =
+        Show_subcommand.main [| "semgrep-show"; "version" |]
+      in
+      Exit_code.Check.ok exit_code)
+*)
+
+(* similar to test_misc.py test_cli_test_show_supported_languages *)
+let test_supported_languages : Testo.t =
+  t ~checked_output:(Testo.stdout ()) __FUNCTION__ (fun () ->
+      let exit_code =
+        Show_subcommand.main [| "semgrep-show"; "supported-languages" |]
+      in
+      Exit_code.Check.ok exit_code)
+
+let test_dump_config : Testo.t =
+  t ~checked_output:(Testo.stdout ())
+    ~normalize:
+      [
+        (* because of the use of Xpattern.count global for pattern id *)
+        Testo.mask_pcre_pattern {|pid\s*=\s*[0-9]+|} ~replace:(fun _ ->
+            "pid = <MASKED NUM>");
+        normalize_whitespace;
+      ]
+    __FUNCTION__
+    (fun () ->
+      let files = [ F.File ("rule.yml", eqeq_basic_content) ] in
+      let exit_code =
+        Testutil_files.with_tempfiles ~chdir:true ~verbose:true files
+          (fun _cwd ->
+            Show_subcommand.main [| "semgrep-show"; "dump-config"; "rule.yml" |])
+      in
+      Exit_code.Check.ok exit_code)
+
+(* less: could also test the dump-ast -json *)
+let test_dump_ast : Testo.t =
+  t ~checked_output:(Testo.stdout ())
+    ~normalize:
+      [
+        (* because of the use of Gensym.MkId *)
+        mask_id_info_id;
+        normalize_whitespace;
+      ] __FUNCTION__ (fun () ->
+      let files = [ F.File ("foo.py", foo_py_content) ] in
+      let exit_code =
+        Testutil_files.with_tempfiles ~chdir:true ~verbose:true files
+          (fun _cwd ->
+            Show_subcommand.main
+              [| "semgrep-show"; "dump-ast"; "python"; "foo.py" |])
+      in
+      Exit_code.Check.ok exit_code)
+
+let test_dump_ast_when_error : Testo.t =
+  t ~checked_output:(Testo.stdxxx ()) ~normalize:[ Testutil_logs.mask_time ]
+    __FUNCTION__ (fun () ->
+      let files = [ F.File ("error.js", "function (") ] in
+      let exit_code =
+        Testutil_files.with_tempfiles ~chdir:true ~verbose:true files
+          (fun _cwd ->
+            Show_subcommand.main [| "semgrep-show"; "dump-ast"; "error.js" |])
+      in
+      Exit_code.Check.invalid_code exit_code)
+
+let test_dump_pattern : Testo.t =
+  t ~checked_output:(Testo.stdout ())
+    ~normalize:
+      [
+        (* because of the use of Gensym.MkId *)
+        mask_id_info_id;
+        normalize_whitespace;
+      ] __FUNCTION__ (fun () ->
+      let exit_code =
+        Show_subcommand.main
+          [| "semgrep-show"; "dump-pattern"; "python"; "foo(..., $X == $X)" |]
+      in
+      Exit_code.Check.ok exit_code)
+
+let test_identity : Testo.t =
+  (* TODO: we use stdxxx here because we're using Logs.app for some of the output
+   * instead of UConsole in Whoami.ml, but we should really use UConsole
+   * and just capture stdout here.
+   *)
+  t ~checked_output:(Testo.stdxxx ()) __FUNCTION__ (fun () ->
+      let exit_code =
+        (* we need to be logged in otherwise we will not contact the server *)
+        with_fake_login fake_settings (fun () ->
+            with_fake_identity_response fake_identity (fun () ->
+                Show_subcommand.main [| "semgrep-show"; "identity" |]))
+      in
+      (* TODO: please don't capture alcotest output
+
+         No idea why Alcotest prints an ASSERT message in color when it
+         shouldn't, depending on the host, just for this test.
+         The 'quiet' argument circumvents the problem.
+      *)
+      Exit_code.Check.ok ~quiet:true exit_code)
+
+let test_deployment : Testo.t =
+  t ~checked_output:(Testo.stdxxx ()) __FUNCTION__ (fun () ->
+      let exit_code =
+        with_fake_login fake_settings (fun () ->
+            with_fake_deployment_response fake_deployment (fun () ->
+                Show_subcommand.main [| "semgrep-show"; "deployment" |]))
+      in
+      Exit_code.Check.ok exit_code)
+
+(*****************************************************************************)
+(* Entry point *)
+(*****************************************************************************)
+
+let tests () =
+  Testo.categorize "Osemgrep Show (e2e)"
+    [
+      test_error_no_arguments;
+      (* This follows the same order than that the cases in
+       * Show_CLI.show_kind (Version | SupportedLanguages | Identity | ...)
+       *)
+      (*      test_version; *)
+      test_supported_languages;
+      test_identity;
+      test_deployment;
+      test_dump_pattern;
+      test_dump_ast;
+      test_dump_ast_when_error;
+      test_dump_config;
+      (* TODO? engine_path and command_for_core *)
+    ]

@@ -1,0 +1,10 @@
+(library
+ (public_name telemetry.ppx)
+ (name ppx_telemetry)
+ (kind ppx_deriver)
+ (libraries
+   commons
+   ppxlib
+   telemetry
+ )
+)

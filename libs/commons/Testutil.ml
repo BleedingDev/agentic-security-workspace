@@ -1,0 +1,40 @@
+(*
+   Copyright (c) 2022-2025 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+(*
+   Various utilities used for testing and are not considered an extension
+   of Alcotest (e.g. because it depends on Semgrep-specific libraries).
+*)
+
+let run what f =
+  Printf.printf "running %s...\n%!" what;
+  Common.protect ~finally:(fun () -> Printf.printf "done with %s.\n%!" what) f
+
+(*
+   Semgrep applies 'Unix.realpath' to some paths resulting in
+   the temporary folder being rewritten to its physical path if it
+   was a symlink (MacOS). Here, we mask all known temporary folder paths
+   in Semgrep test output.
+
+   TODO: move this to Testo once it's ok with requiring ocaml >= 4.13
+   (needed for Unix.realpath)
+*)
+let mask_temp_paths ?depth ?replace () =
+  let mask_original_path = Testo.mask_temp_paths ?depth ?replace () in
+  let mask_physical_path =
+    Testo.mask_temp_paths ?depth ?replace
+      ~temp_dir:(Filename.get_temp_dir_name () |> Unix.realpath |> Fpath.v)
+      ()
+  in
+  fun text -> text |> mask_original_path |> mask_physical_path
+
+let skip_on_windows = if Sys.win32 then Some "Failing on Windows" else None

@@ -1,0 +1,13 @@
+Test name: without git > deep include
+--- Files not added to git ---
+dir/a
+dir/b
+--- begin input files ---
+--- end input files ---
+--- '--include' patterns ---
+a
+--- Errors ---
+--- Selected targets ---
+selected dir/a
+--- Skipped targets ---
+ignored dir/b [Semgrep_output_v1_t.Cli_include_flags_do_not_match]

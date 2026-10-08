@@ -1,0 +1,26 @@
+; the main code behind semgrep-core
+(library
+ (public_name semgrep.core_scan)
+ (name semgrep_core_scan)
+ (wrapped false)
+ (libraries
+    base
+    collections
+
+    parallelism
+
+    commons
+    eio
+
+    semgrep.core
+    semgrep.parsing
+    semgrep.matching
+    semgrep.reporting
+    semgrep.engine
+ )
+ (preprocess (pps
+      ppx_deriving.show
+      ppx_profiling
+      ppx_telemetry
+   ))
+)

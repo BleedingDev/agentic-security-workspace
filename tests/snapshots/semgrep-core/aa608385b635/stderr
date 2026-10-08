@@ -1,0 +1,5 @@
+[<MASKED TIMESTAMP>][INFO]: I am application
+[<MASKED TIMESTAMP>][INFO](test_a): I am A
+[<MASKED TIMESTAMP>][INFO](test_b): I am B
+[<MASKED TIMESTAMP>][INFO]: I am application again
+[<MASKED TIMESTAMP>][INFO](test_a): I am A again

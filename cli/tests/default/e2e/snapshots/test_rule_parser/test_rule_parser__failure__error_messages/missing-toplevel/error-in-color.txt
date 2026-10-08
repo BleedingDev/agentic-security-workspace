@@ -1,0 +1,5 @@
+[31m[22m[24msemgrep error[0m: missing keys
+
+[31m[22m[24mrules/syntax/missing-toplevel.yaml is missing `rules` as top-level key[0m
+
+[31m[41m[22m[24m[[0m[38;5;231m[41m[1m[24mERROR[0m[31m[41m[22m[24m][0m invalid configuration file found (1 configs were invalid)

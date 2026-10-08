@@ -1,0 +1,86 @@
+(*
+   Copyright (c) 2024 Semgrep Inc.
+
+   This library is free software; you can redistribute it and/or
+   modify it under the terms of the GNU Lesser General Public License
+   version 2.1 as published by the Free Software Foundation.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the file
+   LICENSE for more details.
+*)
+module CST = Tree_sitter_cpp.CST
+(** A common view of preprocessor conditionals in blocks, class fields, and
+    enumerator lists. Each CST adapter preserves the items and recursive branch
+    structure so the converter can share its conditional traversal. *)
+
+type ifdef_token =
+  [ `Ifdef of Tree_sitter_run.Token.t (* pattern #[ 	]*ifdef *)
+  | `Ifndef of Tree_sitter_run.Token.t (* pattern #[ 	]*ifndef *) ]
+
+type elifdef_token =
+  [ `Elifdef of Tree_sitter_run.Token.t (* pattern #[ 	]*elifdef *)
+  | `Elifndef of Tree_sitter_run.Token.t (* pattern #[ 	]*elifndef *) ]
+
+type 'a preproc_if_poly =
+  Tree_sitter_run.Token.t (* pattern #[ 	]*if *)
+  * CST.preproc_expression
+  * Tree_sitter_run.Token.t (* "\n" *)
+  * 'a list (* zero or more *)
+  * 'a preproc_else_poly option
+  * Tree_sitter_run.Token.t (* pattern #[ 	]*endif *)
+
+and 'a preproc_else_poly =
+  [ `Prep_else_poly of
+    Tree_sitter_run.Token.t (* pattern #[ 	]*else *) * 'a list
+  | `Prep_elif_poly of
+    Tree_sitter_run.Token.t (* pattern #[ 	]*elif *)
+    * CST.preproc_expression
+    * Tree_sitter_run.Token.t (* "\n" *)
+    * 'a list (* zero or more *)
+    * 'a preproc_else_poly option
+  | `Prep_elifdef_poly of 'a preproc_elifdef_poly ]
+
+and 'a preproc_ifdef_poly =
+  ifdef_token
+  * Tree_sitter_run.Token.t (* identifier *)
+  * 'a list (* zero or more *)
+  * [ `Choice_prep_else_poly of 'a preproc_else_poly
+    | `Prep_elif_poly of 'a preproc_elifdef_poly ]
+    option
+  * Tree_sitter_run.Token.t (* pattern #[ 	]*endif *)
+
+and 'a preproc_elifdef_poly =
+  elifdef_token
+  * Tree_sitter_run.Token.t (* identifier *)
+  * 'a list (* zero or more *)
+  * 'a preproc_else_poly option
+
+val preproc_if_to_poly : CST.preproc_if -> CST.block_item preproc_if_poly
+
+val preproc_ifdef_to_poly :
+  CST.preproc_ifdef -> CST.block_item preproc_ifdef_poly
+
+val preproc_if_in_field_declaration_list_to_poly :
+  CST.preproc_if_in_field_declaration_list ->
+  CST.field_declaration_list_item preproc_if_poly
+
+val preproc_ifdef_in_field_declaration_list_to_poly :
+  CST.preproc_ifdef_in_field_declaration_list ->
+  CST.field_declaration_list_item preproc_ifdef_poly
+
+val preproc_if_in_enumerator_list_to_poly :
+  CST.preproc_if_in_enumerator_list ->
+  (CST.enumerator * Tree_sitter_run.Token.t) preproc_if_poly
+
+val preproc_ifdef_in_enumerator_list_to_poly :
+  CST.preproc_ifdef_in_enumerator_list ->
+  (CST.enumerator * Tree_sitter_run.Token.t) preproc_ifdef_poly
+
+val preproc_if_in_enumerator_list_no_comma_to_poly :
+  CST.preproc_if_in_enumerator_list_no_comma -> CST.enumerator preproc_if_poly
+
+val preproc_ifdef_in_enumerator_list_no_comma_to_poly :
+  CST.preproc_ifdef_in_enumerator_list_no_comma ->
+  CST.enumerator preproc_ifdef_poly

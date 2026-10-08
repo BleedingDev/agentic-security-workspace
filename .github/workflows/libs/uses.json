@@ -1,0 +1,73 @@
+{
+  "dependencies": {
+    "DeterminateSystems": {
+      "flake-checker-action": "v13",
+      "nix-installer-action": "v22"
+    },
+    "EndBug": {
+      "add-and-commit": "v11"
+    },
+    "actions": {
+      "cache": "v6",
+      "checkout": "v6",
+      "create-github-app-token": "v3",
+      "download-artifact": "v7",
+      "setup-go": "v7",
+      "setup-python": "v7",
+      "upload-artifact": "v7"
+    },
+    "anthropics":{
+      "claude-code-action": "v1"
+    },
+    "astral-sh": {
+      "setup-uv": "v7.6"
+    },
+    "aws-actions": {
+      "amazon-ecr-login": "v2",
+      "configure-aws-credentials": "v6"
+    },
+    "cachix": {
+      "cachix-action": "v17"
+    },
+    "christian-draeger": {
+      "increment-semantic-version": "1.1.0"
+    },
+    "depot": {
+      "bake-action": "v1.13.0",
+      "build-push-action": "v1.18.0",
+      "setup-action": "v1"
+    },
+    "docker": {
+      "login-action": "v4",
+      "metadata-action": "v6",
+      "setup-buildx-action": "v4",
+      "setup-qemu-action": "v4"
+    },
+    "jtmullen": {
+      "submodule-branch-check-action": "v1"
+    },
+    "marocchino": {
+      "sticky-pull-request-comment": "v3.0.5"
+    },
+    "peter-evans": {
+      "create-pull-request": "v8"
+    },
+    "pre-commit": {
+      "action": "v3.0.0"
+    },
+    "pypa": {
+      "gh-action-pypi-publish": "v1.14.0"
+    },
+    "semgrep": {
+      "setup-ocaml": "latest",
+      "claude-taskmaster": "v0.1.9",
+      "github-api-commit-action": "v1.1.0"
+    },
+    "slackapi": {
+      "slack-github-action": "v4.0.0"
+    },
+    "softprops": {
+      "action-gh-release": "v3.0.3"
+    }
+  }
+}
