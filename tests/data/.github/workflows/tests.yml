@@ -1,0 +1,69 @@
+name: Tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  # file name consistency
+  test_filenames:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout testfiles repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Set up Python 3.10
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: '3.10'
+    - name: Test repository files
+      run: python .github/check_sample_filenames.py .
+  # file permission consistency
+  test_permissions:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout testfiles repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Set up Python 3.10
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: '3.10'
+    - name: Test repository file permissions
+      run: python .github/check_file_permissions.py .
+  # to allow quicker tests, capa should run less than THRESHOLD seconds on added/modified test files
+  test_runtime:
+    runs-on: ubuntu-latest
+    steps:
+    # We check the submodules separately as the rules submodule's reference may not be our PR/master
+    - name: Checkout capa without submodules
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        repository: mandiant/capa
+    - name: Checkout capa-rules
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        repository: mandiant/capa-rules
+        path: rules
+    - name: Checkout capa-testfiles
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: tests/data
+    - name: Set up Python 3.10
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: '3.10'
+    - name: Install capa
+      run: pip install -e .
+    - name: Get modified files
+      id: files
+      uses: Ana06/get-changed-files@25f79e676e7ea1868813e21465014798211fad8c # v2.3.0
+    - name: Check capa runtime on modified files
+      env:
+        CHANGED_FILES: ${{ steps.files.outputs.all }}
+      run: |
+        cd tests/data
+        python .github/check_runtimes.py $CHANGED_FILES

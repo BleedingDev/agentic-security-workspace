@@ -1,0 +1,38 @@
+/**
+ * Copyright 2024 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.pagefind-ui__result-thumb {
+    display: none;
+}
+
+:root {
+    /* from the icon */
+    --capa-blue: #2593d7;
+    --capa-blue-darker: #1d74aa;
+
+    --bs-primary: var(--capa-blue);
+    --bs-primary-rgb: var(--capa-blue);
+}
+
+a:not(.btn) {
+    color: var(--capa-blue);
+    text-decoration: none;
+}
+
+a:not(.btn):hover {
+    text-decoration: underline;
+    text-decoration-color: var(--capa-blue) !important;
+}
