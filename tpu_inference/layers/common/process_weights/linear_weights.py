@@ -1,0 +1,220 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from dataclasses import dataclass, fields
+
+import jax
+import jax.numpy as jnp
+import torch
+from jax._src import mesh as meshlib
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from torch.nn import ParameterList
+from torch.nn.parameter import Parameter
+from torchax.interop import jax_view, torch_view
+from torchax.tensor import Tensor
+
+from tpu_inference.layers.common.utils import (
+    general_device_put, reorder_concatenated_tensor_for_sharding)
+from tpu_inference.logger import init_logger
+
+P = PartitionSpec
+
+logger = init_logger(__name__)
+
+
+@jax.tree_util.register_dataclass
+@dataclass
+class LinearWeights:
+    weight: jax.Array | Tensor | list[jax.Array | Tensor]
+    weight_scale: jax.Array | Tensor | list[jax.Array | Tensor] | None
+    zero_point: jax.Array | Tensor | list[jax.Array | Tensor] | None
+    bias: jax.Array | Tensor | list[jax.Array | Tensor] | None
+
+
+MODEL_MATMUL_FUSION_TRUTH_TABLE = {
+    ("Qwen/Qwen2.5-7B-Instruct", 1024, 1, "QKVParallelLinear"):
+    True,
+    ("Qwen/Qwen2.5-7B-Instruct", 1024, 1, "MergedColumnParallelLinear"):
+    False,
+    ("Qwen/Qwen2.5-7B-Instruct", 2048, 1, "QKVParallelLinear"):
+    False,
+    ("Qwen/Qwen2.5-7B-Instruct", 2048, 1, "MergedColumnParallelLinear"):
+    False,
+    ("meta-llama/Llama-3.1-8B-Instruct", 1024, 1, "QKVParallelLinear"):
+    False,
+    ("meta-llama/Llama-3.1-8B-Instruct", 1024, 1, "MergedColumnParallelLinear"):
+    False,
+    ("meta-llama/Llama-3.1-8B-Instruct", 2048, 1, "QKVParallelLinear"):
+    False,
+    ("meta-llama/Llama-3.1-8B-Instruct", 2048, 1, "MergedColumnParallelLinear"):
+    False,
+    ("RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w8a8", 1024, 1, "QKVParallelLinear"):
+    False,
+    ("RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w8a8", 1024, 1, "MergedColumnParallelLinear"):
+    False,
+    ("RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w8a8", 2048, 1, "QKVParallelLinear"):
+    False,
+    ("RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w8a8", 2048, 1, "MergedColumnParallelLinear"):
+    False,
+}
+
+
+def to_parameter_list(tensor: list[torch.Tensor]):
+    tensor = [Parameter(t, requires_grad=False) for t in tensor]
+    return ParameterList(tensor)
+
+
+def get_model_matmul_fusion_assignment(model_name: str, batch_size: int,
+                                       tp_size: int, layer_name: str):
+    key = (model_name, batch_size, tp_size, layer_name)
+    return MODEL_MATMUL_FUSION_TRUTH_TABLE.get(key, True)
+
+
+def format_linear_scale(
+        weight_scale: jax.Array | Tensor | list | None,
+        enable_kernel: bool) -> jax.Array | Tensor | list | None:
+    if weight_scale is None:
+        return None
+    if isinstance(weight_scale, (list, tuple)):
+        return [format_linear_scale(s, enable_kernel) for s in weight_scale]
+    scale = jax_view(weight_scale)
+    if scale.ndim == 2:
+        if enable_kernel:
+            scale = jnp.expand_dims(scale, (0, 2))
+        return torch_view(scale) if isinstance(weight_scale, Tensor) else scale
+    return weight_scale
+
+
+def process_linear_weights(
+    weights: LinearWeights,
+    fused: bool = False,
+    output_sizes: list[int] | None = None,
+    reorder_size: int | None = None,
+    per_tensor: bool = False,
+    enable_kernel: bool = False,
+) -> LinearWeights:
+    weight = weights.weight
+    weight_scale = weights.weight_scale
+    zero_point = weights.zero_point
+    bias = weights.bias
+
+    dim = -1
+    if output_sizes is None:
+        output_sizes = [weight.shape[dim]]
+
+    if fused:
+        assert reorder_size is not None
+        weight = reorder_concatenated_tensor_for_sharding(
+            weight, output_sizes, reorder_size, dim)
+
+        if weight_scale is not None and not per_tensor:
+            weight_scale = reorder_concatenated_tensor_for_sharding(
+                weight_scale, output_sizes, reorder_size, dim)
+        if zero_point is not None:
+            zero_point = reorder_concatenated_tensor_for_sharding(
+                zero_point, output_sizes, reorder_size, dim)
+        if bias is not None:
+            bias = reorder_concatenated_tensor_for_sharding(
+                bias, output_sizes, reorder_size, dim)
+    else:
+
+        def slice_tensor(tensor):
+            if tensor is None:
+                return None
+            tensors = []
+            start = 0
+            for size in output_sizes:
+                end = start + size
+                tensor_split = jax.lax.slice_in_dim(tensor,
+                                                    start,
+                                                    end,
+                                                    axis=dim)
+                tensors.append(tensor_split)
+                start = end
+            return tensors
+
+        weight = slice_tensor(weight)
+        if weight_scale is not None and not per_tensor:
+            weight_scale = slice_tensor(weight_scale)
+        if zero_point is not None:
+            zero_point = slice_tensor(zero_point)
+        if bias is not None:
+            bias = slice_tensor(bias)
+
+    weight_scale = format_linear_scale(weight_scale, enable_kernel)
+
+    return LinearWeights(
+        weight=weight,
+        weight_scale=weight_scale,
+        zero_point=zero_point,
+        bias=bias,
+    )
+
+
+def shard_linear_weights(
+    weights: LinearWeights,
+    mesh: Mesh | None,
+    weight_p_spec: PartitionSpec,
+    bias_p_spec: PartitionSpec,
+    per_tensor: bool = False,
+) -> LinearWeights:
+    # jax==0.8.1 introduces jax.sharding.get_mesh(), but current
+    # v6e test environment uses 0.8.0, so we use jax._src.mesh instead.
+    mesh = mesh or meshlib.get_concrete_mesh()
+    weight_sharding = NamedSharding(mesh, weight_p_spec)
+    bias_sharding = NamedSharding(mesh, bias_p_spec)
+    # If weight_scale is a list (split weights), we check the first element.
+    sample_scale = weights.weight_scale[0] if isinstance(
+        weights.weight_scale, list
+        | tuple) and weights.weight_scale else jax_view(weights.weight_scale)
+
+    if isinstance(sample_scale, jax.Array) and (len(sample_scale.shape) == 3 or
+                                                len(sample_scale.shape) == 4):
+        num_blocks = sample_scale.shape[
+            0] if sample_scale.ndim == 3 else sample_scale.shape[1]
+        if len(weight_p_spec) != 2:
+            raise ValueError(
+                F"The weight sharding shape length should be 2, but given {len(weight_p_spec)}."
+            )
+        # Cannot be sharded on the first dimension in case the number of blocks is 1.
+        in_axis = weight_p_spec[0] if num_blocks > 1 else None
+        out_axis = weight_p_spec[1]
+        if sample_scale.ndim == 4:
+            weight_scale_p_spec = P(None, in_axis, None, out_axis)
+        else:
+            weight_scale_p_spec = P(in_axis, None, out_axis)
+        weight_scale_sharding = NamedSharding(mesh, weight_scale_p_spec)
+    elif isinstance(sample_scale, jax.Array) and len(
+            sample_scale.shape) == 2 and not per_tensor:
+        # In case of 2D block-wise quantization scales [out_blocks, in_blocks],
+        # we should follow the weight sharding (also 2D)
+        weight_scale_sharding = NamedSharding(mesh, weight_p_spec)
+    else:
+        weight_scale_sharding = NamedSharding(
+            mesh, P()) if per_tensor else bias_sharding
+
+    weight_shardings = LinearWeights(
+        weight=weight_sharding,
+        weight_scale=weight_scale_sharding,
+        zero_point=bias_sharding,
+        bias=bias_sharding,
+    )
+
+    for field in fields(LinearWeights):
+        key = field.name
+        if (weight := getattr(weights, key, None)) is not None:
+            sharding = getattr(weight_shardings, key)
+            weight = general_device_put(weight, sharding)
+            setattr(weights, key, weight)
+    return weights

@@ -1,0 +1,537 @@
+#!/bin/bash
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Exit on error, exit on unset variable, fail on pipe errors.
+set -euo pipefail 
+set -x
+
+# We are running ON the head node.
+export SSH_USER="${SSH_USER:-$(whoami)}"
+
+# We need a valid path for run_cluster.sh's HF_HOME bind mount
+HOST_HF_HOME="${HOST_HF_HOME:-/tmp/hf_home}"
+
+# Automatic Worker IP Discovery
+if [[ -z "${WORKER_IPS:-}" ]]; then
+  echo "⚠️  WORKER_IPS not provided. Attempting to discover via gcloud..."
+  
+  # Check if gcloud is available and authorized
+  if command -v gcloud &> /dev/null; then
+    # Try to grab the zone from metadata if not set
+    ZONE="${ZONE:-$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}')}"
+    TPU_NAME="${TPU_NAME:-$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/description" 2>/dev/null || echo "")}"
+    
+    if [[ -n "$TPU_NAME" && -n "$ZONE" ]]; then
+      echo "   -> Found TPU_NAME: $TPU_NAME, ZONE: $ZONE"
+      # Get all IPs in the slice
+      ALL_IPS=$(gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone "$ZONE" --format="value(networkEndpoints[].ipAddress)")
+      
+      # Normalize separators to spaces and convert to array
+      ALL_IPS="${ALL_IPS//;/ }"
+      ALL_IPS="${ALL_IPS//,/ }"
+
+      # shellcheck disable=SC2206
+      ALL_IPS_ARRAY=($ALL_IPS)
+      
+      # The first IP from gcloud is ALWAYS the head node
+      if [[ -z "${HEAD_INTERNAL_IP:-}" ]]; then
+        HEAD_INTERNAL_IP="${ALL_IPS_ARRAY[0]}"
+        echo "   -> Discovered Head IP: $HEAD_INTERNAL_IP"
+      fi
+      
+      # The rest are Worker IPs
+      WORKER_IPS_LIST=("${ALL_IPS_ARRAY[@]:1}")
+      
+      # Join with commas
+      WORKER_IPS=$(IFS=, ; echo "${WORKER_IPS_LIST[*]}")
+      echo "   -> Discovered Worker IPs: $WORKER_IPS"
+
+      # Detect TPU Version for Docker Build
+      if [[ -z "${TPU_VERSION:-}" ]]; then
+        ACCELERATOR_TYPE=$(gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone "$ZONE" --format="value(acceleratorType)" 2>/dev/null || echo "")
+        echo "   -> Detected Accelerator Type: $ACCELERATOR_TYPE"
+        if [[ "$ACCELERATOR_TYPE" == *"tpu7"* ]]; then
+          export TPU_VERSION="tpu7x"
+          echo "   -> Setting TPU_VERSION=tpu7x"
+        fi
+      fi
+    else
+       echo "❌ Could not determine TPU_NAME or ZONE from metadata. Please set WORKER_IPS manually."
+       exit 1
+    fi
+  else
+    echo "❌ gcloud not found. Please set WORKER_IPS environment variable manually."
+    exit 1
+  fi
+fi
+
+if [[ -z "${WORKER_IPS:-}" ]]; then
+  echo "ERROR: Failed to discover WORKER_IPS. Please provide it manually."
+  exit 1
+fi
+
+# Fallback to hostname -I if HEAD_INTERNAL_IP is still strictly unset.
+HEAD_INTERNAL_IP="${HEAD_INTERNAL_IP:-$(hostname -I | awk '{print $1}')}"
+
+# Enforce TPUv7 requirement
+if [[ "${TPU_VERSION:-tpu6e}" != "tpu7x" ]]; then
+  echo "❌ This script is strictly for TPUv7 (TPU_VERSION=tpu7x). Exiting."
+  exit 0
+fi
+
+# Auto-generate SSH Key if it doesn't exist (e.g. in Buildkite CI)
+if [ ! -f ~/.ssh/id_rsa ]; then
+    echo "~~~ Auto-generating SSH key for passwordless auth..."
+    mkdir -p ~/.ssh
+    ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa -q
+fi
+
+SSH_OPTS=(-o StrictHostKeyChecking=no -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o IPQoS=none -i ~/.ssh/id_rsa)
+
+# Cleanup function that runs on exit to tear down the Ray cluster
+cleanup() {
+  if [[ "${CLEANUP_DONE:-}" == "true" ]]; then return; fi
+  CLEANUP_DONE="true"
+  set +e
+  echo "~~~ 🧹 Cleaning up containers on head and workers..."
+  IFS=',' read -r -a WORKER_IPS_ARRAY <<< "${WORKER_IPS:-}"
+  
+  echo "   -> Cleaning workers..."
+  if [[ ${#WORKER_IPS_ARRAY[@]} -gt 0 && -n "${WORKER_IPS_ARRAY[0]}" ]]; then
+    for worker_ip in "${WORKER_IPS_ARRAY[@]}"; do
+      echo "==================== Ray Worker logs from worker node ${worker_ip} ===================="
+      if [[ -f "/tmp/worker_${worker_ip}.log" ]]; then
+        tail -n 50 "/tmp/worker_${worker_ip}.log" || true
+        rm -f "/tmp/worker_${worker_ip}.log"
+      fi
+      ssh "${SSH_OPTS[@]}" "${SSH_USER}@${worker_ip}" "docker stop node >/dev/null 2>&1 || true; docker rm -f node >/dev/null 2>&1 || true; sudo -n rm -rf /tmp/ray/* /tmp/vllm/* >/dev/null 2>&1 || true" || true
+    done
+  fi
+
+  echo "   -> Cleaning Head Node..."
+  rm -f /tmp/vllm_serve.log
+  docker cp node:/root/vllm_serve.log /tmp/vllm_serve.log >/dev/null 2>&1 || true
+  if [[ -f /tmp/vllm_serve.log ]]; then
+    echo "==================== START OF VLLM SERVE LOG ===================="
+    cat /tmp/vllm_serve.log || true
+    echo "==================== END OF VLLM SERVE LOG ===================="
+  fi
+  rm -f "${TEMP_EXPORT_FILE:-}" >/dev/null 2>&1 || true
+  docker stop node >/dev/null 2>&1 || true
+  docker rm -f node >/dev/null 2>&1 || true
+  sudo -n rm -rf /tmp/ray/* /tmp/vllm/* >/dev/null 2>&1 || true
+
+  echo "✅ Cleanup complete."
+  set -e
+}
+
+# Buildkite expands the last `---` group whenever a log contains no `+++` group
+# at all, so a failing job used to open on whatever the cleanup trap printed
+# last. Run cleanup first, then emit the failure summary as a `+++` group: it is
+# expanded by default, and its presence suppresses the `---` fallback entirely.
+on_exit() {
+  local rc=$?
+  cleanup
+  { set +x; } 2>/dev/null
+  if [[ ${rc} -ne 0 ]]; then
+    echo "+++ :boom: ${BUILDKITE_LABEL:-Multihost run} failed (exit ${rc})"
+    if [[ -s /tmp/vllm_serve.log ]]; then
+      local fatal
+      fatal=$(grep -m5 -E '\b[A-Za-z_]*(Error|Exception): |\[Errno [0-9]+\]|EngineCore failed to start|ActorDiedError' /tmp/vllm_serve.log || true)
+      if [[ -n "${fatal}" ]]; then
+        echo "First errors in the vLLM server log:"
+        echo "${fatal}"
+        echo
+      fi
+      echo "Last 40 lines of the vLLM server log:"
+      tail -n 40 /tmp/vllm_serve.log
+    else
+      echo "No vLLM server log was produced; the run failed during cluster bring-up."
+    fi
+  fi
+  return ${rc}
+}
+trap on_exit EXIT SIGINT SIGTERM
+
+wait_for_server() {
+  local port=$1
+  local container_name=$2
+  local service_name=$3
+  local log_path=$4
+  local timeout=${5:-7200} # Default 2 hours
+
+  echo "Waiting for $service_name on port $port to become healthy (Timeout: ${timeout}s)..."
+
+  # 1. Get the PID inside the container
+  # We might need to wait a few seconds for the process to actually start
+  local pid=""
+  for ((i=0; i<10; i++)); do
+    pid=$(docker exec "$container_name" pgrep -n -f "$service_name" || true)
+    if [[ -n "$pid" ]]; then
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ -z "$pid" ]]; then
+      echo "Error: Could not find PID for $service_name immediately after start."
+      docker exec "$container_name" cat "$log_path" || true
+      return 1
+  fi
+
+  echo "   -> Found PID: $pid"
+
+  local end_time=$((SECONDS + timeout))
+  local loop_count=0
+  while [[ $SECONDS -lt $end_time ]]; do
+    # 2. Check health
+    # max-time 10 is crucial to prevent curl from hanging indefinitely if the server 
+    # accepts the TCP connection but is deadlocked or blocked from sending an HTTP response.
+    if curl -fs --max-time 10 "localhost:${port}/health" > /dev/null; then
+      echo "===== $service_name is healthy on port: $port. ==="
+      return 0
+    fi
+
+    # 3. Check if PID is alive INSIDE the container
+    if ! docker exec "$container_name" kill -0 "$pid" 2>/dev/null; then
+      echo "Error: $service_name on $port (PID $pid) died inside container."
+      echo "Displaying logs from $container_name:$log_path"
+      docker exec "$container_name" cat "$log_path" || true
+      return 1
+    fi
+
+    # 4. Fast-fail if EngineCore crashed but left the API server zombie-ing
+    if [[ $((loop_count % 3)) -eq 0 ]]; then
+      if docker exec "$container_name" grep -q -E "EngineCore failed to start|ActorDiedError" "$log_path" 2>/dev/null; then
+        echo "Error: Fatal vLLM engine crash detected in logs (e.g. EngineCore failed to start). Aborting."
+        echo "Displaying logs from $container_name:$log_path"
+        docker exec "$container_name" cat "$log_path" || true
+        return 1
+      fi
+    fi
+
+    sleep 5
+    loop_count=$((loop_count + 1))
+  done
+
+  echo "Error: $service_name on $port failed to become healthy within ${timeout}s."
+  echo "Displaying logs from $container_name:$log_path"
+  docker exec "$container_name" cat "$log_path" || true
+  return 1
+}
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+TOP_DIR=$(dirname "$(dirname "$SCRIPT_DIR")")
+
+# Prune Head Node BEFORE building the new image to ensure we have disk space
+echo "~~~ Pruning Docker on Head Node to clear disk space..."
+docker system prune -a --volumes -f || true
+
+# Source the environment setup script
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/setup_docker_env.sh"
+# setup_environment traces a long tail of docker tag/build/push plumbing and
+# one line per variable it sources from /etc/environment. It echoes its own
+# progress, so the trace adds nothing; xtrace is on for this whole script, so
+# turn it off across the call and back on after.
+{ set +x; } 2>/dev/null
+# In CI, run the image the build step already pushed to tpu-inference-ci, and
+# have the workers pull it from there too. Building and pushing from the TPU
+# host would need a registry the agent's service account can write to, and
+# agents in other projects have no such registry.
+if [ -n "${BUILDKITE:-}" ]; then
+  export USE_PREBUILT_IMAGE="${USE_PREBUILT_IMAGE:-1}"
+fi
+if [[ "${IS_MULTI_HOST_BENCH:-false}" == "true" || "${USE_PREBUILT_IMAGE:-0}" == "1" ]]; then
+  IMAGE_NAME='vllm-tpu'
+  setup_environment "$IMAGE_NAME"
+  # Use the exported CI cache image path so Worker Nodes can pull it directly
+  DOCKER_IMAGE="${EXPORTED_CI_CACHE_IMAGE:-$IMAGE_NAME:latest}"
+else
+  # Without a CI image (a manual run of uncommitted code, or a step that sets
+  # USE_PREBUILT_IMAGE=0), build it here and push it to the caller's own
+  # project for the workers to pull.
+  PROJECT="$(gcloud config get-value project)"
+  IMAGE_NAME="us-central1-docker.pkg.dev/${PROJECT}/tpu-inference/vllm-tpu"
+  setup_environment "${IMAGE_NAME}" "true"
+  DOCKER_IMAGE="${IMAGE_NAME}:${BUILDKITE_COMMIT:-latest}"
+fi
+set -x
+
+# Resolve server / client commands and environment variables early
+MODEL="${TEST_MODEL:-gs://tpu-commons-ci/qwen/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39}"
+VLLM_PORT="8000"
+VLLM_SERVE_CMD=""
+CLIENT_BENCH_CMD=""
+DOCKER_ENV_ARGS=()
+DOCKER_ENV_STR=""
+
+if [ "$#" -ge 1 ]; then
+    if [[ "$1" == *.json ]]; then
+        # JSON configuration mode (multihost benchmark)
+        CASE_FILE="$1"
+        TARGET_CASE_NAME="$2"
+        echo "--- Multi-host JSON case configuration detected: $CASE_FILE ($TARGET_CASE_NAME)"
+        
+        TEMP_EXPORT_FILE="/tmp/temp_env_exports.sh"
+        rm -f "$TEMP_EXPORT_FILE"
+
+        # Run parser_case.py inside the container to resolve server/client commands
+        docker run --rm \
+          --privileged \
+          --net host \
+          -v "$(pwd):/workspace" \
+          -w /workspace \
+          "${DOCKER_IMAGE}" \
+          python3 .buildkite/benchmark/scripts/parser_case.py "$CASE_FILE" "$TARGET_CASE_NAME" > "$TEMP_EXPORT_FILE" || {
+              echo "Error running parser_case.py inside container."
+              if [[ -f "$TEMP_EXPORT_FILE" ]]; then
+                  echo "===== Content of $TEMP_EXPORT_FILE ====="
+                  cat "$TEMP_EXPORT_FILE"
+                  echo "========================================"
+              fi
+              exit 1
+          }
+          
+        # shellcheck source=/dev/null
+        source "$TEMP_EXPORT_FILE"
+        rm -f "$TEMP_EXPORT_FILE"
+        
+        # Write GCS upload metadata variables to a temp file for run_job.sh
+        METADATA_FILE="/tmp/multihost_run_metadata.sh"
+        rm -f "$METADATA_FILE"
+        if [[ -n "${SERVER_CMD_ENVS:-}" ]]; then
+          {
+            echo "export MODEL_NAME='${MODEL_NAME:-}'"
+            echo "export INPUT_LEN='${INPUT_LEN:-}'"
+            echo "export OUTPUT_LEN='${OUTPUT_LEN:-}'"
+            echo "declare -a SERVER_CMD_ENVS=()"
+            for env_item in "${SERVER_CMD_ENVS[@]}"; do
+                echo "SERVER_CMD_ENVS+=('$(printf '%q' "$env_item")')"
+            done
+          } >> "$METADATA_FILE"
+        fi
+
+        # Convert SERVER_CMD array to a single string VLLM_SERVE_CMD
+        for env_item in "${SERVER_CMD_ENVS[@]}"; do
+            VLLM_SERVE_CMD+="$(printf '%q ' "$env_item")"
+            DOCKER_ENV_ARGS+=("-e" "$env_item")
+        done
+        for cmd_item in "${SERVER_CMD[@]}"; do
+            VLLM_SERVE_CMD+="$(printf '%q ' "$cmd_item")"
+        done
+        
+        # Set client benchmark command from CLIENT_CMD resolved by parser
+        CLIENT_BENCH_CMD=""
+        for env_item in "${CLIENT_CMD_ENVS[@]}"; do
+            CLIENT_BENCH_CMD+="$(printf '%q ' "$env_item")"
+        done
+        for cmd_item in "${CLIENT_CMD[@]}"; do
+            CLIENT_BENCH_CMD+="$(printf '%q ' "$cmd_item")"
+        done
+        
+    else
+        # Direct CLI configuration mode
+        # If the first argument is not a .json file, the script directly assigns 
+        # $1 as the server command and the remaining arguments ($*) as the client command.
+        if [ "$#" -gt 0 ]; then
+            VLLM_SERVE_CMD="$1"
+            echo "Using provided VLLM_SERVE_CMD: $VLLM_SERVE_CMD"
+            # Shift so that remaining args are treated as the benchmark command
+            shift
+            if [ "$#" -gt 0 ]; then
+                CLIENT_BENCH_CMD="${*:-}"
+            fi
+        else
+            VLLM_SERVE_CMD=""
+            CLIENT_BENCH_CMD=""
+        fi
+    fi
+fi
+
+# Extract port from VLLM_SERVE_CMD if present (e.g., --port 8080 or --port=8080)
+if [[ "${VLLM_SERVE_CMD}" =~ --port[=\ ]+([0-9]+) ]]; then
+    VLLM_PORT="${BASH_REMATCH[1]}"
+    echo "--- Extracted VLLM_PORT=${VLLM_PORT} from JSON server command"
+fi
+
+# Clean up potential leftovers from previous runs
+echo "~~~ Cleaning up previous cluster state..."
+cleanup
+CLEANUP_DONE="false"
+
+# Safely parse EXTRA_DOCKER_ARGS into an array to prevent word-splitting on spaces
+eval "declare -a EXTRA_DOCKER_ARGS_ARRAY=(${EXTRA_DOCKER_ARGS:-})"
+
+# Optional extra container environment for BOTH the head and the worker nodes.
+# MULTIHOST_ENV_VARS is a newline-separated list of KEY=VALUE pairs; values may
+# contain spaces. Env vars inlined into the serve command only reach the head
+# process, so anything the Ray workers read (e.g. weight-loading knobs) has to
+# be in their container environment. JSON case mode gets this from the case's
+# server env above; this gives the direct CLI mode the same.
+if [ -n "${MULTIHOST_ENV_VARS:-}" ]; then
+    while IFS= read -r env_item; do
+        [ -z "${env_item}" ] && continue
+        DOCKER_ENV_ARGS+=("-e" "${env_item}")
+    done <<< "${MULTIHOST_ENV_VARS}"
+fi
+
+# Serialize DOCKER_ENV_ARGS safely for SSH injection to Worker Nodes.
+if [ ${#DOCKER_ENV_ARGS[@]} -gt 0 ]; then
+    DOCKER_ENV_STR=$(printf '%q ' "${DOCKER_ENV_ARGS[@]}")
+else
+    DOCKER_ENV_STR=""
+fi
+
+# 1. Start Ray Head Node locally
+echo "--- Starting Ray Head Node Locally"
+# This call carries ~a dozen -e flags; its xtrace line is long and adds
+# nothing over the "Starting Ray Head Node Locally" banner above. The worker
+# start below is already quiet, since xtrace does not echo ssh heredoc bodies.
+{ set +x; } 2>/dev/null
+bash "${TOP_DIR}/scripts/multihost/run_cluster.sh" \
+  "${DOCKER_IMAGE}" \
+  "${HEAD_INTERNAL_IP}" \
+  --head \
+  "${HOST_HF_HOME}" \
+  -e HF_TOKEN="${HF_TOKEN:-}" \
+  -e TPU_MULTIHOST_BACKEND=ray \
+  -e JAX_PLATFORMS='' \
+  -e TPU_BACKEND_TYPE=jax \
+  -e MODEL_IMPL_TYPE="${MODEL_IMPL_TYPE:-vllm}" \
+  -e VLLM_DISABLE_SHARED_EXPERTS_STREAM="${VLLM_DISABLE_SHARED_EXPERTS_STREAM:-1}" \
+  -e NEW_MODEL_DESIGN="${NEW_MODEL_DESIGN:-0}" \
+  -e MOE_REQUANTIZE_BLOCK_SIZE="${MOE_REQUANTIZE_BLOCK_SIZE:-}" \
+  -e MOE_REQUANTIZE_WEIGHT_DTYPE="${MOE_REQUANTIZE_WEIGHT_DTYPE:-}" \
+  -e MOE_ALL_GATHER_ACTIVATION_DTYPE="${MOE_ALL_GATHER_ACTIVATION_DTYPE:-}" \
+  -e FORCE_MOE_RANDOM_ROUTING="${FORCE_MOE_RANDOM_ROUTING:-}" \
+  -e IS_MULTI_HOST_BENCH="${IS_MULTI_HOST_BENCH:-}" \
+  ${DOCKER_ENV_ARGS[@]:+"${DOCKER_ENV_ARGS[@]}"} \
+  ${EXTRA_DOCKER_ARGS_ARRAY[@]:+"${EXTRA_DOCKER_ARGS_ARRAY[@]}"} &
+set -x
+
+sleep 60
+
+# 2. Distribute run_cluster.sh to workers and start them
+IFS=',' read -r -a WORKER_IPS_ARRAY <<< "${WORKER_IPS}"
+for worker_ip in "${WORKER_IPS_ARRAY[@]}"; do
+    echo "--- Distributing and starting Ray Worker on ${worker_ip}"
+
+    # Prune Worker Node BEFORE it tries to pull the new giant image
+    echo "   -> Pruning Docker on worker to free disk space..."
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@${worker_ip}" "docker system prune -a --volumes -f" || true
+    
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@${worker_ip}" "mkdir -p ~/tpu-inference/scripts/multihost" || true
+    # shellcheck disable=SC2002
+    cat "${TOP_DIR}/scripts/multihost/run_cluster.sh" | base64 | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${worker_ip}" "base64 -d > ~/tpu-inference/scripts/multihost/run_cluster.sh"
+    
+    # shellcheck disable=SC2087
+    # shellcheck disable=SC2029
+    # Redirect output to a temp file so it doesn't flood the Buildkite console with mixed logs.
+    ssh "${SSH_OPTS[@]}" "${SSH_USER}@${worker_ip}" > "/tmp/worker_${worker_ip}.log" 2>&1 << EOF &
+IS_MULTI_HOST_BENCH="${IS_MULTI_HOST_BENCH:-false}" bash ~/tpu-inference/scripts/multihost/run_cluster.sh '${DOCKER_IMAGE}' '${HEAD_INTERNAL_IP}' --worker '${HOST_HF_HOME}' \
+  -e HF_TOKEN='${HF_TOKEN:-}' \
+  -e TPU_MULTIHOST_BACKEND=ray \
+  -e JAX_PLATFORMS='' \
+  -e TPU_BACKEND_TYPE=jax \
+  -e MODEL_IMPL_TYPE='${MODEL_IMPL_TYPE:-vllm}' \
+  -e VLLM_DISABLE_SHARED_EXPERTS_STREAM='${VLLM_DISABLE_SHARED_EXPERTS_STREAM:-1}' \
+  -e NEW_MODEL_DESIGN='${NEW_MODEL_DESIGN:-0}' \
+  -e MOE_REQUANTIZE_BLOCK_SIZE='${MOE_REQUANTIZE_BLOCK_SIZE:-}' \
+  -e MOE_REQUANTIZE_WEIGHT_DTYPE='${MOE_REQUANTIZE_WEIGHT_DTYPE:-}' \
+  -e MOE_ALL_GATHER_ACTIVATION_DTYPE='${MOE_ALL_GATHER_ACTIVATION_DTYPE:-}' \
+  -e FORCE_MOE_RANDOM_ROUTING='${FORCE_MOE_RANDOM_ROUTING:-}' \
+  -e IS_MULTI_HOST_BENCH='${IS_MULTI_HOST_BENCH:-}' \
+  ${DOCKER_ENV_STR}
+EOF
+done
+
+
+echo "--- Waiting for all worker nodes to connect"
+# Wait a few seconds for all worker nodes to connect
+sleep 120
+
+# 3. Start vLLM server on the head node
+echo "--- Starting vLLM server on head node"
+
+if [ -z "${VLLM_SERVE_CMD}" ]; then
+    echo "Error: VLLM_SERVE_CMD cannot be empty! Please provide a JSON config or a command string."
+    exit 1
+fi
+
+# Pre-download generation config from GCS into the container workspace and rewrite the server command
+if [[ "${VLLM_SERVE_CMD}" =~ --generation-config[=\ ]+gs://([^ ]+) ]]; then
+    gcs_path="gs://${BASH_REMATCH[1]}"
+    config_url="${gcs_path%/*}"
+    config_dir_name=$(basename "${config_url}")
+    config_file_name=$(basename "${gcs_path}")
+
+    echo "--- Detected GCS generation-config: $gcs_path"
+    echo "--- Pre-downloading config to workspace inside container..."
+
+    download_cmd="mkdir -p /workspace/${config_dir_name}/${config_file_name} && gsutil -m cp ${gcs_path}/config.json ${gcs_path}/generation_config.json /workspace/${config_dir_name}/${config_file_name}/ && "
+    
+    VLLM_SERVE_CMD=$(echo "${VLLM_SERVE_CMD}" | sed -E "s|--generation-config[=\ ]+gs://[^ ]+|--generation-config /workspace/${config_dir_name}/${config_file_name}|g")
+    VLLM_SERVE_CMD="${download_cmd}${VLLM_SERVE_CMD}"
+    echo "Rewritten VLLM_SERVE_CMD: $VLLM_SERVE_CMD"
+fi
+
+# Launch vllm serve in the background inside the local 'node' container
+docker exec \
+  -d \
+  -e HF_HOME=/root/.cache/huggingface \
+  node bash -c "${VLLM_SERVE_CMD} > /root/vllm_serve.log 2>&1"
+
+# 4. Wait for the server to be healthy
+SERVER_TIMEOUT=""
+if [[ -n "${SERVER_CMD_ENVS:-}" ]]; then
+    for env_item in "${SERVER_CMD_ENVS[@]}"; do
+        if [[ "$env_item" == VLLM_ENGINE_READY_TIMEOUT_S=* ]]; then
+            SERVER_TIMEOUT="${env_item#*=}"
+        fi
+    done
+fi
+wait_for_server "$VLLM_PORT" "node" "vllm serve" "/root/vllm_serve.log" "$SERVER_TIMEOUT"
+
+# 5. Run Benchmarks / Validation
+if [[ "${CASE_FILE:-}" == *.json ]]; then
+  # JSON (.json): Delegates to run_bm.sh for advanced benchmark logic.
+  echo "--- Invoking run_bm.sh for advanced benchmark logic on Head Node..."
+  docker exec \
+    -e HF_HOME=/root/.cache/huggingface \
+    -e SERVER_ALREADY_RUNNING="true" \
+    -e VLLM_PORT="${VLLM_PORT}" \
+    -e GCS_BUCKET="${GCS_BUCKET:-}" \
+    -e RECORD_ID="${RECORD_ID:-}" \
+    node bash -c "cd /workspace/tpu_inference && chmod +x .buildkite/benchmark/scripts/run_bm.sh && .buildkite/benchmark/scripts/run_bm.sh $CASE_FILE $TARGET_CASE_NAME"
+elif [ -n "${CLIENT_BENCH_CMD}" ]; then
+  # Legacy string: Executes CLIENT_BENCH_CMD directly as a raw bash command.
+  echo "--- Running Benchmark Command on Head Node"
+  docker exec \
+    -e HF_HOME=/root/.cache/huggingface \
+    node bash -c "cd /workspace/tpu_inference && ${CLIENT_BENCH_CMD}"
+else
+  # Default: Run the curl test to verify the endpoint
+  echo "--- Running default curl test"
+  docker exec node bash -c "
+  curl http://localhost:8000/v1/completions \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{\"model\": \"${MODEL}\", \"prompt\": \"San Francisco is a\", \"max_tokens\": 50}'
+  "
+fi
+
+echo "--- Tests completed successfully"
+
