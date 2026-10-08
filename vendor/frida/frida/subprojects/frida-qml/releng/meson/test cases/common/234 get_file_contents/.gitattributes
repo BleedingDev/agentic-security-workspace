@@ -1,1 +1,3 @@
 utf-16-text binary
+# Preserved snapshot: retain raw bytes and embedded LFS payloads.
+** -text -filter
