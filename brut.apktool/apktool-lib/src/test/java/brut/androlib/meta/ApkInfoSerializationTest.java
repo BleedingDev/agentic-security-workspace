@@ -1,0 +1,64 @@
+/*
+ *  Copyright (C) 2010 Ryszard Wiśniewski <brut.alll@gmail.com>
+ *  Copyright (C) 2010 Connor Tumbleson <connor.tumbleson@gmail.com>
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *       https://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+package brut.androlib.meta;
+
+import brut.androlib.BaseTest;
+
+import java.io.File;
+
+import org.junit.*;
+import static org.junit.Assert.*;
+
+public class ApkInfoSerializationTest extends BaseTest {
+
+    @Test
+    public void checkApkInfoSerialization() throws Exception {
+        ApkInfo control = ApkInfo.load(getClass().getResourceAsStream("/meta/serialization.yml"));
+        check(control);
+        File testFile = new File(sTmpDir, "serialization.yml");
+        control.save(testFile);
+        ApkInfo test = ApkInfo.load(testFile);
+        check(test);
+    }
+
+    private void check(ApkInfo apkInfo) {
+        assertEquals("2.0.0", apkInfo.getVersion());
+        assertEquals("testapp.apk", apkInfo.getApkFileName());
+        assertNotNull(apkInfo.getUsesFramework());
+        assertEquals(1, apkInfo.getUsesFramework().getIds().size());
+        assertEquals(1, apkInfo.getUsesFramework().getIds().get(0).intValue());
+        assertNotNull(apkInfo.getResourcesInfo());
+        assertEquals(127, apkInfo.getResourcesInfo().getPackageId());
+        assertNotNull(apkInfo.getVersionInfo());
+        assertEquals(1, apkInfo.getVersionInfo().getVersionCode());
+        assertEquals("1.0", apkInfo.getVersionInfo().getVersionName());
+        assertNotNull(apkInfo.getDoNotCompress());
+        assertEquals(12, apkInfo.getDoNotCompress().size());
+        assertEquals("assets/0byte_file.jpg", apkInfo.getDoNotCompress().get(0));
+        assertEquals("arsc", apkInfo.getDoNotCompress().get(1));
+        assertEquals("png", apkInfo.getDoNotCompress().get(2));
+        assertEquals("mp3", apkInfo.getDoNotCompress().get(3));
+        assertEquals("stored.file", apkInfo.getDoNotCompress().get(4));
+        assertEquals("surrogate/pair/😊.test", apkInfo.getDoNotCompress().get(5));
+        assertEquals("'single-quoted", apkInfo.getDoNotCompress().get(6));
+        assertEquals("\"single-quoted", apkInfo.getDoNotCompress().get(7));
+        assertEquals(" single-quoted", apkInfo.getDoNotCompress().get(8));
+        assertEquals("single-quoted ", apkInfo.getDoNotCompress().get(9));
+        assertEquals("\\\"single-quoted-with-\\tab", apkInfo.getDoNotCompress().get(10));
+        assertEquals("\"double-quoted-with-\tab", apkInfo.getDoNotCompress().get(11));
+    }
+}
