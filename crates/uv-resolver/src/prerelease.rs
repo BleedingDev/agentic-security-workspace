@@ -1,0 +1,127 @@
+use std::borrow::Cow;
+
+use rustc_hash::FxHashMap;
+use uv_configuration::{Prerelease, PrereleaseMode, specifier_opts_into_prereleases};
+use uv_distribution_types::{Requirement, RequirementSource};
+use uv_normalize::PackageName;
+
+use crate::resolver::ForkSet;
+use crate::{DependencyMode, Manifest, ResolverEnvironment};
+
+/// Like [`PrereleaseMode`], but with any additional information required to select a candidate,
+/// like the set of direct dependencies.
+#[derive(Debug, Clone)]
+pub(crate) struct PrereleaseStrategy {
+    default: PrereleasePolicy,
+    package: FxHashMap<PackageName, PrereleasePolicy>,
+}
+
+#[derive(Debug, Clone)]
+enum PrereleasePolicy {
+    /// Disallow all pre-release versions.
+    Disallow,
+
+    /// Allow all pre-release versions.
+    Allow,
+
+    /// Prefer stable versions, falling back to pre-release versions when necessary.
+    IfNecessary,
+
+    /// Prefer stable versions for first-party packages with explicit pre-release specifiers,
+    /// falling back to pre-release versions when necessary. Disallow pre-release versions for all
+    /// other packages.
+    Explicit(ForkSet),
+}
+
+impl PrereleaseStrategy {
+    #[allow(deprecated)]
+    pub(crate) fn from_prerelease(
+        prerelease: &Prerelease,
+        manifest: &Manifest,
+        env: &ResolverEnvironment,
+        dependencies: DependencyMode,
+    ) -> Self {
+        Self {
+            default: Self::policy(prerelease.global, manifest, env, dependencies),
+            package: prerelease
+                .package
+                .iter()
+                .map(|(name, mode)| {
+                    (
+                        name.clone(),
+                        Self::policy(*mode, manifest, env, dependencies),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[allow(deprecated)]
+    fn policy(
+        mode: PrereleaseMode,
+        manifest: &Manifest,
+        env: &ResolverEnvironment,
+        dependencies: DependencyMode,
+    ) -> PrereleasePolicy {
+        match mode {
+            PrereleaseMode::Disallow => PrereleasePolicy::Disallow,
+            PrereleaseMode::Allow => PrereleasePolicy::Allow,
+            PrereleaseMode::IfNecessary | PrereleaseMode::IfNecessaryOrExplicit => {
+                PrereleasePolicy::IfNecessary
+            }
+            PrereleaseMode::Explicit => PrereleasePolicy::Explicit(Self::explicit_packages(
+                manifest.candidate_selection_requirements(env, dependencies),
+            )),
+        }
+    }
+
+    fn explicit_packages<'a>(requirements: impl Iterator<Item = Cow<'a, Requirement>>) -> ForkSet {
+        let mut packages = ForkSet::default();
+        for requirement in requirements {
+            let RequirementSource::Registry { specifier, .. } = &requirement.source else {
+                continue;
+            };
+
+            if specifier.iter().any(specifier_opts_into_prereleases) {
+                packages.add(&requirement, ());
+            }
+        }
+        packages
+    }
+
+    /// Returns the pre-release candidate selection policy for a package.
+    ///
+    /// Pre-releases remain in the candidate universe but, unless they are globally allowed, are
+    /// considered only after stable candidates. Keeping the candidate universe fixed is required
+    /// for PubGrub's learned incompatibilities to remain valid.
+    pub(crate) fn selection(
+        &self,
+        package_name: &PackageName,
+        env: &ResolverEnvironment,
+    ) -> PrereleaseSelection {
+        match self.package.get(package_name).unwrap_or(&self.default) {
+            PrereleasePolicy::Disallow => PrereleaseSelection::Disallow,
+            PrereleasePolicy::Allow => PrereleaseSelection::Allow,
+            PrereleasePolicy::IfNecessary => PrereleaseSelection::PreferStable,
+            PrereleasePolicy::Explicit(packages) => {
+                if packages.contains(package_name, env) {
+                    PrereleaseSelection::PreferStable
+                } else {
+                    PrereleaseSelection::Disallow
+                }
+            }
+        }
+    }
+}
+
+/// How pre-release candidates participate in version selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrereleaseSelection {
+    /// Do not consider pre-release candidates.
+    Disallow,
+    /// Consider stable and pre-release candidates in normal version order.
+    Allow,
+    /// Prefer stable candidates, falling back to pre-releases only after stable candidates are
+    /// exhausted.
+    PreferStable,
+}

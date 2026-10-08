@@ -1,0 +1,182 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "github>astral-sh/renovate-config",
+    // For tool versions defined in GitHub Actions:
+    "customManagers:githubActionsVersions",
+  ],
+  labels: ["internal", "build:skip-docker", "build:skip-release"],
+  schedule: ["* 0-3 * * 1"],
+  enabledManagers: ["github-actions", "cargo", "custom.regex"],
+  cargo: {
+    managerFilePatterns: ["/^Cargo\\.toml$/", "/^crates/.*Cargo\\.toml$/"],
+  },
+  packageRules: [
+    {
+      // Codex Action publishes two-component tags instead of full SemVer tags.
+      matchManagers: ["github-actions"],
+      matchPackageNames: ["openai/codex-action"],
+      extractVersion: "^(?<version>v?\\d+\\.\\d+)$",
+      versioning: "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)$",
+    },
+    {
+      groupName: "Codex automation dependencies",
+      matchPackageNames: ["@openai/codex", "openai/codex-action"],
+      description: "Weekly update of Codex Action and Codex CLI dependencies",
+    },
+    {
+      // Disable updates of `zip-rs`; intentionally pinned for now due to ownership change
+      // See: https://github.com/astral-sh/uv/issues/3642
+      matchPackageNames: ["/zip/"],
+      matchManagers: ["cargo"],
+      enabled: false,
+    },
+    {
+      // Create dedicated branches to update references to dependencies in the documentation.
+      matchFileNames: ["docs/**/*.md"],
+      commitMessageTopic: "documentation references to {{{depName}}}",
+      semanticCommitType: "docs",
+      semanticCommitScope: null,
+      additionalBranchPrefix: "docs-",
+    },
+    {
+      // This package rule disables updates for GitHub runners:
+      // we'd only pin them to a specific version
+      // if there was a deliberate reason to do so
+      groupName: "GitHub runners",
+      matchManagers: ["github-actions"],
+      matchDatasources: ["github-runners"],
+      description: "Disable PRs updating GitHub runners (e.g. 'runs-on: macos-14')",
+      enabled: false,
+    },
+    {
+      // Exclude test-system.yml from Python version updates, as it intentionally
+      // tests multiple Python versions and should not be auto-updated.
+      matchFileNames: [".github/workflows/test-system.yml"],
+      matchDepNames: ["python"],
+      description: "Disable Python version updates in test-system.yml",
+      enabled: false,
+    },
+    {
+      // Exclude test-integration.yml from Python version updates, as it intentionally
+      // tests specific Python versions and should not be auto-updated.
+      matchFileNames: [".github/workflows/test-integration.yml"],
+      matchDepNames: ["python"],
+      description: "Disable Python version updates in test-integration.yml",
+      enabled: false,
+    },
+    {
+      matchFileNames: [".github/workflows/test-system.yml"],
+      extends: ["schedule:monthly"],
+      description: "Monthly update of test-system.yml dependencies",
+    },
+    {
+      groupName: "Rust dev-dependencies",
+      matchManagers: ["cargo"],
+      matchDepTypes: ["devDependencies"],
+      description: "Weekly update of Rust development dependencies",
+    },
+    {
+      // We don't really use PyO3 in this project; it's pulled in as an optional feature
+      // of the PEP 440 and PEP 508 crates, which we vendored and forked.
+      groupName: "pyo3",
+      matchManagers: ["cargo"],
+      matchPackageNames: ["/pyo3/"],
+      description: "Weekly update of pyo3 dependencies",
+      enabled: false,
+    },
+    {
+      groupName: "pubgrub",
+      matchManagers: ["cargo"],
+      matchDepNames: ["pubgrub", "version-ranges"],
+      description: "version-ranges and pubgrub are in the same Git repository",
+    },
+    {
+      commitMessageTopic: "MSRV",
+      matchManagers: ["custom.regex"],
+      matchDepNames: ["msrv"],
+      // We have a rolling support policy for the MSRV
+      // 2 releases back * 6 weeks per release * 7 days per week + 1
+      minimumReleaseAge: "85 days",
+      groupName: "MSRV",
+    },
+    {
+      matchManagers: ["custom.regex"],
+      matchDepNames: ["rust"],
+      commitMessageTopic: "Rust",
+    },
+    {
+      matchManagers: ["custom.regex"],
+      matchDepNames: ["maturin"],
+      commitMessageTopic: "maturin",
+      // Maturin upgrades can change release wheel contents, so keep release
+      // binary validation enabled.
+      labels: ["internal", "build:skip-docker"],
+    },
+  ],
+  customManagers: [
+    // uv release used by the reusable security review workflow.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/ci\\.yml$/"],
+      matchStrings: [
+        '# renovate: datasource=github-release-attachments depName=astral-sh/uv\\s+uv-version: "(?<currentValue>[^"\\r\\n]+)"\\s+uv-checksum: "(?<currentDigest>[a-f0-9]{64})"',
+      ],
+      depNameTemplate: "astral-sh/uv",
+      datasourceTemplate: "github-release-attachments",
+      versioningTemplate: "semver",
+    },
+    // Update major GitHub actions references in documentation.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^docs/.*\\.md$/"],
+      matchStrings: [
+        "\\suses: (?<depName>[\\w-]+/[\\w-]+)(?<path>/.*)?@(?<currentValue>.+?)\\s",
+      ],
+      datasourceTemplate: "github-tags",
+      versioningTemplate: "regex:^v(?<major>\\d+)$",
+    },
+    // Maturin version used in maturin-action
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/.github/workflows/build-release-binaries\\.yml$/",
+      ],
+      matchStrings: ["maturin-version: (?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      depNameTemplate: "maturin",
+      packageNameTemplate: "PyO3/maturin",
+      datasourceTemplate: "github-releases",
+    },
+    // Codex CLI versions passed to Codex Action.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      matchStrings: ['codex-version:\\s*"(?<currentValue>\\d+\\.\\d+\\.\\d+)"'],
+      depNameTemplate: "@openai/codex",
+      datasourceTemplate: "npm",
+      versioningTemplate: "semver",
+    },
+    // Minimum supported Rust toolchain version
+    {
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)Cargo\\.toml?$/"],
+      matchStrings: [
+        'rust-version\\s*=\\s*"(?<currentValue>\\d+\\.\\d+(\\.\\d+)?)"',
+      ],
+      depNameTemplate: "msrv",
+      packageNameTemplate: "rust-lang/rust",
+      datasourceTemplate: "github-releases",
+    },
+    // Rust toolchain version
+    {
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)rust-toolchain\\.toml?$/"],
+      matchStrings: [
+        'channel\\s*=\\s*"(?<currentValue>\\d+\\.\\d+(\\.\\d+)?)"',
+      ],
+      depNameTemplate: "rust",
+      packageNameTemplate: "rust-lang/rust",
+      datasourceTemplate: "github-releases",
+    },
+  ],
+}
