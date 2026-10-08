@@ -1,0 +1,31 @@
+name: 🙏🏻 Security Crawl Maze Score
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Run Scoring
+    runs-on: ubuntu-latest-16-cores
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: projectdiscovery/actions/setup/go@v1
+
+      - name: Build
+        run: go build .
+        working-directory: cmd/katana/
+
+      - name: Run Katana Standard
+        run: ./katana -u https://security-crawl-maze.app/ -kf all -jc -jsluice -d 10 -o output_standard.txt -cos node_modules
+        working-directory: cmd/katana
+        
+      - name: Run Katana Headless
+        run: ./katana -u https://security-crawl-maze.app/ -kf all -jc -jsluice -d 10 -headless -o output_headless.txt -cos node_modules
+        working-directory: cmd/katana
+
+      - name: Run Score
+        run: go build .; ./crawl-maze-score ../../katana/output_standard.txt ../../katana/output_headless.txt
+        working-directory: cmd/tools/crawl-maze-score
