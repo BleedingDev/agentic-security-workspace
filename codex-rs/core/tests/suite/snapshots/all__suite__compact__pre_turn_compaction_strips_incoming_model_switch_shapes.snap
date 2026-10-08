@@ -1,0 +1,48 @@
+---
+source: core/tests/suite/compact.rs
+expression: "format_labeled_requests_snapshot(\"Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
+---
+Scenario: Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.
+
+## Window 1
+-- request 1 (turn; Initial Request (Previous Model)) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    BEFORE_SWITCH_USER
+
+## Window 2 (after request 1: settings changed (model, parallel_tool_calls, reasoning, text, tools))
+-- request 2 (compaction; Local Compaction Request) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    BEFORE_SWITCH_USER
+04:message/assistant:
+    BEFORE_SWITCH_REPLY
+05:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+-- request 3 (turn; Local Post-Compaction History Layout) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <MODEL_SWITCH>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    BEFORE_SWITCH_USER
+04:message/user:
+    <COMPACTION_SUMMARY>
+    PRETURN_SWITCH_SUMMARY
+05:message/user:
+    AFTER_SWITCH_USER

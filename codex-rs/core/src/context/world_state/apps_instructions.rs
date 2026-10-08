@@ -1,0 +1,57 @@
+use super::PreviousSectionState;
+use super::SectionTransition;
+use super::WorldStateSection;
+use super::WorldStateUpdate;
+use crate::context::AppsInstructions;
+use crate::context::ContextualUserFragment;
+
+/// Whether generic Apps usage guidance should be visible to the model.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AppsInstructionsState {
+    available: bool,
+}
+
+impl AppsInstructionsState {
+    pub(crate) fn new(available: bool) -> Self {
+        Self { available }
+    }
+}
+
+impl WorldStateSection for AppsInstructionsState {
+    const ID: &'static str = "apps_instructions";
+    type Snapshot = bool;
+
+    fn matches_legacy_fragment(role: &str, text: &str) -> bool {
+        role == "developer" && AppsInstructions::matches_text(text)
+    }
+
+    fn has_retained_fragment_matcher() -> bool {
+        true
+    }
+
+    fn matches_retained_fragment(role: &str, text: &str) -> bool {
+        Self::matches_legacy_fragment(role, text)
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.available;
+        if !self.available
+            || matches!(previous, PreviousSectionState::Known(previous) if *previous)
+            || matches!(previous, PreviousSectionState::Unknown)
+        {
+            return (Some(current), Vec::new());
+        }
+
+        (
+            Some(current),
+            vec![WorldStateUpdate::fragment(AppsInstructions)],
+        )
+    }
+}
+
+#[cfg(test)]
+#[path = "apps_instructions_tests.rs"]
+mod tests;
