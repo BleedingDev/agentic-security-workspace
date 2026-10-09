@@ -160,8 +160,10 @@ def main():
     for record in records + [{'name': 'recovery-manifest.json'}, {'name': 'SHA256SUMS'}]:
         print('Uploading:', record['name'], flush=True)
         run('gh', 'release', 'upload', args.tag, str(destination / record['name']), '--repo', args.repo)
-    remote = json.loads(subprocess.check_output(['gh', 'api',
-        'repos/' + args.repo + '/releases/tags/' + args.tag]))
+    # The by-tag endpoint only returns published releases, not drafts.
+    releases = json.loads(subprocess.check_output(['gh', 'api',
+        'repos/' + args.repo + '/releases?per_page=100']))
+    remote = next(release for release in releases if release['tag_name'] == args.tag)
     actual = {entry['name']: entry for entry in remote['assets']}
     for path in destination.iterdir():
         if not path.is_file() or path == notes:
