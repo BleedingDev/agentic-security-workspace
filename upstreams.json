@@ -13414,7 +13414,7 @@
       "commit": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
       "license": "apache-2.0",
       "bytes": 55586114863,
-      "archive_status": "pending-independent-storage",
+      "archive_status": "excluded-by-user",
       "files": [
         {
           "path": ".gitattributes",
@@ -13580,7 +13580,8 @@
       ],
       "metadata_path": "vendor/models/Qwen/Qwen3.8-27B",
       "metadata_status": "archived",
-      "storage_required_bytes": 55563006776
+      "storage_required_bytes": 0,
+      "exclusion_reason": "User explicitly declined model weight backups on 2026-10-09; metadata is retained."
     },
     {
       "repository": "huihui-ai/Huihui-Qwen3.8-27B-abliterated",
@@ -13588,7 +13589,7 @@
       "commit": "739e3c5b89849f6c238ce1e5b70008612ae42cdd",
       "license": "apache-2.0",
       "bytes": 55586059962,
-      "archive_status": "pending-independent-storage",
+      "archive_status": "excluded-by-user",
       "files": [
         {
           "path": ".gitattributes",
@@ -13754,7 +13755,8 @@
       ],
       "metadata_path": "vendor/models/huihui-ai/Huihui-Qwen3.8-27B-abliterated",
       "metadata_status": "archived",
-      "storage_required_bytes": 55563006216
+      "storage_required_bytes": 0,
+      "exclusion_reason": "User explicitly declined model weight backups on 2026-10-09; metadata is retained."
     }
   ],
   "external_resources": [

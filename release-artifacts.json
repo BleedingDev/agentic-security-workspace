@@ -1,0 +1,499 @@
+{
+  "schema_version": 1,
+  "model_weights": "excluded-by-user",
+  "platforms": [
+    "macOS arm64",
+    "Linux x86_64",
+    "Windows x86_64",
+    "Frida Android arm64"
+  ],
+  "rea_npm_version": "6.0.0",
+  "assets": [
+    {
+      "name": "NationalSecurityAgency--ghidra--Ghidra_12.1.4_build--ghidra_12.1.4_PUBLIC_20260921.zip",
+      "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+      "bytes": 569649598,
+      "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
+      "project": "NationalSecurityAgency/ghidra",
+      "version": "Ghidra_12.1.4_build",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "NationalSecurityAgency--ghidra--Ghidra_12.1.4_build--source.tar.gz",
+      "url": "https://api.github.com/repos/NationalSecurityAgency/ghidra/tarball/8b6bbb857accdfa20dc5b2f5dea471178c2e9fbc",
+      "project": "NationalSecurityAgency/ghidra",
+      "version": "Ghidra_12.1.4_build",
+      "commit": "8b6bbb857accdfa20dc5b2f5dea471178c2e9fbc",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "PortSwigger--mcp-server--v1.3.0--burp-mcp-all.jar",
+      "url": "https://github.com/PortSwigger/mcp-server/releases/download/v1.3.0/burp-mcp-all.jar",
+      "bytes": 18817739,
+      "sha256": "c4011245ee7da0cb901b9c0435aba3d8458ab5b0e2078e1a87fd025ed93c7892",
+      "project": "PortSwigger/mcp-server",
+      "version": "v1.3.0",
+      "license": "GPL-3.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "PortSwigger--mcp-server--v1.3.0--source.tar.gz",
+      "url": "https://api.github.com/repos/PortSwigger/mcp-server/tarball/5f76126409780ecba2b766c7f7388f465c5b5f94",
+      "project": "PortSwigger/mcp-server",
+      "version": "v1.3.0",
+      "commit": "5f76126409780ecba2b766c7f7388f465c5b5f94",
+      "license": "GPL-3.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "bethington--ghidra-mcp--v6.0.0--GhidraMCP-6.0.0.zip",
+      "url": "https://github.com/bethington/ghidra-mcp/releases/download/v6.0.0/GhidraMCP-6.0.0.zip",
+      "bytes": 728120,
+      "sha256": "867731de27d5143632a010943b907a6485dd54d0e19729e2f85ee9f692c99873",
+      "project": "bethington/ghidra-mcp",
+      "version": "v6.0.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "bethington--ghidra-mcp--v6.0.0--ghidra_mcp_bridge-6.0.0-py3-none-any.whl",
+      "url": "https://github.com/bethington/ghidra-mcp/releases/download/v6.0.0/ghidra_mcp_bridge-6.0.0-py3-none-any.whl",
+      "bytes": 67283,
+      "sha256": "71939a890009826664720166d8f786f3a2ea2460f7effcd83c73759ba4241334",
+      "project": "bethington/ghidra-mcp",
+      "version": "v6.0.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "bethington--ghidra-mcp--v6.0.0--INSTALLATION.md",
+      "url": "https://github.com/bethington/ghidra-mcp/releases/download/v6.0.0/INSTALLATION.md",
+      "bytes": 934,
+      "sha256": "0c3227952c596234e7f1cfccf61e0b46f8b3df6d36a95f0e5889db5ec170bb67",
+      "project": "bethington/ghidra-mcp",
+      "version": "v6.0.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "bethington--ghidra-mcp--v6.0.0--README.md",
+      "url": "https://github.com/bethington/ghidra-mcp/releases/download/v6.0.0/README.md",
+      "bytes": 66267,
+      "sha256": "a193861c307947a4674ba0c53121e108fa62912cf4499d2de9819323acfc563b",
+      "project": "bethington/ghidra-mcp",
+      "version": "v6.0.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "bethington--ghidra-mcp--v6.0.0--source.tar.gz",
+      "url": "https://api.github.com/repos/bethington/ghidra-mcp/tarball/8cd2078e10b9ba28b188cb84ce5b9051a904b995",
+      "project": "bethington/ghidra-mcp",
+      "version": "v6.0.0",
+      "commit": "8cd2078e10b9ba28b188cb84ce5b9051a904b995",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "projectdiscovery--nuclei--v3.11.1--nuclei_3.11.1_linux_amd64.zip",
+      "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip",
+      "bytes": 46148343,
+      "sha256": "ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6",
+      "project": "projectdiscovery/nuclei",
+      "version": "v3.11.1",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--nuclei--v3.11.1--nuclei_3.11.1_macOS_arm64.zip",
+      "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_macOS_arm64.zip",
+      "bytes": 43571292,
+      "sha256": "7d7e291addd1fc29a9bf8d089afe878a9799b20229cbea2fb1693fc40fd4c5f0",
+      "project": "projectdiscovery/nuclei",
+      "version": "v3.11.1",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--nuclei--v3.11.1--nuclei_3.11.1_windows_amd64.zip",
+      "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_windows_amd64.zip",
+      "bytes": 46067128,
+      "sha256": "bb6cb9ff8939b753f6fcab06fd30a15f5bc61d8382a597871334c007a85ff9d2",
+      "project": "projectdiscovery/nuclei",
+      "version": "v3.11.1",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--nuclei--v3.11.1--source.tar.gz",
+      "url": "https://api.github.com/repos/projectdiscovery/nuclei/tarball/a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+      "project": "projectdiscovery/nuclei",
+      "version": "v3.11.1",
+      "commit": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+      "license": "MIT",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "projectdiscovery--katana--v1.8.0--katana_1.8.0_linux_amd64.zip",
+      "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip",
+      "bytes": 31910234,
+      "sha256": "cb027ae99d0757061b70c07a15c7a80f62c5a535ab52c4a329f80c4b0a7309d2",
+      "project": "projectdiscovery/katana",
+      "version": "v1.8.0",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--katana--v1.8.0--katana_1.8.0_macOS_arm64.zip",
+      "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_macOS_arm64.zip",
+      "bytes": 31574229,
+      "sha256": "52e9802e9f83012a089fe57fb1ac476b936f181ac033c71bfa55f913c07cede6",
+      "project": "projectdiscovery/katana",
+      "version": "v1.8.0",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--katana--v1.8.0--katana_1.8.0_windows_amd64.zip",
+      "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_windows_amd64.zip",
+      "bytes": 17224143,
+      "sha256": "8013253e3092e08524527a5c3f7ebd70747acc4bb51414858f8e6dffeb17f907",
+      "project": "projectdiscovery/katana",
+      "version": "v1.8.0",
+      "license": "MIT",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "projectdiscovery--katana--v1.8.0--source.tar.gz",
+      "url": "https://api.github.com/repos/projectdiscovery/katana/tarball/35267ac5c8ff1db9694a319d0eb466ed97b0969f",
+      "project": "projectdiscovery/katana",
+      "version": "v1.8.0",
+      "commit": "35267ac5c8ff1db9694a319d0eb466ed97b0969f",
+      "license": "MIT",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "skylot--jadx--v1.5.6--jadx-1.5.6.zip",
+      "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+      "bytes": 72646741,
+      "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
+      "project": "skylot/jadx",
+      "version": "v1.5.6",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "skylot--jadx--v1.5.6--source.tar.gz",
+      "url": "https://api.github.com/repos/skylot/jadx/tarball/28ff15e4ae69950aebea110a13e5ab895d234dfc",
+      "project": "skylot/jadx",
+      "version": "v1.5.6",
+      "commit": "28ff15e4ae69950aebea110a13e5ab895d234dfc",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "iBotPeaches--Apktool--v3.0.3--apktool_3.0.3.jar",
+      "url": "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+      "bytes": 15478013,
+      "sha256": "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423",
+      "project": "iBotPeaches/Apktool",
+      "version": "v3.0.3",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "iBotPeaches--Apktool--v3.0.3--source.tar.gz",
+      "url": "https://api.github.com/repos/iBotPeaches/Apktool/tarball/18b5e99cb56ff9451e8aa55b065dcf5bbd616975",
+      "project": "iBotPeaches/Apktool",
+      "version": "v3.0.3",
+      "commit": "18b5e99cb56ff9451e8aa55b065dcf5bbd616975",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "mandiant--capa--v9.4.0--capa-v9.4.0-linux.zip",
+      "url": "https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip",
+      "bytes": 47477971,
+      "sha256": "07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4",
+      "project": "mandiant/capa",
+      "version": "v9.4.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "mandiant--capa--v9.4.0--capa-v9.4.0-macos-arm64.zip",
+      "url": "https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-macos-arm64.zip",
+      "bytes": 35926668,
+      "sha256": "119964afc348c80fff93ad8830124a0c55630f179906acb796636c0f8d410672",
+      "project": "mandiant/capa",
+      "version": "v9.4.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "mandiant--capa--v9.4.0--capa-v9.4.0-windows.zip",
+      "url": "https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-windows.zip",
+      "bytes": 35994071,
+      "sha256": "670ab1a58b81f59cb57533bf4021ac1e7033fbe9b5d5cc180f796976081e3bb5",
+      "project": "mandiant/capa",
+      "version": "v9.4.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "mandiant--capa--v9.4.0--source.tar.gz",
+      "url": "https://api.github.com/repos/mandiant/capa/tarball/7a79f799a70f052e8382cdbeaec8115daba14a5b",
+      "project": "mandiant/capa",
+      "version": "v9.4.0",
+      "commit": "7a79f799a70f052e8382cdbeaec8115daba14a5b",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "google--osv-scanner--v2.6.0--osv-scanner_darwin_arm64",
+      "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_darwin_arm64",
+      "bytes": 55130242,
+      "sha256": "98c460dcd37de25819babd757d04542045b6243113e209edcd4d89fedb0256b4",
+      "project": "google/osv-scanner",
+      "version": "v2.6.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "google--osv-scanner--v2.6.0--osv-scanner_linux_amd64",
+      "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64",
+      "bytes": 57524384,
+      "sha256": "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108",
+      "project": "google/osv-scanner",
+      "version": "v2.6.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "google--osv-scanner--v2.6.0--osv-scanner_windows_amd64.exe",
+      "url": "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_windows_amd64.exe",
+      "bytes": 58692096,
+      "sha256": "e0ed7644118b717b028c249ee9d3515024e55e8510747ca08906eb96765354d6",
+      "project": "google/osv-scanner",
+      "version": "v2.6.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "google--osv-scanner--v2.6.0--source.tar.gz",
+      "url": "https://api.github.com/repos/google/osv-scanner/tarball/e840a6e8adb14b7777c78e26cfbf6e2abc1d1fc6",
+      "project": "google/osv-scanner",
+      "version": "v2.6.0",
+      "commit": "e840a6e8adb14b7777c78e26cfbf6e2abc1d1fc6",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "aquasecurity--trivy--v0.75.0--trivy_0.75.0_Linux-64bit.tar.gz",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz",
+      "bytes": 51704231,
+      "sha256": "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f",
+      "project": "aquasecurity/trivy",
+      "version": "v0.75.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "aquasecurity--trivy--v0.75.0--trivy_0.75.0_macOS-ARM64.tar.gz",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_macOS-ARM64.tar.gz",
+      "bytes": 48967916,
+      "sha256": "4a77108cccf8e55c8d6823e1e759939a622277e66cd0daa3c1fc621ed69e4568",
+      "project": "aquasecurity/trivy",
+      "version": "v0.75.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "aquasecurity--trivy--v0.75.0--trivy_0.75.0_windows-64bit.zip",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_windows-64bit.zip",
+      "bytes": 52927180,
+      "sha256": "4e43bd71a30f51aee39525f60f2b47043af77eb8df8fe082aae4372b69c6660f",
+      "project": "aquasecurity/trivy",
+      "version": "v0.75.0",
+      "license": "Apache-2.0",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "aquasecurity--trivy--v0.75.0--source.tar.gz",
+      "url": "https://api.github.com/repos/aquasecurity/trivy/tarball/591e9799316a602e703f0b484f6c6d7b234ec8f3",
+      "project": "aquasecurity/trivy",
+      "version": "v0.75.0",
+      "commit": "591e9799316a602e703f0b484f6c6d7b234ec8f3",
+      "license": "Apache-2.0",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "frida--frida--17.23.2--frida-gadget-17.23.2-android-arm64.so.xz",
+      "url": "https://github.com/frida/frida/releases/download/17.23.2/frida-gadget-17.23.2-android-arm64.so.xz",
+      "bytes": 6974160,
+      "sha256": "5b4cfb2be40d1a720b39be8b3d9abdcb217c1d26b38bceb2740db9fac150b021",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "license": "NOASSERTION",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "frida--frida--17.23.2--frida-gadget-17.23.2-linux-x86_64.so.xz",
+      "url": "https://github.com/frida/frida/releases/download/17.23.2/frida-gadget-17.23.2-linux-x86_64.so.xz",
+      "bytes": 7104184,
+      "sha256": "c318986e81ea158cc8d333371cf0f0894e36092aab12ed5b5bfa63609872906f",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "license": "NOASSERTION",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "frida--frida--17.23.2--frida-gadget-17.23.2-macos-universal.dylib.xz",
+      "url": "https://github.com/frida/frida/releases/download/17.23.2/frida-gadget-17.23.2-macos-universal.dylib.xz",
+      "bytes": 18545676,
+      "sha256": "6e0d65e83bfaae6a32f021b081cf7e2f3b3625818e3b47a822844ee570cded09",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "license": "NOASSERTION",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "frida--frida--17.23.2--frida-server-17.23.2-android-arm64.xz",
+      "url": "https://github.com/frida/frida/releases/download/17.23.2/frida-server-17.23.2-android-arm64.xz",
+      "bytes": 17974124,
+      "sha256": "6ec50a2d2361c8510c7aa4736b6540f28bb98a337957ff28949f71c8e362ad5b",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "license": "NOASSERTION",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "frida--frida--17.23.2--frida-server-17.23.2-linux-x86_64.xz",
+      "url": "https://github.com/frida/frida/releases/download/17.23.2/frida-server-17.23.2-linux-x86_64.xz",
+      "bytes": 19170680,
+      "sha256": "b8865c032a22839a372518976ac5c4b32a00266246a518cba72ac1e9a57f4a5b",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "license": "NOASSERTION",
+      "kind": "upstream-release"
+    },
+    {
+      "name": "frida--frida--17.23.2--source.tar.gz",
+      "url": "https://api.github.com/repos/frida/frida/tarball/9adf8ed33ab6f1122b17399ee96dcbe101b941c9",
+      "project": "frida/frida",
+      "version": "17.23.2",
+      "commit": "9adf8ed33ab6f1122b17399ee96dcbe101b941c9",
+      "license": "NOASSERTION",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/c1/a1/e29003080506e7666ba8225df63632f1ac6417764d4ee991e5dae04f2c0c/semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-macosx_11_0_arm64.whl",
+      "bytes": 49794130,
+      "sha256": "9c61070eaa7de785a8318e1d00de6c9151efa660cc3e58c3e2ffd6f5e6180af7",
+      "project": "semgrep",
+      "version": "1.180.0",
+      "license": "LGPL-2.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/7c/1f/f4af9cc92651f04ab973eac214a62ed23260da9e0696c105b4b9734da453/semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl",
+      "bytes": 70564254,
+      "sha256": "16db2e2706ab814a975eeec25debfad49abba846b7c513d88e041447152f8447",
+      "project": "semgrep",
+      "version": "1.180.0",
+      "license": "LGPL-2.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/82/75/3e3a75297e8f181e0a32b5691ee55c78a214d4a72a0370841f9c7674a5da/semgrep-1.180.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-win_amd64.whl",
+      "bytes": 58108036,
+      "sha256": "b403865e64f5ba0691630adf9bc13592cc38830726d4a114960d7e2d3fb21fc6",
+      "project": "semgrep",
+      "version": "1.180.0",
+      "license": "LGPL-2.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "semgrep-1.180.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/76/aa/34eac121a4b1859aae125aa8c997bbec1f00b05d3225ba4becff6d3685a1/semgrep-1.180.0.tar.gz",
+      "bytes": 518569,
+      "sha256": "14aee785d0bc9656027a33fca7f97e88e089dbc6c7ed3df47f454b0584b0a3d0",
+      "project": "semgrep",
+      "version": "1.180.0",
+      "license": "LGPL-2.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "semgrep--v1.180.0--source.tar.gz",
+      "url": "https://api.github.com/repos/semgrep/semgrep/tarball/a35fe8306115b3e55274969098cc46f8451d6b4d",
+      "project": "semgrep/semgrep",
+      "version": "v1.180.0",
+      "commit": "a35fe8306115b3e55274969098cc46f8451d6b4d",
+      "license": "LGPL-2.1",
+      "kind": "recursive-source"
+    },
+    {
+      "name": "frida-17.23.2-cp37-abi3-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/0e/92/75495b5e6054b183fa062182c49d4e39f4b8acdede7b849ba095eb88836d/frida-17.23.2-cp37-abi3-macosx_11_0_arm64.whl",
+      "bytes": 38316152,
+      "sha256": "87deb0f723a6e7b6d211badd13af9b03cd4a4006315b69cdec2460dc89d66d82",
+      "project": "frida",
+      "version": "17.23.2",
+      "license": "wxWindows Library Licence 3.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "frida-17.23.2-cp37-abi3-manylinux1_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/31/71/323856089464aa5c9ba67fa031eab693f1b0b99e86bd7b50bd27edbf76b9/frida-17.23.2-cp37-abi3-manylinux1_x86_64.whl",
+      "bytes": 39635903,
+      "sha256": "ea8acf6013d2cba0d6db73d4759fd37998790f92af86d34a3e49965d390960e9",
+      "project": "frida",
+      "version": "17.23.2",
+      "license": "wxWindows Library Licence 3.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "frida-17.23.2-cp37-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/6b/d6/d7ad95a31c03f6f1bb3631882dc686cd9053b766b33bc558606a0dcdf9ee/frida-17.23.2-cp37-abi3-win_amd64.whl",
+      "bytes": 50691779,
+      "sha256": "1ba60517dfffcab472515081cf017a59fd7e7357918956051030a1444edcd1fb",
+      "project": "frida",
+      "version": "17.23.2",
+      "license": "wxWindows Library Licence 3.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "frida-17.23.2.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/fa/99/9bcbd559f15034f2b8ae735b3db7a1724150ea450b0232aff1f82c5dd55d/frida-17.23.2.tar.gz",
+      "bytes": 939928,
+      "sha256": "f757b7142f29e3e81ffde8f79824e6fea48876752c7cd82986ccc592b86a3191",
+      "project": "frida",
+      "version": "17.23.2",
+      "license": "wxWindows Library Licence 3.1",
+      "kind": "python-distribution"
+    },
+    {
+      "name": "frida_tools-14.11.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/b0/32/74291d04038ead2a361c7464e707ef935cb75a1011ee5d1e220c2849d39e/frida_tools-14.11.0.tar.gz",
+      "bytes": 4690429,
+      "sha256": "b8c772e59502be43b76df9feccadd5d342b5ca325066dd0c2384e63fa88da921",
+      "project": "frida-tools",
+      "version": "14.11.0",
+      "license": "wxWindows Library Licence 3.1",
+      "kind": "python-distribution"
+    }
+  ],
+  "gaps": [
+    "Model weights excluded by user.",
+    "Burp Suite and Google Android SDK binaries are not redistributed.",
+    "Python distributions do not include their full dependency closure.",
+    "OS images, Java/Node/Python runtimes, browser downloads, build toolchains and live vulnerability databases are not included.",
+    "MobSF container image is not republished without establishing matching complete corresponding source.",
+    "This is an artifact backup, not an offline installation or build verification."
+  ]
+}

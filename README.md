@@ -32,7 +32,21 @@ The update command creates a subtree commit and updates the manifest. Review bot
 
 Licensed Frida, Semgrep, and Codex documentation sources and the NIST testing publication are included. Website material without an identified redistribution grant remains listed with a reason in the manifest. Those pages are not claimed as archived.
 
-Both referenced Qwen model repositories allow Apache-2.0 redistribution. Their licenses, configuration, tokenizers, and shard manifests are saved under `vendor/models/`. The approximately 111 GB of actual weights still require a separate independent storage destination. Their exact revisions, sizes, hashes, and `pending-independent-storage` status are recorded in the manifest. Metadata and LFS pointers alone are not a weight backup.
+Both referenced Qwen model repositories allow Apache-2.0 redistribution. Their licenses, configuration, tokenizers, and shard manifests are saved under `vendor/models/`. The approximately 111 GB of actual weights are excluded from backups at the user’s request. Their exact revisions, sizes, hashes, and `excluded-by-user` status are recorded in the manifest. Metadata and LFS pointers alone are not a weight backup.
+
+## Recovery release backup
+
+[GitHub Releases](https://github.com/BleedingDev/agentic-security-workspace/releases) hold a Git bundle of the preserved sources, selected official tool distributions, matching recursive release sources, and a REA npm dependency snapshot. Model weights are excluded. Each release has SHA256SUMS and a recovery manifest with upstream URLs, revisions, sizes, hashes, licenses, and coverage gaps.
+
+The release plan is `release-artifacts.json`. To publish a new backup from a clean, committed main branch, use the existing temporary-resource owner:
+
+```sh
+owned-temp-dir --run recovery-release -- python3 scripts/publish-recovery-release.py --tag recovery-YYYYMMDD
+```
+
+The publisher verifies downloads, builds a source bundle, resolves REA npm dependencies offline with installation scripts disabled, uploads a draft, checks the uploaded sizes and GitHub SHA-256 digests, then publishes. Operation-owned files are removed when the owner exits. It does not preserve a NAS copy or a persistent local archive. GitHub remains the sole remote backup provider.
+
+This is a recovery artifact archive, not a verified offline installation. It does not include all Python dependencies, OS/runtime installers, live vulnerability databases, browser downloads, commercial software, or an audited redistributable MobSF image. REA’s npm snapshot is platform-specific and excludes native postinstall engine downloads. Installed tool versions are unaffected.
 
 ## Serving (optional): a self-hosted abliterated model
 

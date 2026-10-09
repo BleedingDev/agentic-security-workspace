@@ -88,7 +88,7 @@ The result is a local ledger. It distinguishes tools that already existed from t
 - A setup and assessment state model with explicit retry and failure rules.
 - Pointers to upstream projects and established testing methods.
 
-It contains independently preserved upstream sources, including upstream fixtures and documentation, plus model metadata. Actual model weights are pending an independent storage destination. It does not contain operator credentials, assessment targets, captured traffic, or assessment evidence. Commercial software and unlicensed website material are not redistributed. The Git ignore rules exclude local host configuration and the **security-artifacts/** directory.
+It contains independently preserved upstream sources, including upstream fixtures and documentation, plus model metadata. Actual model weights are excluded from backups at the user’s request. It does not contain operator credentials, assessment targets, captured traffic, or assessment evidence. Commercial software and unlicensed website material are not redistributed. The Git ignore rules exclude local host configuration and the **security-artifacts/** directory.
 
 ## Limits
 
